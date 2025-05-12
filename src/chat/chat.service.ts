@@ -121,61 +121,65 @@ async processIncoming(payload: any) {
   }
 }
 async sendMessageToClient(clientId: number, message: string) {
+  // ───────────────────────────── 1.  Load the client
   const client = await this.clientRepository.findOne({
     where: { id: clientId },
-    relations: ['loanRequests'],
   });
 
   if (!client || !client.phone) {
     throw new NotFoundException('Client not found or missing phone number.');
   }
 
-  const accessToken = process.env.WHATSAPP_TOKEN || 'YOUR_TOKEN';
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || 'YOUR_PHONE_ID';
-  const to = client.phone;
+  // ───────────────────────────── 2.  Load the most-recent loanRequest (+agent)
+  const loanRequest = await this.loanRequestRepository.findOne({
+    where: { client: { id: client.id } },
+    relations: ['agent'],
+    order: { createdAt: 'DESC' },
+  });
 
+  const agent = loanRequest?.agent ?? null;
+
+  // ───────────────────────────── 3.  Validate WhatsApp credentials
+  const accessToken   = process.env.WHATSAPP_TOKEN || 'EAAKJvNdqg2wBO8mmUFmvZBZBP7PkEHa0Q1AEEhNtBmZAUlxqxZAyLQcYwzFVfgRZA1rjSIINHrOZBE1UtgsmLP7MFLpZADXKZBkHnQWifx8I2YU6B9DU0xtv3ignVghOwjlmtruR8ZClqUbnZAZCTZCR7AJkyWkzJlBElvm3FZCfv4A4g0OxuajeI4ZCpsumbb9jEKqIw6aS8HfqSp96eZCqCGfIut6R2EZD';
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '631269870073158';
+
+  if (!accessToken || !phoneNumberId) {
+    throw new Error('WhatsApp TOKEN or PHONE_NUMBER_ID environment variables are not set.');
+  }
+
+  // ───────────────────────────── 4.  Send the message
   const payload = {
     messaging_product: 'whatsapp',
-    to,
+    to: client.phone,
     type: 'text',
     text: { body: message },
   };
 
-  const headers = {
-    Authorization: `Bearer ${accessToken}`,
-    'Content-Type': 'application/json',
+  await axios.post(
+    `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
+    payload,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+    },
+  );
+
+  // ───────────────────────────── 5.  Persist the outgoing ChatMessage
+  const msgData: DeepPartial<ChatMessage> = {
+    content: message,
+    direction: 'OUTGOING',
+    client,
+    agent,                 // ← always the agent from the latest loanRequest
+    loanRequest: loanRequest ?? null,
   };
 
-  try {
-    await axios.post(`https://graph.facebook.com/v18.0/${phoneNumberId}/messages`, payload, { headers });
+  const chatMessage = this.chatMessageRepository.create(msgData);
+  await this.chatMessageRepository.save(chatMessage);
 
-    // Retrieve the latest active loan request
-    const loanRequest = client.loanRequests.find(
-      (lr) =>
-        lr.status !== LoanRequestStatus.COMPLETED &&
-        lr.status !== LoanRequestStatus.REJECTED,
-    );
-
-    const agent = loanRequest?.agent ?? null;
-
-    // Save message with complete traceability
-    const chatMessage = this.chatMessageRepository.create({
-      content: message,
-      direction: 'OUTGOING',
-      client,
-      agent,
-      loanRequest: loanRequest ?? null,
-    } as DeepPartial<ChatMessage>);;
-
-    await this.chatMessageRepository.save(chatMessage);
-
-    return { success: true, to, message };
-  } catch (error) {
-    this.logger.error('Failed to send WhatsApp message:', error?.response?.data || error);
-    throw new Error('Failed to send message via WhatsApp');
-  }
+  return { success: true, to: client.phone, message };
 }
-
 
 
 async getAgentConversations(agentId: number) {

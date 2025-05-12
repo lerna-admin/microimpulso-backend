@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Query, Body, Req, Res } from '@nestjs/common';
+import { Controller, Get, Post, Query, Body, Req, Res, Param, NotFoundException} from '@nestjs/common';
 import { Response, Request } from 'express';
 import { ChatService } from './chat.service';
 
@@ -21,9 +21,15 @@ export class ChatController {
     return res.sendStatus(403);
   }
 
-  @Post()
-  handleMessage(@Body() body: any, @Req() req: Request, @Res() res: Response) {
-    this.chatService.processIncoming(body);
-    return res.sendStatus(200);
+@Post('/send/:clientId')
+  async sendMessageToClient(
+    @Param('clientId') clientId: number,
+    @Body('message') message: string,
+  ) {
+    if (!message || message.trim().length === 0) {
+      throw new NotFoundException('Message body is required.');
+    }
+
+    return this.chatService.sendMessageToClient(clientId, message);
   }
 }

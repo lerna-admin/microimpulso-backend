@@ -9,7 +9,7 @@ export class ChatController {
   @Get()
   verifyToken(@Query() query, @Res() res: Response) {
     const VERIFY_TOKEN = 'micropulso_token';
-
+	console.log("enyto mensaje")
     const mode = query['hub.mode'];
     const token = query['hub.verify_token'];
     const challenge = query['hub.challenge'];
@@ -28,8 +28,28 @@ export class ChatController {
   ) {
     if (!message || message.trim().length === 0) {
       throw new NotFoundException('Message body is required.');
-    }
-
+    }	
+    console.log("before the return")
     return this.chatService.sendMessageToClient(clientId, message);
   }
+
+
+
+@Post()
+  async handleIncomingMessage(
+    @Body() body: any,
+    @Req() req: Request,
+    @Res() res: Response,
+  ) {
+    console.log('📥 Mensaje entrante recibido:', JSON.stringify(body, null, 2));
+    await this.chatService.processIncoming(body);
+    return res.sendStatus(200);
+  }
+
+@Get('/agent/:agentId/conversations')
+async getAgentConversations(@Param('agentId') agentId: number) {
+  return this.chatService.getAgentConversations(agentId);
 }
+
+}
+

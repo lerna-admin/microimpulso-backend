@@ -128,9 +128,8 @@ export class ChatService {
       throw new NotFoundException('Client not found or missing phone number.');
     }
     
-    const accessToken = process.env.WHATSAPP_TOKEN;
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-    
+    const accessToken = process.env.WHATSAPP_TOKEN || 'EAAKJvNdqg2wBO8mmUFmvZBZBP7PkEHa0Q1AEEhNtBmZAUlxqxZAyLQcYwzFVfgRZA1rjSIINHrOZBE1UtgsmLP7MFLpZADXKZBkHnQWifx8I2YU6B9DU0xtv3ignVghOwjlmtruR8ZClqUbnZAZCTZCR7AJkyWkzJlBElvm3FZCfv4A4g0OxuajeI4ZCpsumbb9jEKqIw6aS8HfqSp96eZCqCGfIut6R2EZD';
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '631269870073158';
     const to = client.phone;
     
     // Send the message via WhatsApp Cloud API
@@ -167,4 +166,37 @@ export class ChatService {
       throw new Error('Failed to send message via WhatsApp');
     }
   }
+
+async getAgentConversations(agentId: number) {
+  // Obtener todos los mensajes que tengan agentId asignado
+  const messages = await this.chatMessageRepository.find({
+    where: {
+      agent: { id: agentId },
+    },
+    relations: ['client'], // Asegura que traes el cliente relacionado
+    order: {
+      createdAt: 'ASC',
+    },
+  });
+
+  const grouped = new Map<number, { client: Client; messages: ChatMessage[] }>();
+
+  for (const msg of messages) {
+    // Validación por si el mensaje no tiene cliente asociado
+    if (!msg.client) continue;
+
+    const clientId = msg.client.id;
+
+    if (!grouped.has(clientId)) {
+      grouped.set(clientId, {
+        client: msg.client,
+        messages: [],
+      });
+    }
+
+    grouped.get(clientId)!.messages.push(msg);
+  }
+
+  return Array.from(grouped.values());
+}
 }

@@ -121,33 +121,30 @@ async processIncoming(payload: any) {
   }
 }
 async sendMessageToClient(clientId: number, message: string) {
-  // ───────────────────────────── 1.  Load the client
+  /* 1. Load client ------------------------------------------------------- */
   const client = await this.clientRepository.findOne({
     where: { id: clientId },
   });
-
   if (!client || !client.phone) {
     throw new NotFoundException('Client not found or missing phone number.');
   }
 
-  // ───────────────────────────── 2.  Load the most-recent loanRequest (+agent)
+  /* 2. Latest loan-request (+ its agent) --------------------------------- */
   const loanRequest = await this.loanRequestRepository.findOne({
     where: { client: { id: client.id } },
     relations: ['agent'],
     order: { createdAt: 'DESC' },
   });
+  const agent = loanRequest?.agent;
 
-  const agent = loanRequest?.agent ?? null;
-
-  // ───────────────────────────── 3.  Validate WhatsApp credentials
-  const accessToken   = process.env.WHATSAPP_TOKEN || 'EAAKJvNdqg2wBO8mmUFmvZBZBP7PkEHa0Q1AEEhNtBmZAUlxqxZAyLQcYwzFVfgRZA1rjSIINHrOZBE1UtgsmLP7MFLpZADXKZBkHnQWifx8I2YU6B9DU0xtv3ignVghOwjlmtruR8ZClqUbnZAZCTZCR7AJkyWkzJlBElvm3FZCfv4A4g0OxuajeI4ZCpsumbb9jEKqIw6aS8HfqSp96eZCqCGfIut6R2EZD';
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '631269870073158';
-
+  /* 3. WhatsApp credentials --------------------------------------------- */
+  const accessToken   = process.env.WHATSAPP_TOKEN;
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
   if (!accessToken || !phoneNumberId) {
-    throw new Error('WhatsApp TOKEN or PHONE_NUMBER_ID environment variables are not set.');
+    throw new Error('WhatsApp TOKEN or PHONE_NUMBER_ID env vars are not set.');
   }
 
-  // ───────────────────────────── 4.  Send the message
+  /* 4. Send message to WhatsApp ----------------------------------------- */
   const payload = {
     messaging_product: 'whatsapp',
     to: client.phone,
@@ -166,13 +163,14 @@ async sendMessageToClient(clientId: number, message: string) {
     },
   );
 
-  // ───────────────────────────── 5.  Persist the outgoing ChatMessage
+  /* 5. Persist the OUTGOING ChatMessage ---------------------------------- */
   const msgData: DeepPartial<ChatMessage> = {
-    content: message,
-    direction: 'OUTGOING',
+    content:     message,
+    direction:   'OUTGOING',
     client,
-    agent,                 // ← always the agent from the latest loanRequest
-    loanRequest: loanRequest ?? null,
+    // add these only when they are defined
+    ...(agent       && { agent }),
+    ...(loanRequest && { loanRequest }),
   };
 
   const chatMessage = this.chatMessageRepository.create(msgData);

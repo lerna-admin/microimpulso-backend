@@ -14,20 +14,22 @@ export class ClientsService {
 async findAll(): Promise<Client[]> {
   return this.clientRepository
     .createQueryBuilder('client')
-    .innerJoin('client.loanRequests', 'loan', 'loan.status = :status', { status: 'approved' })
-    .innerJoin('loan.transactions', 'txn')
+    .innerJoinAndSelect('client.loanRequests', 'loan', 'loan.status = :status', { status: 'approved' })
+    .innerJoinAndSelect('loan.transactions', 'txn')
     .getMany();
 }
+
 async findAllByAgent(agentId: number): Promise<Client[]> {
   return this.clientRepository
     .createQueryBuilder('client')
-    .innerJoin('client.loanRequests', 'loan', 'loan.agentId = :agentId AND loan.status = :status', {
+    .innerJoinAndSelect('client.loanRequests', 'loan', 'loan.agentId = :agentId AND loan.status = :status', {
       agentId,
       status: 'approved',
     })
-    .innerJoin('loan.transactions', 'txn')
+    .innerJoinAndSelect('loan.transactions', 'txn')
     .getMany();
 }
+
 
   // Return a single client by ID
   async findOne(id: number): Promise<Client | null> {

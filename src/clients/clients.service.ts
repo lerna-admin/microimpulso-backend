@@ -11,23 +11,59 @@ export class ClientsService {
   ) {}
 
   // Return all clients from the database
-async findAll(): Promise<Client[]> {
+async findAll(): Promise<any[]> {
   return this.clientRepository
     .createQueryBuilder('client')
-    .innerJoinAndSelect('client.loanRequests', 'loan', 'loan.status = :status', { status: 'approved' })
-    .innerJoinAndSelect('loan.transactions', 'txn')
-    .getMany();
+    .innerJoin('client.loanRequests', 'loan', 'loan.status = :status', { status: 'approved' })
+    .innerJoin('loan.transactions', 'txn')
+    .select('client.id', 'clientId')
+    .addSelect('client.name', 'clientName')
+    .addSelect('loan.id', 'loanRequestId')
+    .addSelect('loan.mode', 'loanMode')
+    .addSelect('loan.type', 'loanType')
+    .addSelect('loan.daysLate', 'loanDaysLate')
+    .addSelect('loan.amount', 'totalAmountToPay')
+    .addSelect(`
+      SUM(CASE WHEN txn."Transactiontype" = 'disbursement' THEN txn.amount ELSE 0 END)
+    `, 'montoPrestado')
+    .addSelect(`
+      SUM(CASE WHEN txn."Transactiontype" = 'repayment' THEN txn.amount ELSE 0 END)
+    `, 'totalPagado')
+    .addSelect(`
+      loan.amount - SUM(CASE WHEN txn."Transactiontype" = 'repayment' THEN txn.amount ELSE 0 END)
+    `, 'pendientePorPagar')
+    .groupBy('client.id')
+    .addGroupBy('loan.id')
+    .getRawMany();
 }
 
-async findAllByAgent(agentId: number): Promise<Client[]> {
+async findAllByAgent(agentId: number): Promise<any[]> {
   return this.clientRepository
     .createQueryBuilder('client')
-    .innerJoinAndSelect('client.loanRequests', 'loan', 'loan.agentId = :agentId AND loan.status = :status', {
-      agentId,
+    .innerJoin('client.loanRequests', 'loan', 'loan.status = :status AND loan.agentId = :agentId', {
       status: 'approved',
+      agentId,
     })
-    .innerJoinAndSelect('loan.transactions', 'txn')
-    .getMany();
+    .innerJoin('loan.transactions', 'txn')
+    .select('client.id', 'clientId')
+    .addSelect('client.name', 'clientName')
+    .addSelect('loan.id', 'loanRequestId')
+    .addSelect('loan.mode', 'loanMode')
+    .addSelect('loan.type', 'loanType')
+    .addSelect('loan.daysLate', 'loanDaysLate')
+    .addSelect('loan.amount', 'totalAmountToPay')
+    .addSelect(`
+      SUM(CASE WHEN txn."Transactiontype" = 'disbursement' THEN txn.amount ELSE 0 END)
+    `, 'montoPrestado')
+    .addSelect(`
+      SUM(CASE WHEN txn."Transactiontype" = 'repayment' THEN txn.amount ELSE 0 END)
+    `, 'totalPagado')
+    .addSelect(`
+      loan.amount - SUM(CASE WHEN txn."Transactiontype" = 'repayment' THEN txn.amount ELSE 0 END)
+    `, 'pendientePorPagar')
+    .groupBy('client.id')
+    .addGroupBy('loan.id')
+    .getRawMany();
 }
 
 

@@ -80,10 +80,62 @@ export class ClientsService {
 }
 
 
-  // Return a single client by ID
-  async findOne(id: number): Promise<Client | null> {
-    return this.clientRepository.findOneBy({ id });
-  }
+async findOne(id: number): Promise<any | null> {
+  const result = await this.clientRepository
+    .createQueryBuilder('client')
+    .innerJoin('client.loanRequests', 'loan', 'loan.status = :status', { status: 'approved' })
+    .innerJoin('loan.transactions', 'txn')
+    .where('client.id = :id', { id })
+    .select('client.id', 'clientId')
+    .addSelect('client.name', 'clientName')
+    .addSelect('loan.id', 'loanRequestId')
+    .addSelect('loan.mode', 'loanMode')
+    .addSelect('loan.type', 'loanType')
+    .addSelect('loan.amount', 'totalAmountToPay')
+    .addSelect(`
+      CASE 
+        WHEN loan."endDateAt" IS NOT NULL AND julianday('now') > julianday(loan."endDateAt")
+        THEN CAST(julianday('now') - julianday(loan."endDateAt") AS INTEGER)
+        ELSE 0
+      END
+    `, 'diasMora')
+    .addSelect(`
+      SUM(CASE WHEN txn."Transactiontype" = 'disbursement' THEN txn.amount ELSE 0 END)
+    `, 'montoPrestado')
+    .addSelect(`
+      SUM(CASE WHEN txn."Transactiontype" = 'repayment' THEN txn.amount ELSE 0 END)
+    `, 'totalPagado')
+    .addSelect(`
+      loan.amount - SUM(CASE WHEN txn."Transactiontype" = 'repayment' THEN txn.amount ELSE 0 END)
+    `, 'pendientePorPagar')
+    .groupBy('client.id')
+    .addGroupBy('loan.id')
+    .getRawOne();
+
+  // Si quieres también los objetos completos:
+  const fullClient = await this.clientRepository.findOne({
+  where: { id },
+  relations: {
+    loanRequests: {
+      transactions: true,
+    },
+  },
+});
+
+// Filtra los loanRequests para dejar solo los aprobados
+if (fullClient) {
+  fullClient.loanRequests = fullClient.loanRequests.filter(
+    (loan) => loan.status === 'approved',
+  );
+}
+
+
+  return {
+    ...result,
+    client: fullClient,
+  };
+}
+
 
   // Create a new client record
   async create(data: Partial<Client>): Promise<Client> {

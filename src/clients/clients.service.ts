@@ -12,77 +12,73 @@ export class ClientsService {
 
   // Return all clients from the database
   async findAll(): Promise<any[]> {
-    return this.clientRepository
-      .createQueryBuilder('client')
-      .innerJoin('client.loanRequests', 'loan', 'loan.status = :status', { status: 'approved' })
-      .innerJoin('loan.transactions', 'txn')
-      .select('client.id', 'clientId')
-      .addSelect('client.name', 'clientName')
-      .addSelect('loan.id', 'loanRequestId')
-      .addSelect('loan.mode', 'loanMode')
-      .addSelect('loan.type', 'loanType')
-      .addSelect('loan.daysLate', 'loanDaysLate')
-      .addSelect('loan.amount', 'totalAmountToPay')
-      .addSelect(
-        `
+  return this.clientRepository
+    .createQueryBuilder('client')
+    .innerJoin('client.loanRequests', 'loan', 'loan.status = :status', { status: 'approved' })
+    .innerJoin('loan.transactions', 'txn')
+    .select('client.id', 'clientId')
+    .addSelect('client.name', 'clientName')
+    .addSelect('loan.id', 'loanRequestId')
+    .addSelect('loan.mode', 'loanMode')
+    .addSelect('loan.type', 'loanType')
+    .addSelect('loan.amount', 'totalAmountToPay')
+    .addSelect(`
+      CASE 
+        WHEN loan."endDateAt" IS NOT NULL AND julianday('now') > julianday(loan."endDateAt")
+        THEN CAST(julianday('now') - julianday(loan."endDateAt") AS INTEGER)
+        ELSE 0
+      END
+    `, 'diasMora')
+    .addSelect(`
       SUM(CASE WHEN txn."Transactiontype" = 'disbursement' THEN txn.amount ELSE 0 END)
-    `,
-        'montoPrestado',
-      )
-      .addSelect(
-        `
+    `, 'montoPrestado')
+    .addSelect(`
       SUM(CASE WHEN txn."Transactiontype" = 'repayment' THEN txn.amount ELSE 0 END)
-    `,
-        'totalPagado',
-      )
-      .addSelect(
-        `
+    `, 'totalPagado')
+    .addSelect(`
       loan.amount - SUM(CASE WHEN txn."Transactiontype" = 'repayment' THEN txn.amount ELSE 0 END)
-    `,
-        'pendientePorPagar',
-      )
-      .groupBy('client.id')
-      .addGroupBy('loan.id')
-      .getRawMany();
-  }
+    `, 'pendientePorPagar')
+    .groupBy('client.id')
+    .addGroupBy('loan.id')
+    .getRawMany();
+}
 
-  async findAllByAgent(agentId: number): Promise<any[]> {
-    return this.clientRepository
-      .createQueryBuilder('client')
-      .innerJoin('client.loanRequests', 'loan', 'loan.status = :status AND loan.agentId = :agentId', {
-        status: 'approved',
-        agentId,
-      })
-      .innerJoin('loan.transactions', 'txn')
-      .select('client.id', 'clientId')
-      .addSelect('client.name', 'clientName')
-      .addSelect('loan.id', 'loanRequestId')
-      .addSelect('loan.mode', 'loanMode')
-      .addSelect('loan.type', 'loanType')
-      .addSelect('loan.mora', 'loanMora')
-      .addSelect('loan.amount', 'totalAmountToPay')
-      .addSelect(
-        `
+
+ async findAllByAgent(agentId: number): Promise<any[]> {
+  return this.clientRepository
+    .createQueryBuilder('client')
+    .innerJoin('client.loanRequests', 'loan', 'loan.status = :status AND loan.agentId = :agentId', {
+      status: 'approved',
+      agentId,
+    })
+    .innerJoin('loan.transactions', 'txn')
+    .select('client.id', 'clientId')
+    .addSelect('client.name', 'clientName')
+    .addSelect('loan.id', 'loanRequestId')
+    .addSelect('loan.mode', 'loanMode')
+    .addSelect('loan.type', 'loanType')
+    .addSelect('loan.amount', 'totalAmountToPay')
+    .addSelect(`
+      CASE 
+        WHEN loan."endDateAt" IS NOT NULL AND julianday('now') > julianday(loan."endDateAt")
+        THEN CAST(julianday('now') - julianday(loan."endDateAt") AS INTEGER)
+        ELSE 0
+      END
+    `, 'diasMora')
+    .addSelect(`
       SUM(CASE WHEN txn."Transactiontype" = 'disbursement' THEN txn.amount ELSE 0 END)
-    `,
-        'amountBorrowed',
-      )
-      .addSelect(
-        `
+    `, 'amountBorrowed')
+    .addSelect(`
       SUM(CASE WHEN txn."Transactiontype" = 'repayment' THEN txn.amount ELSE 0 END)
-    `,
-        'totalRepayment',
-      )
-      .addSelect(
-        `
+    `, 'totalRepayment')
+    .addSelect(`
       loan.amount - SUM(CASE WHEN txn."Transactiontype" = 'repayment' THEN txn.amount ELSE 0 END)
-    `,
-        'totalToPay',
-      )
-      .groupBy('client.id')
-      .addGroupBy('loan.id')
-      .getRawMany();
-  }
+    `, 'totalToPay')
+    .groupBy('client.id')
+    .addGroupBy('loan.id')
+    .getRawMany();
+}
+
 
   // Return a single client by ID
   async findOne(id: number): Promise<Client | null> {

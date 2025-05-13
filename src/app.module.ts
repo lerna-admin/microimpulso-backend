@@ -7,6 +7,7 @@ import { LoanRequestModule } from './loan-request/loan-request.module';
 import { ChatModule } from './chat/chat.module';
 import { ChatController } from './chat.controller';
 import { ChatService } from './chat.service';
+import { TransactionModule } from './transaction.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { ChatService } from './chat.service';
     UsersModule,
     LoanRequestModule,
     ChatModule,
+    TransactionModule,
   ],
   controllers: [ChatController],
   providers: [ChatService],

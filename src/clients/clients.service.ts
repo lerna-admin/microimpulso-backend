@@ -11,10 +11,13 @@ export class ClientsService {
   ) {}
 
   // Return all clients from the database
-  async findAll(): Promise<Client[]> {
-    return this.clientRepository.find();
-  }
-
+async findAll(): Promise<Client[]> {
+  return this.clientRepository
+    .createQueryBuilder('client')
+    .innerJoin('client.loanRequests', 'loan', 'loan.status = :status', { status: 'approved' })
+    .innerJoin('loan.transactions', 'txn')
+    .getMany();
+}
   async findAllByAgent(agentId: number): Promise<Client[]> {
     return this.clientRepository.find({ where: { agent: { id: agentId } } });
   }

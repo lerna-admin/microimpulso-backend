@@ -11,6 +11,7 @@ import {
 import { Client } from './client.entity';
 import { User } from './user.entity';
 import { ChatMessage } from './chat-message.entity';
+import { Transaction } from './transaction.entity';
 
 export enum LoanRequestStatus {
   NEW = 'new',
@@ -75,4 +76,8 @@ export class LoanRequest {
     nullable: true,
   })
   endDateAt: Date;
+  @OneToMany(() => Transaction, txn => txn.loanRequest, {
+    cascade: true,
+  })
+  transactions: Transaction[];
 }

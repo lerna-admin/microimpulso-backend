@@ -1,4 +1,13 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn, OneToMany } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  UpdateDateColumn,
+  ManyToOne,
+  JoinColumn,
+  OneToMany,
+} from 'typeorm';
 import { Client } from './client.entity';
 import { User } from './user.entity';
 import { ChatMessage } from './chat-message.entity';
@@ -9,7 +18,7 @@ export enum LoanRequestStatus {
   APPROVED = 'approved',
   REJECTED = 'rejected',
   CANCELED = 'canceled',
-  COMPLETED = 'completed'
+  COMPLETED = 'completed',
 }
 
 @Entity()
@@ -17,10 +26,8 @@ export class LoanRequest {
   @PrimaryGeneratedColumn()
   id: number;
 
-  
   @OneToMany(() => ChatMessage, (msg) => msg.loanRequest)
-chatMessages: ChatMessage[];
-
+  chatMessages: ChatMessage[];
 
   @Column('decimal', { precision: 10, scale: 2 })
   amount: number;
@@ -44,4 +51,28 @@ chatMessages: ChatMessage[];
 
   @UpdateDateColumn()
   updatedAt: Date;
+
+  @Column({
+    type: 'text',
+    nullable: true,
+  })
+  type: string;
+
+  @Column({
+    type: 'date',
+    nullable: true,
+  })
+  mode: Date;
+
+  @Column({
+    type: 'int',
+    nullable: true,
+  })
+  mora: number;
+
+  @Column({
+    type: 'date',
+    nullable: true,
+  })
+  endDateAt: Date;
 }

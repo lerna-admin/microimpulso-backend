@@ -38,4 +38,7 @@ export class Transaction {
 
   @Column({ type: 'int', nullable: true })
   daysLate?: number;
+  @Column({ type: 'text', nullable: true })
+  paymentDay?: string;
+
 }

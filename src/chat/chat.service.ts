@@ -122,8 +122,8 @@ async processIncoming(payload: any) {
       //assignedAgent = await this.userRepository.findOne({ where: { id: agentId } });
       assignedAgent = await this.userRepository.findOne({ where: { id: agentId } })
       if (!assignedAgent) {
-        this.logger.warn('No agent assigned, cannot create loan request.');
-        return;
+        console.log('No agent assigned, cannot create loan request.');
+        
       }
       loanRequest = this.loanRequestRepository.create({
         client,
@@ -158,8 +158,7 @@ async processIncoming(payload: any) {
       return;
     }
     if (!assignedAgent) {
-      this.logger.warn('No agent assigned, cannot create loan request.');
-      return;
+        console.log('No agent assigned, cannot create loan request.');
     }
 
     // 4️⃣ Save chat message

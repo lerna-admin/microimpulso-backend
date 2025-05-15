@@ -124,7 +124,7 @@ async processIncoming(payload: any) {
       if (!assignedAgent) {
         console.log('No agent assigned, cannot create loan request.');
         
-      }
+      } else {
       loanRequest = this.loanRequestRepository.create({
         client,
         agent: assignedAgent,
@@ -132,6 +132,7 @@ async processIncoming(payload: any) {
         amount: 0,
       });
       await this.loanRequestRepository.save(loanRequest);
+      }
     }
 
     // 3️⃣ Handle media (if any)
@@ -159,7 +160,7 @@ async processIncoming(payload: any) {
     }
     if (!assignedAgent) {
         console.log('No agent assigned, cannot create loan request.');
-    }
+    } else {
 
     // 4️⃣ Save chat message
     const chatMessage = this.chatMessageRepository.create({
@@ -171,6 +172,7 @@ async processIncoming(payload: any) {
     });
 
     await this.chatMessageRepository.save(chatMessage);
+    }
 
     this.logger.log(`✅ Mensaje guardado de ${phone}`);
   } catch (error) {

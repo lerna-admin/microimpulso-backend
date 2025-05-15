@@ -4,8 +4,12 @@ import { DeepPartial, Repository } from 'typeorm';
 import { Client, ClientStatus } from '../entities/client.entity';
 import { User } from '../entities/user.entity';
 import { LoanRequest, LoanRequestStatus } from '../entities/loan-request.entity';
+import { Document } from '../entities/document.entity'; 
 import { ChatMessage } from '../entities/chat-message.entity';
 import axios from 'axios';
+import { join } from 'path';
+import { v4 as uuid } from 'uuid';
+import { writeFileSync } from 'fs';
 
 @Injectable()
 export class ChatService {
@@ -18,6 +22,10 @@ export class ChatService {
     @InjectRepository(User)
     private userRepository: Repository<User>,
     
+    @InjectRepository(Document)
+    private documentRepository: Repository<Document>,
+    
+    
     @InjectRepository(LoanRequest)
     private loanRequestRepository: Repository<LoanRequest>,
     
@@ -26,19 +34,53 @@ export class ChatService {
   ) {}
   
 
+
+
+async downloadAndStoreMedia(mediaId: string, mimeType: string): Promise<string> {
+  const token = process.env.WHATSAPP_TOKEN;
+
+  // Paso 1: Obtener la URL del archivo
+  const metadata = await axios.get(`https://graph.facebook.com/v19.0/${mediaId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  const fileUrl = metadata.data.url;
+
+  // Paso 2: Descargar archivo
+  const file = await axios.get(fileUrl, {
+    headers: { Authorization: `Bearer ${token}` },
+    responseType: 'arraybuffer',
+  });
+
+  // Paso 3: Determinar extensión
+  const extension = mimeType.includes('jpeg') ? 'jpg' :
+                    mimeType.includes('png') ? 'png' :
+                    mimeType.includes('pdf') ? 'pdf' : 'bin';
+
+  const filename = `${uuid()}.${extension}`;
+  const fullPath = join(__dirname, '..', '..', 'public', 'uploads', 'documents', filename);
+  const relativePath = `/uploads/documents/${filename}`;
+
+  writeFileSync(fullPath, file.data);
+
+  return relativePath;
+}
+
 async processIncoming(payload: any) {
   try {
-    // 1️⃣ Extract phone number and text from the webhook payload
     const messageData = payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-    const phone       = messageData?.from;
-    const text        = messageData?.text?.body;
+    const phone = messageData?.from;
 
-    if (!phone || !text) {
-      this.logger.warn('Missing phone number or message text.');
+    if (!phone) {
+      this.logger.warn('Missing phone number.');
       return;
     }
 
-    // 2️⃣ Load (or create) the client, including loanRequests + their agents
+    const isText = messageData?.type === 'text';
+    const isImage = messageData?.type === 'image';
+    const isDocument = messageData?.type === 'document';
+
+    // 1️⃣ Load (or create) client
     let client = await this.clientRepository.findOne({
       where: { phone },
       relations: ['loanRequests', 'loanRequests.agent'],
@@ -53,25 +95,17 @@ async processIncoming(payload: any) {
       await this.clientRepository.save(client);
     }
 
-    // 3️⃣ Look for an active loan request for this client
-    const activeLoan = client.loanRequests?.find(
-      (lr) =>
-        lr.status !== LoanRequestStatus.COMPLETED &&
-        lr.status !== LoanRequestStatus.REJECTED,
+    // 2️⃣ Find or create active loan request
+    let loanRequest = client.loanRequests?.find(
+      (lr) => lr.status !== LoanRequestStatus.COMPLETED && lr.status !== LoanRequestStatus.REJECTED,
     );
 
-    let loanRequest = activeLoan;
-    let assignedAgent: User | null = null;
+    let assignedAgent: User | null = loanRequest?.agent ?? null;
 
-    // 4️⃣ If no active loan, pick the agent with the lightest workload
     if (!loanRequest) {
       const leastBusy = await this.userRepository
         .createQueryBuilder('user')
-        .leftJoin(
-          'user.loanRequests',
-          'loanRequest',
-          "loanRequest.status NOT IN ('COMPLETED', 'REJECTED')",
-        )
+        .leftJoin('user.loanRequests', 'loanRequest', "loanRequest.status NOT IN ('COMPLETED', 'REJECTED')")
         .where('user.role = :role', { role: 'AGENT' })
         .select(['user.id'])
         .addSelect('COUNT(loanRequest.id)', 'activeCount')
@@ -80,46 +114,71 @@ async processIncoming(payload: any) {
         .getRawMany();
 
       if (!leastBusy.length) {
-        this.logger.warn('No agents available for assignment.');
+        this.logger.warn('No agents available.');
         return;
       }
 
       const agentId = leastBusy[0].user_id;
-      const agent   = await this.userRepository.findOne({ where: { id: agentId } });
-      if (!agent) {
-        this.logger.warn(`Agent with ID ${agentId} not found.`);
+      //assignedAgent = await this.userRepository.findOne({ where: { id: agentId } });
+      assignedAgent = await this.userRepository.findOne({ where: { id: agentId } })
+      if (!assignedAgent) {
+        this.logger.warn('No agent assigned, cannot create loan request.');
         return;
       }
-
-      assignedAgent = agent;
-
-      // ▶️ Create the new loan request
       loanRequest = this.loanRequestRepository.create({
         client,
-        agent,
+        agent: assignedAgent,
         status: LoanRequestStatus.NEW,
         amount: 0,
       });
       await this.loanRequestRepository.save(loanRequest);
-    } else {
-      assignedAgent = loanRequest.agent;
     }
 
-   const chatMessageData: DeepPartial<ChatMessage> = {
-    content: text,
-    direction: 'INCOMING',
-    client,
-    agent: assignedAgent,
-    loanRequest,
-};
-    const message = this.chatMessageRepository.create(chatMessageData);
-    await this.chatMessageRepository.save(message);
+    // 3️⃣ Handle media (if any)
+    let content = '';
+    if (isText) {
+      content = messageData.text.body;
+    } else if (isImage || isDocument) {
+      const media = isImage ? messageData.image : messageData.document;
+      const mimeType = media.mime_type;
+      const mediaId = media.id;
 
-    this.logger.log(`✅ Message saved from ${phone}: "${text}"`);
+      const url = await this.downloadAndStoreMedia(mediaId, mimeType); // ⬅️ función auxiliar
+
+      const document = await this.documentRepository.save({
+        type: mimeType,
+        url,
+        clientId: client.id,
+        createdAt: new Date(),
+      });
+
+      content = `📎 Documento recibido: [Ver archivo](/documents/view/${document.id})`;
+    } else {
+      this.logger.warn(`Unsupported message type: ${messageData?.type}`);
+      return;
+    }
+    if (!assignedAgent) {
+      this.logger.warn('No agent assigned, cannot create loan request.');
+      return;
+    }
+
+    // 4️⃣ Save chat message
+    const chatMessage = this.chatMessageRepository.create({
+      content,
+      direction: 'INCOMING',
+      client,
+      agent: assignedAgent,
+      loanRequest,
+    });
+
+    await this.chatMessageRepository.save(chatMessage);
+
+    this.logger.log(`✅ Mensaje guardado de ${phone}`);
   } catch (error) {
-    this.logger.error('❌ Error processing incoming message:', error);
+    this.logger.error('❌ Error al procesar mensaje entrante:', error);
   }
 }
+
 async sendMessageToClient(clientId: number, message: string) {
   /* 1. Load client ------------------------------------------------------- */
   const client = await this.clientRepository.findOne({

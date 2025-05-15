@@ -248,7 +248,7 @@ async getAgentConversations(agentId: number) {
     },
     relations: ['client'], // Asegura que traes el cliente relacionado
     order: {
-      createdAt: 'ASC',
+      createdAt: 'DESC',
     },
   });
 

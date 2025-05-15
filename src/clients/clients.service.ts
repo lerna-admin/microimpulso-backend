@@ -31,12 +31,12 @@ async findAll(): Promise<any[]> {
   });
 
   return loans.map((loan) => {
-    const totalPagado = loan.transactions
-      .filter(t => t.Transactiontype === 'repayment')
-      .reduce((sum, t) => sum + Number(t.amount), 0);
-
     const montoPrestado = loan.transactions
       .filter(t => t.Transactiontype === 'disbursement')
+      .reduce((sum, t) => sum + Number(t.amount), 0);
+
+    const totalPagado = loan.transactions
+      .filter(t => t.Transactiontype === 'repayment')
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
     const pendientePorPagar = Number(loan.amount) - totalPagado;
@@ -55,8 +55,8 @@ async findAll(): Promise<any[]> {
         ...loan,
         transactions: loan.transactions,
       },
-      totalPagado,
       montoPrestado,
+      totalPagado,
       pendientePorPagar,
       diasMora,
     };

@@ -6,7 +6,7 @@ import { Client } from '../entities/client.entity';
 import { User } from '../entities/user.entity';
 import { LoanRequest } from '../entities/loan-request.entity';
 import { ChatMessage } from '../entities/chat-message.entity';
-
+import { Document } from '../entities/document.entity';
 @Module({
   imports: [
     TypeOrmModule.forFeature([
@@ -14,6 +14,7 @@ import { ChatMessage } from '../entities/chat-message.entity';
       User,
       LoanRequest,
       ChatMessage,
+      Document
     ]),
   ],
   controllers: [ChatController],

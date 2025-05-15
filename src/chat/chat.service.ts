@@ -138,7 +138,7 @@ async sendMessageToClient(clientId: number, message: string) {
   const agent = loanRequest?.agent;
 
   /* 3. WhatsApp credentials --------------------------------------------- */
-  const accessToken   = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BO6XSpwpbTUMEstIHF0apOb5qEVyUhuwSXL0us9R6RoSPAi3Su02ZCM6xGWfyCE7UceE4BGKPAFElCJwVc8hJSTZAUru7OXILjvLhZAwdvhAlm175gTyfNJyZBOCJpXHRPJz2tHVAtBcPTPLHOS2YjkkrjSzqOO0SR1Osbv6NxUQS8J6lOZCZCw5FBXxjuEHFmBkopaAD8mV5Wk8kfGGMgttEtRZBffOwlYZD';
+  const accessToken   = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BO9GhRa1Bnqo02ztkvdsCXKipHpZBzsoQjqizLFZBe1nkeUTekgIsZAOJsTrYDwQj4gZCPZAoidUCaRlOGRS8GqAzZCkkk4fuBYO8z6EQQaUU1dslmpE3HY70VlCNsDwprXl0n57OzCqfW6MylXJvUaNOmMho3WCxlzxk0a0dG5abzgoEFhtW96NxsylZBEGHzjJA2UtZCqZA4Xoz8ULln1651EUFmzIBlggZDZD';
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '696358046884463';
   if (!accessToken || !phoneNumberId) {
     throw new Error('WhatsApp TOKEN or PHONE_NUMBER_ID env vars are not set.');

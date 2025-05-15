@@ -25,7 +25,7 @@ export class Transaction {
   loanRequest: LoanRequest;
 
   @Column({ type: 'text', enum: TransactionType })
-  Transactiontype: TransactionType;
+  transactionType: TransactionType;
 
   @Column('decimal', { precision: 12, scale: 2 })
   amount: number;

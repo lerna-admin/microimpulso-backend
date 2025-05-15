@@ -79,7 +79,8 @@ export class LoanRequest {
   @OneToMany(() => Transaction, txn => txn.loanRequest, {
     cascade: true,
   })
+  transactions: Transaction[];
+  
   @Column({ type: 'text', nullable: true })
   paymentDay?: string;
-  transactions: Transaction[];
 }

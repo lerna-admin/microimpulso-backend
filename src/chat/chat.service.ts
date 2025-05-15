@@ -37,7 +37,7 @@ export class ChatService {
 
 
 async downloadAndStoreMedia(mediaId: string, mimeType: string): Promise<string> {
-  const token = process.env.WHATSAPP_TOKEN;
+  const token = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BOZBnna9HFtZBscVbUuBMjWrx0ZA7mHTDo7rCqwWPxh3MOhh9ZAQwSJug94KieNnVmJu9a0vgaDIhzzHZArVq4ken9W9u9SWRnWLjgVKQo0BPteSHHejohmZAJnm9EJmlnUWoMreTtXhZBYZAFJ4WUyGBfWvyLy213cXtZC2IaUu3edDGThS38wXXCdYhMbCwBDHckdlgfJU5ilfwZD';
 
   // Paso 1: Obtener la URL del archivo
   const metadata = await axios.get(`https://graph.facebook.com/v19.0/${mediaId}`, {

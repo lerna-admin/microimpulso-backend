@@ -37,7 +37,7 @@ export class ChatService {
 
 
 async downloadAndStoreMedia(mediaId: string, mimeType: string): Promise<string> {
-  const token = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BOysDM1efepg5Mq5yoBNrg92GoNaBOHet5ITWOTCmpaGPfjacH2lDIQmEUvC0g7VlowtEnrUkBcZCRS7fBpIs30ZBnsBfUnX8wXb70b38Dlw7d65KQHO0H0qFvGpLirsd2ZB9KNHSkR0dZC3qSZBBQzQdjgI7hwjek2vRNPqOCENBx5Lo0oNJ5iCWlCEIsDs743DsBkSkpNPAZD';
+  const token = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BO5o0cms8HRLATO1epThj3GcuJNmUg8gqijIJoxgHpdCSQEUi9xz73CMXqQUv879q4pa1ayaWIqKlj9r1fjz1uoq8RvytRIZCL3x4RWdswPqjK2FE1ZCPon8WICruXBhyUIk0LlZAohvsfNcseDTXiVWh2mZBXJ3YGqJy8Vk6aXC2iLKYJQZAtOZCfyY8Kxw8FWsRJH19X8rf0ZD';
 
   // Paso 1: Obtener la URL del archivo
   const metadata = await axios.get(`https://graph.facebook.com/v19.0/${mediaId}`, {
@@ -198,7 +198,7 @@ async sendMessageToClient(clientId: number, message: string) {
   const agent = loanRequest?.agent;
 
   /* 3. WhatsApp credentials --------------------------------------------- */
-  const accessToken   = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BOysDM1efepg5Mq5yoBNrg92GoNaBOHet5ITWOTCmpaGPfjacH2lDIQmEUvC0g7VlowtEnrUkBcZCRS7fBpIs30ZBnsBfUnX8wXb70b38Dlw7d65KQHO0H0qFvGpLirsd2ZB9KNHSkR0dZC3qSZBBQzQdjgI7hwjek2vRNPqOCENBx5Lo0oNJ5iCWlCEIsDs743DsBkSkpNPAZD';
+  const accessToken   = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BO5o0cms8HRLATO1epThj3GcuJNmUg8gqijIJoxgHpdCSQEUi9xz73CMXqQUv879q4pa1ayaWIqKlj9r1fjz1uoq8RvytRIZCL3x4RWdswPqjK2FE1ZCPon8WICruXBhyUIk0LlZAohvsfNcseDTXiVWh2mZBXJ3YGqJy8Vk6aXC2iLKYJQZAtOZCfyY8Kxw8FWsRJH19X8rf0ZD';
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '696358046884463';
   if (!accessToken || !phoneNumberId) {
     throw new Error('WhatsApp TOKEN or PHONE_NUMBER_ID env vars are not set.');

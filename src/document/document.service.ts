@@ -21,6 +21,9 @@ export class DocumentService {
     doc.classification = classification;
     return this.documentRepository.save(doc);
   }
+  async findById(id: string): Promise<Document | null> {
+    return this.documentRepository.findOne({ where: { id } });
+  }
 
   async getByClientId(clientId: number): Promise<Client | null> {
     return this.clientRepository.findOne({

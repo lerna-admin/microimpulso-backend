@@ -37,7 +37,7 @@ export class ChatService {
 
 
 async downloadAndStoreMedia(mediaId: string, mimeType: string): Promise<string> {
-  const token = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BO5o0cms8HRLATO1epThj3GcuJNmUg8gqijIJoxgHpdCSQEUi9xz73CMXqQUv879q4pa1ayaWIqKlj9r1fjz1uoq8RvytRIZCL3x4RWdswPqjK2FE1ZCPon8WICruXBhyUIk0LlZAohvsfNcseDTXiVWh2mZBXJ3YGqJy8Vk6aXC2iLKYJQZAtOZCfyY8Kxw8FWsRJH19X8rf0ZD';
+  const token = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BO4fSzrmbsFwdeMfGZCKCnQneZCSN7rBpFhICmFKS0AEtoEZBDE7M25zcEm5UUZA90joaJzal8oScxknl7qwMkZCZC3oZAK9kbau5ZCNYIRLpZClkV3s84BJPuygMR9r6p2Gv8ZCDeLrmhiFvutrSZAru5vvsPjnADdJT1yAaRVQTaDx4xLIxLDlhLkESSiTDoz3cQ64JXNQ171ZChsYZD';
 
   // Paso 1: Obtener la URL del archivo
   const metadata = await axios.get(`https://graph.facebook.com/v19.0/${mediaId}`, {
@@ -94,6 +94,7 @@ async processIncoming(payload: any) {
       });
       await this.clientRepository.save(client);
     }
+
 
     // 2️⃣ Find or create active loan request
     let loanRequest = client.loanRequests?.find(
@@ -152,6 +153,12 @@ async processIncoming(payload: any) {
         clientId: client.id,
         createdAt: new Date(),
       });
+      console.log(JSON.stringify({
+        type: mimeType,
+        url,
+        clientId: client.id,
+        createdAt: new Date(),
+      }, null, 4))
 
       content = `📎 Documento recibido: [Ver archivo](/documents/view/${document.id})`;
     } else {
@@ -198,7 +205,7 @@ async sendMessageToClient(clientId: number, message: string) {
   const agent = loanRequest?.agent;
 
   /* 3. WhatsApp credentials --------------------------------------------- */
-  const accessToken   = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BO5o0cms8HRLATO1epThj3GcuJNmUg8gqijIJoxgHpdCSQEUi9xz73CMXqQUv879q4pa1ayaWIqKlj9r1fjz1uoq8RvytRIZCL3x4RWdswPqjK2FE1ZCPon8WICruXBhyUIk0LlZAohvsfNcseDTXiVWh2mZBXJ3YGqJy8Vk6aXC2iLKYJQZAtOZCfyY8Kxw8FWsRJH19X8rf0ZD';
+  const accessToken   = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BO4fSzrmbsFwdeMfGZCKCnQneZCSN7rBpFhICmFKS0AEtoEZBDE7M25zcEm5UUZA90joaJzal8oScxknl7qwMkZCZC3oZAK9kbau5ZCNYIRLpZClkV3s84BJPuygMR9r6p2Gv8ZCDeLrmhiFvutrSZAru5vvsPjnADdJT1yAaRVQTaDx4xLIxLDlhLkESSiTDoz3cQ64JXNQ171ZChsYZD';
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '696358046884463';
   if (!accessToken || !phoneNumberId) {
     throw new Error('WhatsApp TOKEN or PHONE_NUMBER_ID env vars are not set.');

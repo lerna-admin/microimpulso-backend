@@ -150,7 +150,7 @@ async processIncoming(payload: any) {
       const document = await this.documentRepository.save({
         type: mimeType,
         url,
-        clientId: client.id,
+        client: client,
         createdAt: new Date(),
       });
       console.log(JSON.stringify({

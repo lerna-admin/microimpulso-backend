@@ -333,7 +333,7 @@ async sendSimulationToClient(clientId: number, file: Express.Multer.File) {
 
   // 3. Store file temporarily
   const fileName = `${uuid()}-${file.originalname}`;
-  const tmpPath = join(__dirname, '..', '..', 'uploads', fileName);
+  const tmpPath = join(__dirname, '..', '..', 'public', 'uploads', fileName);
   fs.writeFileSync(tmpPath, file.buffer);
 
   // 4. Upload image to WhatsApp

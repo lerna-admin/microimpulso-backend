@@ -39,7 +39,7 @@ export class ChatService {
 
 
 async downloadAndStoreMediaori(mediaId: string, mimeType: string): Promise<string> {
-  const token = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BO4fSzrmbsFwdeMfGZCKCnQneZCSN7rBpFhICmFKS0AEtoEZBDE7M25zcEm5UUZA90joaJzal8oScxknl7qwMkZCZC3oZAK9kbau5ZCNYIRLpZClkV3s84BJPuygMR9r6p2Gv8ZCDeLrmhiFvutrSZAru5vvsPjnADdJT1yAaRVQTaDx4xLIxLDlhLkESSiTDoz3cQ64JXNQ171ZChsYZD';
+  const token = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BOxIIz6QqyZBLsFbZBKYKSZChEDjBEVc2jhDBIUy5EimqS3hQkjsHeXfy2XBJTuodYBqsJ8GaLLtsQRapYoE5paM12EYxQJGq5ho7pREMUeRxGOGD5im6IGb9Mws9T8UkugfIlg0A9LmX7ZAZBCsgIrd3eTpCA5v5ly0CgOTKaeTaD5EmJ30H3UHGS5gxuIum7NF0d7L0fJD0ZD';
 
   // Paso 1: Obtener la URL del archivo
   const metadata = await axios.get(`https://graph.facebook.com/v19.0/${mediaId}`, {
@@ -68,7 +68,7 @@ async downloadAndStoreMediaori(mediaId: string, mimeType: string): Promise<strin
   return relativePath;
 }
 async  downloadAndStoreMedia(mediaId: string, mimeType: string): Promise<string> {
-  const token = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BO4fSzrmbsFwdeMfGZCKCnQneZCSN7rBpFhICmFKS0AEtoEZBDE7M25zcEm5UUZA90joaJzal8oScxknl7qwMkZCZC3oZAK9kbau5ZCNYIRLpZClkV3s84BJPuygMR9r6p2Gv8ZCDeLrmhiFvutrSZAru5vvsPjnADdJT1yAaRVQTaDx4xLIxLDlhLkESSiTDoz3cQ64JXNQ171ZChsYZD';
+  const token = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BOxIIz6QqyZBLsFbZBKYKSZChEDjBEVc2jhDBIUy5EimqS3hQkjsHeXfy2XBJTuodYBqsJ8GaLLtsQRapYoE5paM12EYxQJGq5ho7pREMUeRxGOGD5im6IGb9Mws9T8UkugfIlg0A9LmX7ZAZBCsgIrd3eTpCA5v5ly0CgOTKaeTaD5EmJ30H3UHGS5gxuIum7NF0d7L0fJD0ZD';
 
   // Paso 1: Obtener la URL del archivo
   const metadata = await axios.get(`https://graph.facebook.com/v19.0/${mediaId}`, {

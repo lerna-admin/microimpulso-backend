@@ -275,23 +275,6 @@ export class ChatService {
       text: { body: message },
     };
 
-    /* 3. WhatsApp credentials --------------------------------------------- */
-    const accessToken =
-      process.env.WHATSAPP_TOKEN ||
-      'EAAYqvtVC2P8BO4fSzrmbsFwdeMfGZCKCnQneZCSN7rBpFhICmFKS0AEtoEZBDE7M25zcEm5UUZA90joaJzal8oScxknl7qwMkZCZC3oZAK9kbau5ZCNYIRLpZClkV3s84BJPuygMR9r6p2Gv8ZCDeLrmhiFvutrSZAru5vvsPjnADdJT1yAaRVQTaDx4xLIxLDlhLkESSiTDoz3cQ64JXNQ171ZChsYZD';
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '696358046884463';
-    if (!accessToken || !phoneNumberId) {
-      throw new Error('WhatsApp TOKEN or PHONE_NUMBER_ID env vars are not set.');
-    }
-
-    /* 4. Send message to WhatsApp ----------------------------------------- */
-    const payload = {
-      messaging_product: 'whatsapp',
-      to: client.phone,
-      type: 'text',
-      text: { body: message },
-    };
-
     await axios.post(`https://graph.facebook.com/v18.0/${phoneNumberId}/messages`, payload, {
       headers: {
         Authorization: `Bearer ${accessToken}`,

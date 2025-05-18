@@ -10,6 +10,8 @@ import axios from 'axios';
 import { join } from 'path';
 import { v4 as uuid } from 'uuid';
 import { writeFileSync } from 'fs';
+import { PDFDocument, rgb } from 'pdf-lib';
+
 
 @Injectable()
 export class ChatService {
@@ -36,7 +38,7 @@ export class ChatService {
 
 
 
-async downloadAndStoreMedia(mediaId: string, mimeType: string): Promise<string> {
+async downloadAndStoreMediaori(mediaId: string, mimeType: string): Promise<string> {
   const token = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BO4fSzrmbsFwdeMfGZCKCnQneZCSN7rBpFhICmFKS0AEtoEZBDE7M25zcEm5UUZA90joaJzal8oScxknl7qwMkZCZC3oZAK9kbau5ZCNYIRLpZClkV3s84BJPuygMR9r6p2Gv8ZCDeLrmhiFvutrSZAru5vvsPjnADdJT1yAaRVQTaDx4xLIxLDlhLkESSiTDoz3cQ64JXNQ171ZChsYZD';
 
   // Paso 1: Obtener la URL del archivo
@@ -65,6 +67,56 @@ async downloadAndStoreMedia(mediaId: string, mimeType: string): Promise<string> 
 
   return relativePath;
 }
+async  downloadAndStoreMedia(mediaId: string, mimeType: string): Promise<string> {
+  const token = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BO4fSzrmbsFwdeMfGZCKCnQneZCSN7rBpFhICmFKS0AEtoEZBDE7M25zcEm5UUZA90joaJzal8oScxknl7qwMkZCZC3oZAK9kbau5ZCNYIRLpZClkV3s84BJPuygMR9r6p2Gv8ZCDeLrmhiFvutrSZAru5vvsPjnADdJT1yAaRVQTaDx4xLIxLDlhLkESSiTDoz3cQ64JXNQ171ZChsYZD';
+
+  // Paso 1: Obtener la URL del archivo
+  const metadata = await axios.get(`https://graph.facebook.com/v19.0/${mediaId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  const fileUrl = metadata.data.url;
+
+  // Paso 2: Descargar el archivo
+  const response = await axios.get(fileUrl, {
+    headers: { Authorization: `Bearer ${token}` },
+    responseType: 'arraybuffer',
+  });
+
+  const fileBuffer = response.data;
+  const isImage = mimeType.includes('jpeg') || mimeType.includes('png');
+  const isPdf = mimeType.includes('pdf');
+
+  const finalFilename = `${uuid()}.pdf`;
+  const fullPath = join(__dirname, '..', '..', 'public', 'uploads', 'documents', finalFilename);
+  const relativePath = `/uploads/documents/${finalFilename}`;
+
+  if (isImage) {
+    const pdfDoc = await PDFDocument.create();
+    const image = mimeType.includes('png')
+      ? await pdfDoc.embedPng(fileBuffer)
+      : await pdfDoc.embedJpg(fileBuffer);
+
+    const page = pdfDoc.addPage([image.width, image.height]);
+    page.drawImage(image, {
+      x: 0,
+      y: 0,
+      width: image.width,
+      height: image.height,
+    });
+
+    const pdfBytes = await pdfDoc.save();
+    writeFileSync(fullPath, pdfBytes);
+  } else if (isPdf) {
+    writeFileSync(fullPath, fileBuffer);
+  } else {
+    throw new Error(`Unsupported MIME type: ${mimeType}`);
+  }
+
+  return relativePath;
+}
+
+
 
 async processIncoming(payload: any) {
   try {

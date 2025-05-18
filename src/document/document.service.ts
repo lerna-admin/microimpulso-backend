@@ -22,7 +22,7 @@ export class DocumentService {
     return this.documentRepository.save(doc);
   }
   async findById(id: string): Promise<Document | null> {
-    return this.documentRepository.findOne({ where: { id } });
+    return this.documentRepository.findOne({ where: { id },relations: ['client'] });
   }
 
   async getByClientId(clientId: number): Promise<Client | null> {

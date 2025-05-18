@@ -1,6 +1,7 @@
-import { Controller, Get, Post, Query, Body, Req, Res, Param, NotFoundException} from '@nestjs/common';
+import { Controller, Get, Post, Query, Body, Req, Res, Param, NotFoundException, UseInterceptors, UploadedFile} from '@nestjs/common';
 import { Response, Request } from 'express';
 import { ChatService } from './chat.service';
+import { FileInterceptor } from '@nestjs/platform-express';
 
 @Controller('/chat')
 export class ChatController {
@@ -50,6 +51,15 @@ export class ChatController {
 async getAgentConversations(@Param('agentId') agentId: number) {
   return this.chatService.getAgentConversations(agentId);
 }
+@UseInterceptors(FileInterceptor('file'))
+@Post('send-simulation')
+async sendSimulation(
+  @UploadedFile() file: Express.Multer.File,
+  @Body('clientId') clientId: number,
+) {
+  return this.chatService.sendSimulationToClient(+clientId, file);
+}
+
 
 }
 

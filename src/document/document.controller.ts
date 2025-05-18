@@ -66,7 +66,7 @@ export class DocumentController {
     throw new NotFoundException('File not found on disk');
   }
 
-  res.setHeader('Content-Type', 'application/octet-stream');
+  res.setHeader('Content-Type', doc.type || 'application/octet-stream');
   res.setHeader('Content-Disposition', 'inline');
 
   return createReadStream(filePath).pipe(res);

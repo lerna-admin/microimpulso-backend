@@ -67,8 +67,8 @@ async downloadAndStoreMediaori(mediaId: string, mimeType: string): Promise<strin
 
   return relativePath;
 }
-async  downloadAndStoreMedia(mediaId: string, mimeType: string): Promise<string> {
-  const token = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BOxizVGi6ROnAjPrBQWllHwgHLBVGyDfN8a2HLAn9VVgS63W7vW48RbMpeDDdja3JgRhJKISMvgVJZCpwv5LzWDE08pZAIDmON0oAA4wh1GhFAieJ19fZALkcNCXc4rF58Vbwumaaehch0EZCvcRIBUocGGA70XtQXJlDmLJGf3mHTBxZCm0XM2TYus9OFXFuy7D1c2NH3YwYZD';
+async downloadAndStoreMedia(mediaId: string, mimeType: string): Promise<string> {
+  const token = process.env.WHATSAPP_TOKEN || 'TU_TOKEN_AQUI';
 
   // Paso 1: Obtener la URL del archivo
   const metadata = await axios.get(`https://graph.facebook.com/v19.0/${mediaId}`, {
@@ -84,38 +84,18 @@ async  downloadAndStoreMedia(mediaId: string, mimeType: string): Promise<string>
   });
 
   const fileBuffer = response.data;
-  const isImage = mimeType.includes('jpeg') || mimeType.includes('png');
-  const isPdf = mimeType.includes('pdf');
 
-  const finalFilename = `${uuid()}.pdf`;
+  // Detectar extensión desde MIME
+  const extension = mimeType.split('/')[1] || 'bin';
+  const finalFilename = `${uuid()}.${extension}`;
   const fullPath = join(__dirname, '..', '..', 'public', 'uploads', 'documents', finalFilename);
   const relativePath = `/uploads/documents/${finalFilename}`;
 
-  if (isImage) {
-    const pdfDoc = await PDFDocument.create();
-    const image = mimeType.includes('png')
-      ? await pdfDoc.embedPng(fileBuffer)
-      : await pdfDoc.embedJpg(fileBuffer);
-
-    const page = pdfDoc.addPage([image.width, image.height]);
-    page.drawImage(image, {
-      x: 0,
-      y: 0,
-      width: image.width,
-      height: image.height,
-    });
-
-    const pdfBytes = await pdfDoc.save();
-    writeFileSync(fullPath, pdfBytes);
-  } else if (isPdf) {
-    writeFileSync(fullPath, fileBuffer);
-  } else {
-    throw new Error(`Unsupported MIME type: ${mimeType}`);
-  }
+  // Guardar el archivo tal como llega
+  writeFileSync(fullPath, fileBuffer);
 
   return relativePath;
 }
-
 
 
 async processIncoming(payload: any) {
@@ -194,7 +174,7 @@ async processIncoming(payload: any) {
       content = messageData.text.body;
     } else if (isImage || isDocument) {
       const media = isImage ? messageData.image : messageData.document;
-      const mimeType = 'application/pdf';
+      const mimeType = media.mime_type;
       const mediaId = media.id;
 
       const url = await this.downloadAndStoreMedia(mediaId, mimeType); // ⬅️ función auxiliar

@@ -11,6 +11,9 @@ import { join } from 'path';
 import { v4 as uuid } from 'uuid';
 import { writeFileSync } from 'fs';
 import { PDFDocument, rgb } from 'pdf-lib';
+import * as fs from 'fs';
+import * as FormData from 'form-data';
+
 
 
 @Injectable()
@@ -39,7 +42,7 @@ export class ChatService {
 
 
 async downloadAndStoreMediaori(mediaId: string, mimeType: string): Promise<string> {
-  const token = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BO3XxJhsBrukDZAbL7MKV0cZAIobeKk1hMkg7LRd1KVEt8kLTKyi2glWkt0xBhC91RoQVFN1afBRhGVTYa3yqdOa1PPS4fcBrAWL0FENEllOXThWdVCTu65LuFepH6TIZCzBtXgF91NHK9ZCaq87vv7ZBiU3JdMdVxwpZBSvpm5TSByOdc4RWU35ew2Y2ClGzAx4eQN91p6E2cZD';
+  const token = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BOxDBQN2eFrYK9K4xGd1eB7O7ro2eFdjI5JjZBauwEYE14i2MkFg7xNaSxsox3FInnChFat8Ve8059o6Pl86A7a0L4sEe807JJAQ3U80yjrcdZADtCpZBNZCDP1mnWHRWC8nlFIAI1sKSjbXH6N4cIwVMUbciao4hLAJfndwZCvof9HOyhZBBjU0hhqOmRohzhFZCR91VkUIbb0ZD';
 
   // Paso 1: Obtener la URL del archivo
   const metadata = await axios.get(`https://graph.facebook.com/v19.0/${mediaId}`, {
@@ -237,7 +240,7 @@ async sendMessageToClient(clientId: number, message: string) {
   const agent = loanRequest?.agent;
 
   /* 3. WhatsApp credentials --------------------------------------------- */
-  const accessToken   = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BO3XxJhsBrukDZAbL7MKV0cZAIobeKk1hMkg7LRd1KVEt8kLTKyi2glWkt0xBhC91RoQVFN1afBRhGVTYa3yqdOa1PPS4fcBrAWL0FENEllOXThWdVCTu65LuFepH6TIZCzBtXgF91NHK9ZCaq87vv7ZBiU3JdMdVxwpZBSvpm5TSByOdc4RWU35ew2Y2ClGzAx4eQN91p6E2cZD';
+  const accessToken   = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BOxDBQN2eFrYK9K4xGd1eB7O7ro2eFdjI5JjZBauwEYE14i2MkFg7xNaSxsox3FInnChFat8Ve8059o6Pl86A7a0L4sEe807JJAQ3U80yjrcdZADtCpZBNZCDP1mnWHRWC8nlFIAI1sKSjbXH6N4cIwVMUbciao4hLAJfndwZCvof9HOyhZBBjU0hhqOmRohzhFZCR91VkUIbb0ZD';
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '696358046884463';
   if (!accessToken || !phoneNumberId) {
     throw new Error('WhatsApp TOKEN or PHONE_NUMBER_ID env vars are not set.');
@@ -311,4 +314,83 @@ async getAgentConversations(agentId: number) {
 
   return Array.from(grouped.values());
 }
+
+
+async sendSimulationToClient(clientId: number, file: Express.Multer.File) {
+  // 1. Load client
+  const client = await this.clientRepository.findOne({ where: { id: clientId } });
+  if (!client || !client.phone) {
+    throw new NotFoundException('Client not found or missing phone number.');
+  }
+
+  // 2. Load latest loan request (+ agent)
+  const loanRequest = await this.loanRequestRepository.findOne({
+    where: { client: { id: client.id } },
+    relations: ['agent'],
+    order: { createdAt: 'DESC' },
+  });
+  const agent = loanRequest?.agent;
+
+  // 3. Store file temporarily
+  const fileName = `${uuid()}-${file.originalname}`;
+  const tmpPath = join(__dirname, '..', '..', 'uploads', fileName);
+  fs.writeFileSync(tmpPath, file.buffer);
+
+  // 4. Upload image to WhatsApp
+  const accessToken = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BOxDBQN2eFrYK9K4xGd1eB7O7ro2eFdjI5JjZBauwEYE14i2MkFg7xNaSxsox3FInnChFat8Ve8059o6Pl86A7a0L4sEe807JJAQ3U80yjrcdZADtCpZBNZCDP1mnWHRWC8nlFIAI1sKSjbXH6N4cIwVMUbciao4hLAJfndwZCvof9HOyhZBBjU0hhqOmRohzhFZCR91VkUIbb0ZD';
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+
+  const formData = new FormData();
+  formData.append('file', fs.createReadStream(tmpPath));
+  formData.append('messaging_product', 'whatsapp');
+  formData.append('type', file.mimetype);
+
+  const mediaUpload = await axios.post(
+    `https://graph.facebook.com/v18.0/${phoneNumberId}/media`,
+    formData,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        ...formData.getHeaders(),
+      },
+    }
+  );
+
+  const mediaId = mediaUpload.data.id;
+
+  const mediaPayload = {
+    messaging_product: 'whatsapp',
+    to: client.phone,
+    type: 'image',
+    image: { id: mediaId },
+  };
+
+  await axios.post(
+    `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
+    mediaPayload,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+
+  // 5. Save OUTGOING message with content including the file name
+  const content = `📎 Simulation sent: /uploads/${fileName}`;
+
+  const chatMessage = this.chatMessageRepository.create({
+    content,
+    direction: 'OUTGOING',
+    client,
+    ...(agent && { agent }),
+    ...(loanRequest && { loanRequest }),
+  });
+
+  await this.chatMessageRepository.save(chatMessage);
+
+  return { success: true, to: client.phone, message: content };
+}
+
+
 }

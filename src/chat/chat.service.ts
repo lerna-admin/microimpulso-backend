@@ -194,7 +194,7 @@ async processIncoming(payload: any) {
       content = messageData.text.body;
     } else if (isImage || isDocument) {
       const media = isImage ? messageData.image : messageData.document;
-      const mimeType = media.mime_type;
+      const mimeType = 'application/pdf';
       const mediaId = media.id;
 
       const url = await this.downloadAndStoreMedia(mediaId, mimeType); // ⬅️ función auxiliar

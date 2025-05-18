@@ -13,6 +13,7 @@ import { writeFileSync } from 'fs';
 import { PDFDocument, rgb } from 'pdf-lib';
 import * as fs from 'fs';
 import * as FormData from 'form-data';
+import { Readable } from 'stream';
 
 
 
@@ -316,6 +317,7 @@ async getAgentConversations(agentId: number) {
 }
 
 
+
 async sendSimulationToClient(clientId: number, file: Express.Multer.File) {
   // 1. Load client
   const client = await this.clientRepository.findOne({ where: { id: clientId } });
@@ -331,17 +333,24 @@ async sendSimulationToClient(clientId: number, file: Express.Multer.File) {
   });
   const agent = loanRequest?.agent;
 
-  // 3. Store file temporarily
-  const fileName = `${uuid()}-${file.originalname}`;
-  const tmpPath = join(__dirname, '..', '..', 'public', 'uploads', fileName);
-  fs.writeFileSync(tmpPath, file.buffer);
+  // 3. Create a readable stream from buffer
+    const bufferStream = new Readable();
+  bufferStream.push(file.buffer);
+  bufferStream.push(null); // End of stream
 
-  // 4. Upload image to WhatsApp
-  const accessToken = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BOxDBQN2eFrYK9K4xGd1eB7O7ro2eFdjI5JjZBauwEYE14i2MkFg7xNaSxsox3FInnChFat8Ve8059o6Pl86A7a0L4sEe807JJAQ3U80yjrcdZADtCpZBNZCDP1mnWHRWC8nlFIAI1sKSjbXH6N4cIwVMUbciao4hLAJfndwZCvof9HOyhZBBjU0hhqOmRohzhFZCR91VkUIbb0ZD';
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  // 4. Prepare WhatsApp upload
+  const accessToken   = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BOxDBQN2eFrYK9K4xGd1eB7O7ro2eFdjI5JjZBauwEYE14i2MkFg7xNaSxsox3FInnChFat8Ve8059o6Pl86A7a0L4sEe807JJAQ3U80yjrcdZADtCpZBNZCDP1mnWHRWC8nlFIAI1sKSjbXH6N4cIwVMUbciao4hLAJfndwZCvof9HOyhZBBjU0hhqOmRohzhFZCR91VkUIbb0ZD';
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '696358046884463';
+
+  if (!accessToken || !phoneNumberId) {
+    throw new Error('Missing WhatsApp token or phone number ID');
+  }
 
   const formData = new FormData();
-  formData.append('file', fs.createReadStream(tmpPath));
+  formData.append('file', bufferStream, {
+    filename: file.originalname,
+    contentType: file.mimetype,
+  });
   formData.append('messaging_product', 'whatsapp');
   formData.append('type', file.mimetype);
 
@@ -357,7 +366,11 @@ async sendSimulationToClient(clientId: number, file: Express.Multer.File) {
   );
 
   const mediaId = mediaUpload.data.id;
+  if (!mediaId) {
+    throw new Error('Failed to upload media to WhatsApp.');
+  }
 
+  // 5. Send the image
   const mediaPayload = {
     messaging_product: 'whatsapp',
     to: client.phone,
@@ -376,8 +389,8 @@ async sendSimulationToClient(clientId: number, file: Express.Multer.File) {
     }
   );
 
-  // 5. Save OUTGOING message with content including the file name
-  const content = `📎 Simulation sent: /uploads/${fileName}`;
+  // 6. Save the message
+  const content = `📎 Simulation sent: ${file.originalname}`;
 
   const chatMessage = this.chatMessageRepository.create({
     content,
@@ -389,7 +402,7 @@ async sendSimulationToClient(clientId: number, file: Express.Multer.File) {
 
   await this.chatMessageRepository.save(chatMessage);
 
-  return { success: true, to: client.phone, message: content };
+  return { success: true, to: client.phone, file: file.originalname };
 }
 
 

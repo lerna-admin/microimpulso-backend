@@ -55,18 +55,20 @@ export class DocumentController {
   /* ---------- (B)  Binary file  -------------------------------------- */
   @Get(':id/file')
   async getFile(@Param('id') id: string, @Res() res: Response) {
-    const doc = await this.documentService.findById(id);
-    if (!doc) throw new NotFoundException('Document not found');
+    console.log("entro")
+    console.log("ID;", id)
+  const doc = await this.documentService.findById(id);
+  console.log(doc)
+  if (!doc) throw new NotFoundException('Document not found');
 
-    const filePath = join(__dirname, '..', '..', 'public', doc.url);
-    if (!existsSync(filePath)) {
-      throw new NotFoundException('File not found on disk');
-    }
-
-    // Optional: set correct content-type for PDFs or images
-    res.setHeader('Content-Type', doc.type);
-    res.setHeader('Content-Disposition', 'inline');
-
-    createReadStream(filePath).pipe(res);
+  const filePath = join(process.cwd(), 'public', doc.url);
+  if (!existsSync(filePath)) {
+    throw new NotFoundException('File not found on disk');
   }
+
+  res.setHeader('Content-Type', doc.type || 'application/octet-stream');
+  res.setHeader('Content-Disposition', 'inline');
+
+  return createReadStream(filePath).pipe(res);
+}
 }

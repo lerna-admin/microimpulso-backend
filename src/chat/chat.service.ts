@@ -11,6 +11,11 @@ import { join } from 'path';
 import { v4 as uuid } from 'uuid';
 import { writeFileSync } from 'fs';
 import { PDFDocument, rgb } from 'pdf-lib';
+import * as fs from 'fs';
+import * as FormData from 'form-data';
+import { Readable } from 'stream';
+
+
 
 @Injectable()
 export class ChatService {
@@ -33,10 +38,8 @@ export class ChatService {
     private chatMessageRepository: Repository<ChatMessage>,
   ) {}
 
-  async downloadAndStoreMediaori(mediaId: string, mimeType: string): Promise<string> {
-    const token =
-      process.env.WHATSAPP_TOKEN ||
-      'EAAYqvtVC2P8BOxIIz6QqyZBLsFbZBKYKSZChEDjBEVc2jhDBIUy5EimqS3hQkjsHeXfy2XBJTuodYBqsJ8GaLLtsQRapYoE5paM12EYxQJGq5ho7pREMUeRxGOGD5im6IGb9Mws9T8UkugfIlg0A9LmX7ZAZBCsgIrd3eTpCA5v5ly0CgOTKaeTaD5EmJ30H3UHGS5gxuIum7NF0d7L0fJD0ZD';
+async downloadAndStoreMediaori(mediaId: string, mimeType: string): Promise<string> {
+  const token = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BOxDBQN2eFrYK9K4xGd1eB7O7ro2eFdjI5JjZBauwEYE14i2MkFg7xNaSxsox3FInnChFat8Ve8059o6Pl86A7a0L4sEe807JJAQ3U80yjrcdZADtCpZBNZCDP1mnWHRWC8nlFIAI1sKSjbXH6N4cIwVMUbciao4hLAJfndwZCvof9HOyhZBBjU0hhqOmRohzhFZCR91VkUIbb0ZD';
 
     // Paso 1: Obtener la URL del archivo
     const metadata = await axios.get(`https://graph.facebook.com/v19.0/${mediaId}`, {
@@ -66,12 +69,10 @@ export class ChatService {
 
     writeFileSync(fullPath, file.data);
 
-    return relativePath;
-  }
-  async downloadAndStoreMedia(mediaId: string, mimeType: string): Promise<string> {
-    const token =
-      process.env.WHATSAPP_TOKEN ||
-      'EAAYqvtVC2P8BOxIIz6QqyZBLsFbZBKYKSZChEDjBEVc2jhDBIUy5EimqS3hQkjsHeXfy2XBJTuodYBqsJ8GaLLtsQRapYoE5paM12EYxQJGq5ho7pREMUeRxGOGD5im6IGb9Mws9T8UkugfIlg0A9LmX7ZAZBCsgIrd3eTpCA5v5ly0CgOTKaeTaD5EmJ30H3UHGS5gxuIum7NF0d7L0fJD0ZD';
+  return relativePath;
+}
+async downloadAndStoreMedia(mediaId: string, mimeType: string): Promise<string> {
+  const token = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BO3XxJhsBrukDZAbL7MKV0cZAIobeKk1hMkg7LRd1KVEt8kLTKyi2glWkt0xBhC91RoQVFN1afBRhGVTYa3yqdOa1PPS4fcBrAWL0FENEllOXThWdVCTu65LuFepH6TIZCzBtXgF91NHK9ZCaq87vv7ZBiU3JdMdVxwpZBSvpm5TSByOdc4RWU35ew2Y2ClGzAx4eQN91p6E2cZD';
 
     // Paso 1: Obtener la URL del archivo
     const metadata = await axios.get(`https://graph.facebook.com/v19.0/${mediaId}`, {
@@ -86,36 +87,20 @@ export class ChatService {
       responseType: 'arraybuffer',
     });
 
-    const fileBuffer = response.data;
-    const isImage = mimeType.includes('jpeg') || mimeType.includes('png');
-    const isPdf = mimeType.includes('pdf');
+  const fileBuffer = response.data;
 
-    const finalFilename = `${uuid()}.pdf`;
-    const fullPath = join(__dirname, '..', '..', 'public', 'uploads', 'documents', finalFilename);
-    const relativePath = `/uploads/documents/${finalFilename}`;
+  // Detectar extensión desde MIME
+  const extension = mimeType.split('/')[1] || 'bin';
+  const finalFilename = `${uuid()}.${extension}`;
+  const fullPath = join(__dirname, '..', '..', 'public', 'uploads', 'documents', finalFilename);
+  const relativePath = `/uploads/documents/${finalFilename}`;
 
-    if (isImage) {
-      const pdfDoc = await PDFDocument.create();
-      const image = mimeType.includes('png') ? await pdfDoc.embedPng(fileBuffer) : await pdfDoc.embedJpg(fileBuffer);
+  // Guardar el archivo tal como llega
+  writeFileSync(fullPath, fileBuffer);
 
-      const page = pdfDoc.addPage([image.width, image.height]);
-      page.drawImage(image, {
-        x: 0,
-        y: 0,
-        width: image.width,
-        height: image.height,
-      });
+  return relativePath;
+}
 
-      const pdfBytes = await pdfDoc.save();
-      writeFileSync(fullPath, pdfBytes);
-    } else if (isPdf) {
-      writeFileSync(fullPath, fileBuffer);
-    } else {
-      throw new Error(`Unsupported MIME type: ${mimeType}`);
-    }
-
-    return relativePath;
-  }
 
   async processIncoming(payload: any) {
     try {
@@ -258,14 +243,12 @@ export class ChatService {
     });
     const agent = loanRequest?.agent;
 
-    /* 3. WhatsApp credentials --------------------------------------------- */
-    const accessToken =
-      process.env.WHATSAPP_TOKEN ||
-      'EAAYqvtVC2P8BO4fSzrmbsFwdeMfGZCKCnQneZCSN7rBpFhICmFKS0AEtoEZBDE7M25zcEm5UUZA90joaJzal8oScxknl7qwMkZCZC3oZAK9kbau5ZCNYIRLpZClkV3s84BJPuygMR9r6p2Gv8ZCDeLrmhiFvutrSZAru5vvsPjnADdJT1yAaRVQTaDx4xLIxLDlhLkESSiTDoz3cQ64JXNQ171ZChsYZD';
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '696358046884463';
-    if (!accessToken || !phoneNumberId) {
-      throw new Error('WhatsApp TOKEN or PHONE_NUMBER_ID env vars are not set.');
-    }
+  /* 3. WhatsApp credentials --------------------------------------------- */
+  const accessToken   = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BOxDBQN2eFrYK9K4xGd1eB7O7ro2eFdjI5JjZBauwEYE14i2MkFg7xNaSxsox3FInnChFat8Ve8059o6Pl86A7a0L4sEe807JJAQ3U80yjrcdZADtCpZBNZCDP1mnWHRWC8nlFIAI1sKSjbXH6N4cIwVMUbciao4hLAJfndwZCvof9HOyhZBBjU0hhqOmRohzhFZCR91VkUIbb0ZD';
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '696358046884463';
+  if (!accessToken || !phoneNumberId) {
+    throw new Error('WhatsApp TOKEN or PHONE_NUMBER_ID env vars are not set.');
+  }
 
     /* 4. Send message to WhatsApp ----------------------------------------- */
     const payload = {
@@ -328,6 +311,97 @@ export class ChatService {
       grouped.get(clientId)!.messages.push(msg);
     }
 
-    return Array.from(grouped.values());
+  return Array.from(grouped.values());
+}
+
+
+
+async sendSimulationToClient(clientId: number, file: Express.Multer.File) {
+  // 1. Load client
+  const client = await this.clientRepository.findOne({ where: { id: clientId } });
+  if (!client || !client.phone) {
+    throw new NotFoundException('Client not found or missing phone number.');
   }
+
+  // 2. Load latest loan request (+ agent)
+  const loanRequest = await this.loanRequestRepository.findOne({
+    where: { client: { id: client.id } },
+    relations: ['agent'],
+    order: { createdAt: 'DESC' },
+  });
+  const agent = loanRequest?.agent;
+
+  // 3. Create a readable stream from buffer
+    const bufferStream = new Readable();
+  bufferStream.push(file.buffer);
+  bufferStream.push(null); // End of stream
+
+  // 4. Prepare WhatsApp upload
+  const accessToken   = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BOxDBQN2eFrYK9K4xGd1eB7O7ro2eFdjI5JjZBauwEYE14i2MkFg7xNaSxsox3FInnChFat8Ve8059o6Pl86A7a0L4sEe807JJAQ3U80yjrcdZADtCpZBNZCDP1mnWHRWC8nlFIAI1sKSjbXH6N4cIwVMUbciao4hLAJfndwZCvof9HOyhZBBjU0hhqOmRohzhFZCR91VkUIbb0ZD';
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '696358046884463';
+
+  if (!accessToken || !phoneNumberId) {
+    throw new Error('Missing WhatsApp token or phone number ID');
+  }
+
+  const formData = new FormData();
+  formData.append('file', bufferStream, {
+    filename: file.originalname,
+    contentType: file.mimetype,
+  });
+  formData.append('messaging_product', 'whatsapp');
+  formData.append('type', file.mimetype);
+
+  const mediaUpload = await axios.post(
+    `https://graph.facebook.com/v18.0/${phoneNumberId}/media`,
+    formData,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        ...formData.getHeaders(),
+      },
+    }
+  );
+
+  const mediaId = mediaUpload.data.id;
+  if (!mediaId) {
+    throw new Error('Failed to upload media to WhatsApp.');
+  }
+
+  // 5. Send the image
+  const mediaPayload = {
+    messaging_product: 'whatsapp',
+    to: client.phone,
+    type: 'image',
+    image: { id: mediaId },
+  };
+
+  await axios.post(
+    `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
+    mediaPayload,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+
+  // 6. Save the message
+  const content = `📎 Simulation sent: ${file.originalname}`;
+
+  const chatMessage = this.chatMessageRepository.create({
+    content,
+    direction: 'OUTGOING',
+    client,
+    ...(agent && { agent }),
+    ...(loanRequest && { loanRequest }),
+  });
+
+  await this.chatMessageRepository.save(chatMessage);
+
+  return { success: true, to: client.phone, file: file.originalname };
+}
+
+
 }

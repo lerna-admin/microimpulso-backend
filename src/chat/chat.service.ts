@@ -15,8 +15,6 @@ import * as fs from 'fs';
 import * as FormData from 'form-data';
 import { Readable } from 'stream';
 
-
-
 @Injectable()
 export class ChatService {
   private readonly logger = new Logger(ChatService.name);
@@ -38,8 +36,10 @@ export class ChatService {
     private chatMessageRepository: Repository<ChatMessage>,
   ) {}
 
-async downloadAndStoreMediaori(mediaId: string, mimeType: string): Promise<string> {
-  const token = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BOxDBQN2eFrYK9K4xGd1eB7O7ro2eFdjI5JjZBauwEYE14i2MkFg7xNaSxsox3FInnChFat8Ve8059o6Pl86A7a0L4sEe807JJAQ3U80yjrcdZADtCpZBNZCDP1mnWHRWC8nlFIAI1sKSjbXH6N4cIwVMUbciao4hLAJfndwZCvof9HOyhZBBjU0hhqOmRohzhFZCR91VkUIbb0ZD';
+  async downloadAndStoreMediaori(mediaId: string, mimeType: string): Promise<string> {
+    const token =
+      process.env.WHATSAPP_TOKEN ||
+      'EAAYqvtVC2P8BO4V6Rzpyploc2kqflWHN6sBZBEZBmZAqc0DyDRkZArhXoerQNwmt2kTcPcqNSZAtFLd48ZBsUmgY9ZCXZAvP7qYPqscQGQnSdua8TL2r9aJNdCRjgZAZBC2WmkZBP77fmHQDinMZBXEoJPeMvTufH7mYsZBvug4XHpqzo7QDKSLd21AeHRefkPBUBuKA2qLZAXGMoPdyNEuEHvuyuaQ606ZBB5MB0m2pTuQz8j1DgZDZD';
 
     // Paso 1: Obtener la URL del archivo
     const metadata = await axios.get(`https://graph.facebook.com/v19.0/${mediaId}`, {
@@ -69,10 +69,12 @@ async downloadAndStoreMediaori(mediaId: string, mimeType: string): Promise<strin
 
     writeFileSync(fullPath, file.data);
 
-  return relativePath;
-}
-async downloadAndStoreMedia(mediaId: string, mimeType: string): Promise<string> {
-  const token = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BO3XxJhsBrukDZAbL7MKV0cZAIobeKk1hMkg7LRd1KVEt8kLTKyi2glWkt0xBhC91RoQVFN1afBRhGVTYa3yqdOa1PPS4fcBrAWL0FENEllOXThWdVCTu65LuFepH6TIZCzBtXgF91NHK9ZCaq87vv7ZBiU3JdMdVxwpZBSvpm5TSByOdc4RWU35ew2Y2ClGzAx4eQN91p6E2cZD';
+    return relativePath;
+  }
+  async downloadAndStoreMedia(mediaId: string, mimeType: string): Promise<string> {
+    const token =
+      process.env.WHATSAPP_TOKEN ||
+      'EAAYqvtVC2P8BO4V6Rzpyploc2kqflWHN6sBZBEZBmZAqc0DyDRkZArhXoerQNwmt2kTcPcqNSZAtFLd48ZBsUmgY9ZCXZAvP7qYPqscQGQnSdua8TL2r9aJNdCRjgZAZBC2WmkZBP77fmHQDinMZBXEoJPeMvTufH7mYsZBvug4XHpqzo7QDKSLd21AeHRefkPBUBuKA2qLZAXGMoPdyNEuEHvuyuaQ606ZBB5MB0m2pTuQz8j1DgZDZD';
 
     // Paso 1: Obtener la URL del archivo
     const metadata = await axios.get(`https://graph.facebook.com/v19.0/${mediaId}`, {
@@ -87,20 +89,19 @@ async downloadAndStoreMedia(mediaId: string, mimeType: string): Promise<string> 
       responseType: 'arraybuffer',
     });
 
-  const fileBuffer = response.data;
+    const fileBuffer = response.data;
 
-  // Detectar extensión desde MIME
-  const extension = mimeType.split('/')[1] || 'bin';
-  const finalFilename = `${uuid()}.${extension}`;
-  const fullPath = join(__dirname, '..', '..', 'public', 'uploads', 'documents', finalFilename);
-  const relativePath = `/uploads/documents/${finalFilename}`;
+    // Detectar extensión desde MIME
+    const extension = mimeType.split('/')[1] || 'bin';
+    const finalFilename = `${uuid()}.${extension}`;
+    const fullPath = join(__dirname, '..', '..', 'public', 'uploads', 'documents', finalFilename);
+    const relativePath = `/uploads/documents/${finalFilename}`;
 
-  // Guardar el archivo tal como llega
-  writeFileSync(fullPath, fileBuffer);
+    // Guardar el archivo tal como llega
+    writeFileSync(fullPath, fileBuffer);
 
-  return relativePath;
-}
-
+    return relativePath;
+  }
 
   async processIncoming(payload: any) {
     try {
@@ -243,12 +244,14 @@ async downloadAndStoreMedia(mediaId: string, mimeType: string): Promise<string> 
     });
     const agent = loanRequest?.agent;
 
-  /* 3. WhatsApp credentials --------------------------------------------- */
-  const accessToken   = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BOxDBQN2eFrYK9K4xGd1eB7O7ro2eFdjI5JjZBauwEYE14i2MkFg7xNaSxsox3FInnChFat8Ve8059o6Pl86A7a0L4sEe807JJAQ3U80yjrcdZADtCpZBNZCDP1mnWHRWC8nlFIAI1sKSjbXH6N4cIwVMUbciao4hLAJfndwZCvof9HOyhZBBjU0hhqOmRohzhFZCR91VkUIbb0ZD';
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '696358046884463';
-  if (!accessToken || !phoneNumberId) {
-    throw new Error('WhatsApp TOKEN or PHONE_NUMBER_ID env vars are not set.');
-  }
+    /* 3. WhatsApp credentials --------------------------------------------- */
+    const accessToken =
+      process.env.WHATSAPP_TOKEN ||
+      'EAAYqvtVC2P8BO4V6Rzpyploc2kqflWHN6sBZBEZBmZAqc0DyDRkZArhXoerQNwmt2kTcPcqNSZAtFLd48ZBsUmgY9ZCXZAvP7qYPqscQGQnSdua8TL2r9aJNdCRjgZAZBC2WmkZBP77fmHQDinMZBXEoJPeMvTufH7mYsZBvug4XHpqzo7QDKSLd21AeHRefkPBUBuKA2qLZAXGMoPdyNEuEHvuyuaQ606ZBB5MB0m2pTuQz8j1DgZDZD';
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '696358046884463';
+    if (!accessToken || !phoneNumberId) {
+      throw new Error('WhatsApp TOKEN or PHONE_NUMBER_ID env vars are not set.');
+    }
 
     /* 4. Send message to WhatsApp ----------------------------------------- */
     const payload = {
@@ -311,97 +314,87 @@ async downloadAndStoreMedia(mediaId: string, mimeType: string): Promise<string> 
       grouped.get(clientId)!.messages.push(msg);
     }
 
-  return Array.from(grouped.values());
-}
-
-
-
-async sendSimulationToClient(clientId: number, file: Express.Multer.File) {
-  // 1. Load client
-  const client = await this.clientRepository.findOne({ where: { id: clientId } });
-  if (!client || !client.phone) {
-    throw new NotFoundException('Client not found or missing phone number.');
+    return Array.from(grouped.values());
   }
 
-  // 2. Load latest loan request (+ agent)
-  const loanRequest = await this.loanRequestRepository.findOne({
-    where: { client: { id: client.id } },
-    relations: ['agent'],
-    order: { createdAt: 'DESC' },
-  });
-  const agent = loanRequest?.agent;
+  async sendSimulationToClient(clientId: number, file: Express.Multer.File) {
+    // 1. Load client
+    const client = await this.clientRepository.findOne({ where: { id: clientId } });
+    if (!client || !client.phone) {
+      throw new NotFoundException('Client not found or missing phone number.');
+    }
 
-  // 3. Create a readable stream from buffer
+    // 2. Load latest loan request (+ agent)
+    const loanRequest = await this.loanRequestRepository.findOne({
+      where: { client: { id: client.id } },
+      relations: ['agent'],
+      order: { createdAt: 'DESC' },
+    });
+    const agent = loanRequest?.agent;
+
+    // 3. Create a readable stream from buffer
     const bufferStream = new Readable();
-  bufferStream.push(file.buffer);
-  bufferStream.push(null); // End of stream
+    bufferStream.push(file.buffer);
+    bufferStream.push(null); // End of stream
 
-  // 4. Prepare WhatsApp upload
-  const accessToken   = process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BOxDBQN2eFrYK9K4xGd1eB7O7ro2eFdjI5JjZBauwEYE14i2MkFg7xNaSxsox3FInnChFat8Ve8059o6Pl86A7a0L4sEe807JJAQ3U80yjrcdZADtCpZBNZCDP1mnWHRWC8nlFIAI1sKSjbXH6N4cIwVMUbciao4hLAJfndwZCvof9HOyhZBBjU0hhqOmRohzhFZCR91VkUIbb0ZD';
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '696358046884463';
+    // 4. Prepare WhatsApp upload
+    const accessToken =
+      process.env.WHATSAPP_TOKEN ||
+      'EAAYqvtVC2P8BO4V6Rzpyploc2kqflWHN6sBZBEZBmZAqc0DyDRkZArhXoerQNwmt2kTcPcqNSZAtFLd48ZBsUmgY9ZCXZAvP7qYPqscQGQnSdua8TL2r9aJNdCRjgZAZBC2WmkZBP77fmHQDinMZBXEoJPeMvTufH7mYsZBvug4XHpqzo7QDKSLd21AeHRefkPBUBuKA2qLZAXGMoPdyNEuEHvuyuaQ606ZBB5MB0m2pTuQz8j1DgZDZD';
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '696358046884463';
 
-  if (!accessToken || !phoneNumberId) {
-    throw new Error('Missing WhatsApp token or phone number ID');
-  }
+    if (!accessToken || !phoneNumberId) {
+      throw new Error('Missing WhatsApp token or phone number ID');
+    }
 
-  const formData = new FormData();
-  formData.append('file', bufferStream, {
-    filename: file.originalname,
-    contentType: file.mimetype,
-  });
-  formData.append('messaging_product', 'whatsapp');
-  formData.append('type', file.mimetype);
+    const formData = new FormData();
+    formData.append('file', bufferStream, {
+      filename: file.originalname,
+      contentType: file.mimetype,
+    });
+    formData.append('messaging_product', 'whatsapp');
+    formData.append('type', file.mimetype);
 
-  const mediaUpload = await axios.post(
-    `https://graph.facebook.com/v18.0/${phoneNumberId}/media`,
-    formData,
-    {
+    const mediaUpload = await axios.post(`https://graph.facebook.com/v18.0/${phoneNumberId}/media`, formData, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
         ...formData.getHeaders(),
       },
+    });
+
+    const mediaId = mediaUpload.data.id;
+    if (!mediaId) {
+      throw new Error('Failed to upload media to WhatsApp.');
     }
-  );
 
-  const mediaId = mediaUpload.data.id;
-  if (!mediaId) {
-    throw new Error('Failed to upload media to WhatsApp.');
-  }
+    // 5. Send the image
+    const mediaPayload = {
+      messaging_product: 'whatsapp',
+      to: client.phone,
+      type: 'image',
+      image: { id: mediaId },
+    };
 
-  // 5. Send the image
-  const mediaPayload = {
-    messaging_product: 'whatsapp',
-    to: client.phone,
-    type: 'image',
-    image: { id: mediaId },
-  };
-
-  await axios.post(
-    `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`,
-    mediaPayload,
-    {
+    await axios.post(`https://graph.facebook.com/v18.0/${phoneNumberId}/messages`, mediaPayload, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
-    }
-  );
+    });
 
-  // 6. Save the message
-  const content = `📎 Simulation sent: ${file.originalname}`;
+    // 6. Save the message
+    const content = `📎 Simulation sent: ${file.originalname}`;
 
-  const chatMessage = this.chatMessageRepository.create({
-    content,
-    direction: 'OUTGOING',
-    client,
-    ...(agent && { agent }),
-    ...(loanRequest && { loanRequest }),
-  });
+    const chatMessage = this.chatMessageRepository.create({
+      content,
+      direction: 'OUTGOING',
+      client,
+      ...(agent && { agent }),
+      ...(loanRequest && { loanRequest }),
+    });
 
-  await this.chatMessageRepository.save(chatMessage);
+    await this.chatMessageRepository.save(chatMessage);
 
-  return { success: true, to: client.phone, file: file.originalname };
-}
-
-
+    return { success: true, to: client.phone, file: file.originalname };
+  }
 }

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Param, Body } from '@nestjs/common';
+import { Controller, Get, Post, Param, Body, Patch } from '@nestjs/common';
 import { ClientsService } from './clients.service';
 import { Client } from 'src/entities/client.entity';
 
@@ -27,5 +27,10 @@ export class ClientsController {
   @Post()
   create(@Body() body: any) {
     return this.clientsService.create(body);
+  }
+   // ✅ PATCH /clients/:id → update existing client
+  @Patch(':id')
+  update(@Param('id') id: number, @Body() body: any) {
+    return this.clientsService.update(+id, body);
   }
 }

@@ -33,6 +33,10 @@ export class LoanRequest {
   @Column('decimal', { precision: 10, scale: 2 })
   amount: number;
 
+  @Column('decimal', { precision: 10, scale: 2, nullable: true})
+  requestedAmount: number;
+  
+
   @Column({
     type: 'text', // Store the enum as simple text
   })

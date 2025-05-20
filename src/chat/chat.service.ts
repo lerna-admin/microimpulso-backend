@@ -19,6 +19,9 @@ import { Readable } from 'stream';
 export class ChatService {
   private readonly logger = new Logger(ChatService.name);
 
+  private TOKEN_TEMP: string =
+    'EAAYqvtVC2P8BO4Rx9sqtQAS15XUtT1izMyAOMZC4b2irt9oiBPXULPRav4Kd1vfoplylEGnZApvt9EU2srUj53UZBEUlDRhbG9TJKy3LI3myaFGZBZB6EpZBKcExnUj4utzstb2vp6trb3aM6fmK24AibOWYAfo60DzKvswXIZAZC6jalJrnRNZBvF7ntirOZB6QTrCf3XXwPLiQoLdtq1jA8AIOu0qoMAjlFYEG8XKh3J1QZDZD';
+
   constructor(
     @InjectRepository(Client)
     private clientRepository: Repository<Client>,
@@ -37,9 +40,7 @@ export class ChatService {
   ) {}
 
   async downloadAndStoreMediaori(mediaId: string, mimeType: string): Promise<string> {
-    const token =
-      process.env.WHATSAPP_TOKEN ||
-      'EAAYqvtVC2P8BO4V6Rzpyploc2kqflWHN6sBZBEZBmZAqc0DyDRkZArhXoerQNwmt2kTcPcqNSZAtFLd48ZBsUmgY9ZCXZAvP7qYPqscQGQnSdua8TL2r9aJNdCRjgZAZBC2WmkZBP77fmHQDinMZBXEoJPeMvTufH7mYsZBvug4XHpqzo7QDKSLd21AeHRefkPBUBuKA2qLZAXGMoPdyNEuEHvuyuaQ606ZBB5MB0m2pTuQz8j1DgZDZD';
+    const token = process.env.WHATSAPP_TOKEN || this.TOKEN_TEMP;
 
     // Paso 1: Obtener la URL del archivo
     const metadata = await axios.get(`https://graph.facebook.com/v19.0/${mediaId}`, {
@@ -72,9 +73,7 @@ export class ChatService {
     return relativePath;
   }
   async downloadAndStoreMedia(mediaId: string, mimeType: string): Promise<string> {
-    const token =
-      process.env.WHATSAPP_TOKEN ||
-      'EAAYqvtVC2P8BO4V6Rzpyploc2kqflWHN6sBZBEZBmZAqc0DyDRkZArhXoerQNwmt2kTcPcqNSZAtFLd48ZBsUmgY9ZCXZAvP7qYPqscQGQnSdua8TL2r9aJNdCRjgZAZBC2WmkZBP77fmHQDinMZBXEoJPeMvTufH7mYsZBvug4XHpqzo7QDKSLd21AeHRefkPBUBuKA2qLZAXGMoPdyNEuEHvuyuaQ606ZBB5MB0m2pTuQz8j1DgZDZD';
+    const token = process.env.WHATSAPP_TOKEN || this.TOKEN_TEMP;
 
     // Paso 1: Obtener la URL del archivo
     const metadata = await axios.get(`https://graph.facebook.com/v19.0/${mediaId}`, {
@@ -245,9 +244,7 @@ export class ChatService {
     const agent = loanRequest?.agent;
 
     /* 3. WhatsApp credentials --------------------------------------------- */
-    const accessToken =
-      process.env.WHATSAPP_TOKEN ||
-      'EAAYqvtVC2P8BO4V6Rzpyploc2kqflWHN6sBZBEZBmZAqc0DyDRkZArhXoerQNwmt2kTcPcqNSZAtFLd48ZBsUmgY9ZCXZAvP7qYPqscQGQnSdua8TL2r9aJNdCRjgZAZBC2WmkZBP77fmHQDinMZBXEoJPeMvTufH7mYsZBvug4XHpqzo7QDKSLd21AeHRefkPBUBuKA2qLZAXGMoPdyNEuEHvuyuaQ606ZBB5MB0m2pTuQz8j1DgZDZD';
+    const accessToken = process.env.WHATSAPP_TOKEN || this.TOKEN_TEMP;
     const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '696358046884463';
     if (!accessToken || !phoneNumberId) {
       throw new Error('WhatsApp TOKEN or PHONE_NUMBER_ID env vars are not set.');
@@ -338,9 +335,7 @@ export class ChatService {
     bufferStream.push(null); // End of stream
 
     // 4. Prepare WhatsApp upload
-    const accessToken =
-      process.env.WHATSAPP_TOKEN ||
-      'EAAYqvtVC2P8BO4V6Rzpyploc2kqflWHN6sBZBEZBmZAqc0DyDRkZArhXoerQNwmt2kTcPcqNSZAtFLd48ZBsUmgY9ZCXZAvP7qYPqscQGQnSdua8TL2r9aJNdCRjgZAZBC2WmkZBP77fmHQDinMZBXEoJPeMvTufH7mYsZBvug4XHpqzo7QDKSLd21AeHRefkPBUBuKA2qLZAXGMoPdyNEuEHvuyuaQ606ZBB5MB0m2pTuQz8j1DgZDZD';
+    const accessToken = process.env.WHATSAPP_TOKEN || this.TOKEN_TEMP;
     const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '696358046884463';
 
     if (!accessToken || !phoneNumberId) {

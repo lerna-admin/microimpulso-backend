@@ -17,6 +17,7 @@ export enum ClientStatus {
   ACTIVE = 'ACTIVE',
   INACTIVE = 'INACTIVE',
   REJECTED = 'REJECTED',
+  PROSPECT = 'PROSPECT',
 }
 
 @Entity()

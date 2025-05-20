@@ -16,8 +16,7 @@ import { ChatMessage } from './chat-message.entity';
 export enum ClientStatus {
   ACTIVE = 'ACTIVE',
   INACTIVE = 'INACTIVE',
-  SUSPENDED = 'SUSPENDED',
-  PROSPECT = 'PROSPECT',
+  REJECTED = 'REJECTED',
 }
 
 @Entity()
@@ -38,6 +37,9 @@ export class Client {
   // ▶ New fields
   @Column({ nullable: true })
   document: string; // e.g. national ID number
+
+  @Column({ nullable: true })
+  documentType: string; // e.g. national ID number
 
   @Column({ nullable: true })
   address: string;

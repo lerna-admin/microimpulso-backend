@@ -1,12 +1,4 @@
-import {
-  Controller,
-  Get,
-  Param,
-  Patch,
-  Body,
-  NotFoundException,
-  Res,
-} from '@nestjs/common';
+import { Controller, Get, Param, Patch, Body, NotFoundException, Res } from '@nestjs/common';
 import { join } from 'path';
 import { existsSync, createReadStream } from 'fs';
 import { Response } from 'express';
@@ -20,10 +12,7 @@ export class DocumentController {
 
   /* ---------- Classification ----------------------------------------- */
   @Patch(':id/classify')
-  async classifyDocument(
-    @Param('id') id: string,
-    @Body('classification') classification: DocumentType,
-  ) {
+  async classifyDocument(@Param('id') id: string, @Body('classification') classification: DocumentType) {
     const doc = await this.documentService.classify(id, classification);
     if (!doc) throw new NotFoundException('Document not found');
     return { success: true, document: doc };
@@ -47,7 +36,8 @@ export class DocumentController {
       mimeType: doc.type,
       url: `/documents/${doc.id}/file`,
       createdAt: doc.createdAt,
-      clientId: doc.client?.id
+      clientId: doc.client?.id,
+      classification: doc.classification,
       // add any other fields you need …
     };
   }
@@ -55,20 +45,20 @@ export class DocumentController {
   /* ---------- (B)  Binary file  -------------------------------------- */
   @Get(':id/file')
   async getFile(@Param('id') id: string, @Res() res: Response) {
-    console.log("entro")
-    console.log("ID;", id)
-  const doc = await this.documentService.findById(id);
-  console.log(doc)
-  if (!doc) throw new NotFoundException('Document not found');
+    // console.log('entro');
+    // console.log('ID;', id);
+    const doc = await this.documentService.findById(id);
+    // console.log(doc);
+    if (!doc) throw new NotFoundException('Document not found');
 
-  const filePath = join(process.cwd(), 'public', doc.url);
-  if (!existsSync(filePath)) {
-    throw new NotFoundException('File not found on disk');
+    const filePath = join(process.cwd(), 'public', doc.url);
+    if (!existsSync(filePath)) {
+      throw new NotFoundException('File not found on disk');
+    }
+
+    res.setHeader('Content-Type', doc.type || 'application/octet-stream');
+    res.setHeader('Content-Disposition', 'inline');
+
+    return createReadStream(filePath).pipe(res);
   }
-
-  res.setHeader('Content-Type', doc.type || 'application/octet-stream');
-  res.setHeader('Content-Disposition', 'inline');
-
-  return createReadStream(filePath).pipe(res);
-}
 }

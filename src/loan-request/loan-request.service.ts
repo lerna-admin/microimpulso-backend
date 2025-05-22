@@ -7,6 +7,9 @@ import { LoanRequest } from 'src/entities/loan-request.entity';
 
 @Injectable()
 export class LoanRequestService {
+  sendContract(id: number) {
+    throw new Error('Method not implemented.');
+  }
   constructor(
     @InjectRepository(LoanRequest)
     private readonly loanRequestRepository: Repository<LoanRequest>,
@@ -58,17 +61,23 @@ async findAllByAgent(agentId: number): Promise<LoanRequest[]> {
 
 
 
-
-  async findById(id: number): Promise<LoanRequest | null> {
-    return this.loanRequestRepository
+async findById(id: number): Promise<LoanRequest | null> {
+  return this.loanRequestRepository
     .createQueryBuilder('loan')
     .leftJoinAndSelect('loan.client', 'client')
     .leftJoinAndSelect('loan.agent', 'agent')
-    .select(['loan', 'client', 'agent.id', 'agent.name', 'agent.email', 'agent.role'])
+    .leftJoinAndSelect('loan.transactions', 'tx') // ← agregamos las transacciones
+    .select([
+      'loan',
+      'client',
+      'agent.id', 'agent.name', 'agent.email', 'agent.role',
+      'tx.id', 'tx.amount', 'tx.Transactiontype', 'tx.date', 'tx.reference', 'tx.daysLate' // ← columnas reales de la entidad Transaction
+    ])
     .where('loan.id = :id', { id })
+    .orderBy('tx.date', 'ASC') // ← opcional para que salgan cronológicamente
     .getOne();
-  }
-  
+}
+
   async update(id: number, updateLoanRequestDto: UpdateLoanRequestDto): Promise<LoanRequest> {
     const loanRequest = await this.loanRequestRepository.findOne({ where: { id } });
     

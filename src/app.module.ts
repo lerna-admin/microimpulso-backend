@@ -6,11 +6,10 @@ import { UsersModule } from './users/users.module';
 import { LoanRequestModule } from './loan-request/loan-request.module';
 import { ChatModule } from './chat/chat.module';
 import { ChatController } from './chat.controller';
-import { ChatService } from './chat.service';
 import { TransactionModule } from './transaction.module';
 import { DocumentModule } from './document/document.module';
 import { TransactionsModule } from './transactions/transactions.module';
-
+import { ChatService } from './chat/chat.service';
 @Module({
   imports: [
     TypeOrmModule.forRoot({
@@ -29,6 +28,5 @@ import { TransactionsModule } from './transactions/transactions.module';
     TransactionsModule,
   ],
   controllers: [ChatController],
-  providers: [ChatService],
 })
 export class AppModule {}

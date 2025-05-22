@@ -1,11 +1,12 @@
-import { Controller, Get, Post, Body, Patch, Param } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, NotFoundException } from '@nestjs/common';
 import { LoanRequestService } from './loan-request.service';
 import { CreateLoanRequestDto } from './dto/create-loan-request.dto';
 import { LoanRequest } from 'src/entities/loan-request.entity';
+import { ChatService } from 'src/chat/chat.service';
 
 @Controller('loan-request')
 export class LoanRequestController {
-  constructor(private readonly loanRequestService: LoanRequestService) {}
+  constructor(private readonly loanRequestService: LoanRequestService, private readonly chatService :  ChatService) {}
 
   @Post()
   create(@Body() createLoanRequestDto: CreateLoanRequestDto) {
@@ -31,4 +32,14 @@ export class LoanRequestController {
   update(@Param('id') id: number, @Body() data: Partial<LoanRequest>) {
     return this.loanRequestService.update(id, data);
   }
+
+    
+  @Post(':id/send-contract')
+  async sendContract(@Param('id') id: number) {
+    return this.chatService.sendContractToClient(id);
+  }
+  
+  
+  
+  
 }

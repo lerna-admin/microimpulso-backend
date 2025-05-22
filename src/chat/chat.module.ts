@@ -14,10 +14,11 @@ import { Document } from '../entities/document.entity';
       User,
       LoanRequest,
       ChatMessage,
-      Document
+      Document,
     ]),
   ],
   controllers: [ChatController],
   providers: [ChatService],
+  exports: [ChatService], 
 })
 export class ChatModule {}

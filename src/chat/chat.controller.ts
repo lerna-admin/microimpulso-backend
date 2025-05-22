@@ -7,23 +7,23 @@ import { FileInterceptor } from '@nestjs/platform-express';
 @Controller('/chat')
 export class ChatController {
   constructor(private readonly chatService: ChatService) {}
-
+  
   @Get()
   verifyToken(@Query() query, @Res() res: Response) {
     const VERIFY_TOKEN = 'micropulso_token';
-	console.log("enyto mensaje")
+    console.log("enyto mensaje")
     const mode = query['hub.mode'];
     const token = query['hub.verify_token'];
     const challenge = query['hub.challenge'];
-
+    
     if (mode && token && mode === 'subscribe' && token === VERIFY_TOKEN) {
       return res.status(200).send(challenge);
     }
-
+    
     return res.sendStatus(403);
   }
-
-@Post('/send/:clientId')
+  
+  @Post('/send/:clientId')
   async sendMessageToClient(
     @Param('clientId') clientId: number,
     @Body('message') message: string,
@@ -35,9 +35,9 @@ export class ChatController {
     return this.chatService.sendMessageToClient(clientId, message);
   }
 
-
-
-@Post()
+  
+  
+  @Post()
   async handleIncomingMessage(
     @Body() body: any,
     @Req() req: Request,
@@ -47,20 +47,20 @@ export class ChatController {
     await this.chatService.processIncoming(body);
     return res.sendStatus(200);
   }
-
-@Get('/agent/:agentId/conversations')
-async getAgentConversations(@Param('agentId') agentId: number) {
-  return this.chatService.getAgentConversations(agentId);
-}
-@UseInterceptors(FileInterceptor('file'))
-@Post('send-simulation')
-async sendSimulation(
-  @UploadedFile() file: Express.Multer.File,
-  @Body('clientId') clientId: number,
-) {
-  return this.chatService.sendSimulationToClient(+clientId, file);
-}
-
-
+  
+  @Get('/agent/:agentId/conversations')
+  async getAgentConversations(@Param('agentId') agentId: number) {
+    return this.chatService.getAgentConversations(agentId);
+  }
+  @UseInterceptors(FileInterceptor('file'))
+  @Post('send-simulation')
+  async sendSimulation(
+    @UploadedFile() file: Express.Multer.File,
+    @Body('clientId') clientId: number,
+  ) {
+    return this.chatService.sendSimulationToClient(+clientId, file);
+  }
+  
+  
 }
 

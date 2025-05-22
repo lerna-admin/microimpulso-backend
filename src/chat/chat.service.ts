@@ -247,7 +247,7 @@ export class ChatService {
     /* 3. WhatsApp credentials --------------------------------------------- */
     const accessToken =
       process.env.WHATSAPP_TOKEN ||
-      'EAAYqvtVC2P8BO4V6Rzpyploc2kqflWHN6sBZBEZBmZAqc0DyDRkZArhXoerQNwmt2kTcPcqNSZAtFLd48ZBsUmgY9ZCXZAvP7qYPqscQGQnSdua8TL2r9aJNdCRjgZAZBC2WmkZBP77fmHQDinMZBXEoJPeMvTufH7mYsZBvug4XHpqzo7QDKSLd21AeHRefkPBUBuKA2qLZAXGMoPdyNEuEHvuyuaQ606ZBB5MB0m2pTuQz8j1DgZDZD';
+      'EAAYqvtVC2P8BO57VesnPqm1rmTnNznJ9Bo4YMhvRtEZAjWkGUNuzjJMUtzJZBvz2H971BXCklHvKiSAsSwXdTQZA07EafHqiXXBtz7HoSwF9rw5lcw2pQ1ZBBWWdchY3RRzbLN5qgQuYlr2ulGVdJN0ZAkEl2PMY0c5jfJeirCUneeSaTSDYxjtLHswsPSjmyjb7wg9M74bwUyOYXxyZB92j9iRUtTw4CZBK48kxYpGCd0ZD';
     const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '696358046884463';
     if (!accessToken || !phoneNumberId) {
       throw new Error('WhatsApp TOKEN or PHONE_NUMBER_ID env vars are not set.');

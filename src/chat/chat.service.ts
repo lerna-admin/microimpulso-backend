@@ -244,7 +244,9 @@ export class ChatService {
     const agent = loanRequest?.agent;
 
     /* 3. WhatsApp credentials --------------------------------------------- */
-    const accessToken = process.env.WHATSAPP_TOKEN || this.TOKEN_TEMP;
+    const accessToken =
+      process.env.WHATSAPP_TOKEN ||
+      'EAAYqvtVC2P8BO57VesnPqm1rmTnNznJ9Bo4YMhvRtEZAjWkGUNuzjJMUtzJZBvz2H971BXCklHvKiSAsSwXdTQZA07EafHqiXXBtz7HoSwF9rw5lcw2pQ1ZBBWWdchY3RRzbLN5qgQuYlr2ulGVdJN0ZAkEl2PMY0c5jfJeirCUneeSaTSDYxjtLHswsPSjmyjb7wg9M74bwUyOYXxyZB92j9iRUtTw4CZBK48kxYpGCd0ZD';
     const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '696358046884463';
     if (!accessToken || !phoneNumberId) {
       throw new Error('WhatsApp TOKEN or PHONE_NUMBER_ID env vars are not set.');

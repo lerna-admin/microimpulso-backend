@@ -26,25 +26,20 @@ export class LoanRequestService {
     .getMany();
   }
   
-// LoanRequestService.ts
-// Returns every loan that belongs to the agent together with client, agent and all related transactions.
+// loan-request.service.ts
+// Devuelve todos los préstamos del agente con cliente, agente y transacciones.
 async findAllByAgent(agentId: number): Promise<LoanRequest[]> {
   return this.loanRequestRepository
     .createQueryBuilder('loan')
     .leftJoinAndSelect('loan.client', 'client')
     .leftJoinAndSelect('loan.agent',  'agent')
-    .leftJoinAndSelect('loan.transactions', 'tx')   // eager-load transactions
-    .select([
-      'loan',
-      'client',
-      'agent.id', 'agent.name', 'agent.email', 'agent.role',
-      'tx'                                         // fetch every column that actually exists on Transaction
-    ])
+    .leftJoinAndSelect('loan.transactions', 'tx')   // ← incluye todas las columnas reales de Transaction
     .where('loan.agentId = :agentId', { agentId })
     .orderBy('loan.createdAt', 'DESC')
     .addOrderBy('tx.createdAt', 'ASC')
     .getMany();
 }
+
 
 
   async findById(id: number): Promise<LoanRequest | null> {

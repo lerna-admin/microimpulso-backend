@@ -57,7 +57,7 @@ export class TransactionsService {
     
     // If disbursement, notify client
     if (transactionType === TransactionType.DISBURSEMENT) {
-      loanRequest.status = LoanRequestStatus.APPROVED;
+      loanRequest.status = LoanRequestStatus.FUNDED;
       await this.loanRequestRepo.save(loanRequest);
       
       const client = loanRequest.client;

@@ -37,7 +37,7 @@ export class ClientsService {
   async findAll(): Promise<any[]> {
     const loans = await this.loanRequestRepository.find({
       where: {
-        status: LoanRequestStatus.APPROVED,
+        status: LoanRequestStatus.FUNDED,
       },
       relations: {
         client: true,
@@ -81,7 +81,7 @@ export class ClientsService {
   async findAllByAgent(agentId: number): Promise<any[]> {
     const loans = await this.loanRequestRepository.find({
       where: {
-        status: LoanRequestStatus.APPROVED,
+        status: LoanRequestStatus.FUNDED,
         agent: { id: agentId },
       },
       relations: {
@@ -126,7 +126,7 @@ export class ClientsService {
   async findOne(id: number): Promise<any | null> {
     const result = await this.clientRepository
       .createQueryBuilder('client')
-      .innerJoin('client.loanRequests', 'loan', 'loan.status = :status', { status: 'approved' })
+      .innerJoin('client.loanRequests', 'loan', 'loan.status = :status', { status: 'funded' })
       .innerJoin('loan.transactions', 'txn')
       .where('client.id = :id', { id })
       .select('client.id', 'clientId')
@@ -179,7 +179,7 @@ export class ClientsService {
 
     // Filtra los loanRequests para dejar solo los aprobados
     if (fullClient) {
-      fullClient.loanRequests = fullClient.loanRequests.filter((loan) => loan.status === 'approved');
+      fullClient.loanRequests = fullClient.loanRequests.filter((loan) => loan.status === 'funded');
     }
 
     return {

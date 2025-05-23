@@ -12,7 +12,7 @@ import { Client } from './client.entity';
 import { User } from './user.entity';
 import { ChatMessage } from './chat-message.entity';
 import { Transaction } from './transaction.entity';
-import { Document } from './document.entity'; // ✅ NUEVO
+import { Document } from './document.entity';
 
 export enum LoanRequestStatus {
   NEW = 'new',
@@ -21,6 +21,7 @@ export enum LoanRequestStatus {
   REJECTED = 'rejected',
   CANCELED = 'canceled',
   COMPLETED = 'completed',
+  FUNDED = 'funded'
 }
 
 @Entity()

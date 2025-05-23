@@ -26,27 +26,27 @@ export class LoanRequestService {
     .getMany();
   }
   
-  async findAllByAgent(agentId: number): Promise<LoanRequest[]> {
-    return this.loanRequestRepository
+// LoanRequestService.ts
+// Returns every loan that belongs to the agent together with client, agent and all related transactions.
+async findAllByAgent(agentId: number): Promise<LoanRequest[]> {
+  return this.loanRequestRepository
     .createQueryBuilder('loan')
     .leftJoinAndSelect('loan.client', 'client')
     .leftJoinAndSelect('loan.agent',  'agent')
-    .leftJoinAndSelect('loan.transactions', 'tx')        // ← new join
-    /* OPTIONAL: join nested tables, e.g.
-    .leftJoinAndSelect('tx.payment', 'payment')
-    */
-    // Pick only the columns you really need
+    .leftJoinAndSelect('loan.transactions', 'tx')   // eager-load transactions
     .select([
       'loan',
       'client',
       'agent.id', 'agent.name', 'agent.email', 'agent.role',
-      'tx.id',    'tx.amount',  'tx.type',     'tx.status', 'tx.createdAt'
+      'tx'                                         // fetch every column that actually exists on Transaction
     ])
     .where('loan.agentId = :agentId', { agentId })
     .orderBy('loan.createdAt', 'DESC')
     .addOrderBy('tx.createdAt', 'ASC')
     .getMany();
-  }
+}
+
+
   async findById(id: number): Promise<LoanRequest | null> {
     return this.loanRequestRepository
     .createQueryBuilder('loan')

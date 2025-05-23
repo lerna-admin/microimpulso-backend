@@ -20,7 +20,7 @@ export class ChatService {
   private readonly logger = new Logger(ChatService.name);
 
   private TOKEN_TEMP: string =
-    'EAAYqvtVC2P8BO1gAu8vqvvimZBnpsdlmUOTBMAL2eZAQWCRqFcAcHolfcXn3vMra50gW1rVRZCMZAdVtgz3b4AyjTvgvIuS75UblmnoGp8kAXDwNx7Lzoib5AYmfFDBCyfAxO6q6UNBFKXMgrL0HVh43OKF8dbZCo8u6lP11MvZAqssodPZB0H6xinXtcLYo8ZB4ilnPRKJsymxYIsG14xcIJkOvaO2STlY1';
+    'EAAQgXZBfBzGMBOza8hpujBthZCVVB2ZATZBM9wluJ7FMFduyCW8dZB9BfPoWt2s2NKN3oxsZCEu9Ff0iDBjIuSUZB63ZAa0Xnb7cHxZC6ooEiKWtg0Ld2QdWofimETN75mkXLJ7SE4HY4HEp8SfDPUiXNaRr5BciExoK5ZCSx2bPkOqHGvJDXFLOPiUDSlZBsZBPxbXzSRcGKP7ZAtSOtbeDOuNYK3WLtDPedMnst4QZDZD';
 
   constructor(
     @InjectRepository(Client)
@@ -253,7 +253,7 @@ export class ChatService {
 
     /* 3. WhatsApp credentials --------------------------------------------- */
     const accessToken = this.TOKEN_TEMP;
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '696358046884463';
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '603663239505191';
     if (!accessToken || !phoneNumberId) {
       throw new Error('WhatsApp TOKEN or PHONE_NUMBER_ID env vars are not set.');
     }
@@ -344,7 +344,7 @@ export class ChatService {
 
     // 4. Prepare WhatsApp upload
     const accessToken = this.TOKEN_TEMP;
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '696358046884463';
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '603663239505191';
 
     if (!accessToken || !phoneNumberId) {
       throw new Error('Missing WhatsApp token or phone number ID');
@@ -440,7 +440,7 @@ export class ChatService {
     writeFileSync(filePath, pdfBytes); // lo guarda localmente para referencia
 
     const accessToken = this.TOKEN_TEMP;
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '696358046884463';
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '603663239505191';
 
     const bufferStream = new Readable();
     bufferStream.push(pdfBytes);

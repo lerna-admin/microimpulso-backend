@@ -82,4 +82,11 @@ export class Client {
 
   @OneToMany(() => ChatMessage, (chatMessage) => chatMessage.client)
   chatMessages: ChatMessage[];
+  
+  @Column({ type: 'text', nullable: true })
+  notes?: string; 
+
+  @Column({ type: 'boolean', default: false })
+  notEligible: boolean;
+
 }

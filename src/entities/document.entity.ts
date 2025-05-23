@@ -7,12 +7,13 @@ import {
   JoinColumn,
 } from 'typeorm';
 import { Client } from './client.entity';
+import { LoanRequest } from './loan-request.entity'; // ← Importar LoanRequest
 
 export enum DocumentType {
   ID = 'ID', // Cédula
   WORK_LETTER = 'WORK_LETTER', // Carta laboral
   UTILITY_BILL = 'UTILITY_BILL', // Recibo
-  PAYMENT_DETAIL  = 'PAYMENT_DETAIL', //Desprendible de pago
+  PAYMENT_DETAIL = 'PAYMENT_DETAIL', // Desprendible de pago
   OTHER = 'OTHER', // Otro documento
 }
 
@@ -24,6 +25,13 @@ export class Document {
   @ManyToOne(() => Client, (client) => client.documents)
   @JoinColumn({ name: 'clientId' })
   client: Client;
+
+  @ManyToOne(() => LoanRequest, (loan) => loan.documents, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
+  @JoinColumn({ name: 'loanRequestId' })
+  loanRequest: LoanRequest; // ✅ Nueva relación con LoanRequest
 
   @Column()
   type: string;

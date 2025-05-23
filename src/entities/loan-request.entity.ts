@@ -12,6 +12,7 @@ import { Client } from './client.entity';
 import { User } from './user.entity';
 import { ChatMessage } from './chat-message.entity';
 import { Transaction } from './transaction.entity';
+import { Document } from './document.entity'; // ✅ NUEVO
 
 export enum LoanRequestStatus {
   NEW = 'new',
@@ -30,15 +31,24 @@ export class LoanRequest {
   @OneToMany(() => ChatMessage, (msg) => msg.loanRequest)
   chatMessages: ChatMessage[];
 
+  @OneToMany(() => Transaction, txn => txn.loanRequest, {
+    cascade: true,
+  })
+  transactions: Transaction[];
+
+  @OneToMany(() => Document, doc => doc.loanRequest, {
+    cascade: true,
+  })
+  documents: Document[]; // ✅ NUEVO
+
   @Column('decimal', { precision: 10, scale: 2 })
   amount: number;
 
-  @Column('decimal', { precision: 10, scale: 2, nullable: true})
+  @Column('decimal', { precision: 10, scale: 2, nullable: true })
   requestedAmount: number;
-  
 
   @Column({
-    type: 'text', // Store the enum as simple text
+    type: 'text',
   })
   status: LoanRequestStatus;
 
@@ -46,7 +56,6 @@ export class LoanRequest {
   @JoinColumn({ name: 'clientId' })
   client: Client;
 
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-return
   @ManyToOne(() => User, (user) => user.loanRequests)
   @JoinColumn({ name: 'agentId' })
   agent: User;
@@ -80,11 +89,7 @@ export class LoanRequest {
     nullable: true,
   })
   endDateAt: Date;
-  @OneToMany(() => Transaction, txn => txn.loanRequest, {
-    cascade: true,
-  })
-  transactions: Transaction[];
-  
+
   @Column({ type: 'text', nullable: true })
   paymentDay?: string;
 }

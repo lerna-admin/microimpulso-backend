@@ -1,6 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DeepPartial, Repository } from 'typeorm';
+import { DeepPartial, In, Not, Repository } from 'typeorm';
 import { Client, ClientStatus } from '../entities/client.entity';
 import { User } from '../entities/user.entity';
 import { LoanRequest, LoanRequestStatus } from '../entities/loan-request.entity';
@@ -180,11 +180,19 @@ export class ChatService {
         const mediaId = media.id;
         
         const url = await this.downloadAndStoreMedia(mediaId, mimeType); // ⬅️ función auxiliar
+        const loanRequests = await this.loanRequestRepository.find({
+          where: {
+            client: { id: client.id },
+            status: Not(In([LoanRequestStatus.COMPLETED, LoanRequestStatus.REJECTED])),
+          },
+        });
         
         const document = await this.documentRepository.save({
           type: mimeType,
           url,
           client: client,
+          loanRequest: loanRequest ? loanRequests[0] :  undefined, // ← esto asocia el documento a la solicitud activa
+
           createdAt: new Date(),
         });
         console.log(

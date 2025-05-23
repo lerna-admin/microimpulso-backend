@@ -4,9 +4,11 @@ import { TransactionsController } from './transactions.controller';
 import { TransactionsService } from './transactions.service';
 import { Transaction } from 'src/entities/transaction.entity';
 import { LoanRequest } from 'src/entities/loan-request.entity';
+import { ChatModule } from 'src/chat/chat.module'; // Import the module that exports ChatService
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Transaction, LoanRequest])],
+  // Import TypeORM entities and ChatModule to inject ChatService
+  imports: [TypeOrmModule.forFeature([Transaction, LoanRequest]), ChatModule],
   controllers: [TransactionsController],
   providers: [TransactionsService],
 })

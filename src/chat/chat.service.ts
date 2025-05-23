@@ -20,7 +20,7 @@ export class ChatService {
   private readonly logger = new Logger(ChatService.name);
 
   private TOKEN_TEMP: string =
-    'EAAYqvtVC2P8BO4Rx9sqtQAS15XUtT1izMyAOMZC4b2irt9oiBPXULPRav4Kd1vfoplylEGnZApvt9EU2srUj53UZBEUlDRhbG9TJKy3LI3myaFGZBZB6EpZBKcExnUj4utzstb2vp6trb3aM6fmK24AibOWYAfo60DzKvswXIZAZC6jalJrnRNZBvF7ntirOZB6QTrCf3XXwPLiQoLdtq1jA8AIOu0qoMAjlFYEG8XKh3J1QZDZD';
+    'EAAYqvtVC2P8BO65oFGHwm3JwXbOhQC9elsMskI5u0OGnPkVdZAvm5BOBKRIa1V2HTw4cTSLo3jPLBGZBNnOT4QFC0aAm2I8hRX23kWnPNS06qujyHy6pdgAGBdZCHpfMVC8rtr4nwolIwOMd3XdFrlRc8Q5qnHGz5WLnUfjfWf7qORsQCP2gY4WxoueBpc9wl8B7YCPZC5ClOaIV87n77eZAg94TScnzR';
 
   constructor(
     @InjectRepository(Client)
@@ -73,7 +73,7 @@ export class ChatService {
     return relativePath;
   }
   async downloadAndStoreMedia(mediaId: string, mimeType: string): Promise<string> {
-    const token = process.env.WHATSAPP_TOKEN || this.TOKEN_TEMP;
+    const token = this.TOKEN_TEMP;
 
     // Paso 1: Obtener la URL del archivo
     const metadata = await axios.get(`https://graph.facebook.com/v19.0/${mediaId}`, {
@@ -244,8 +244,7 @@ export class ChatService {
     const agent = loanRequest?.agent;
 
     /* 3. WhatsApp credentials --------------------------------------------- */
-    const accessToken =
-      process.env.WHATSAPP_TOKEN || 'EAAYqvtVC2P8BOZCYObWkB8QZBlUYwnBEC4Ua7R67NkWByXZCZCILmLyjWJmYaQOyKLY5SCjGEqr5OozXZClhRhBFYfZBFwpzlMdNUL88p3ibT6zVsPAwfMSsUDmwzy6AXQAvaGfSG7y01oBlLGZCAPowBUMgEyo004iwGmec1zlDCNESKoL8C6PjXtrm3PITq9WvWmYsjTzWphW2t2uXqe1c1oMmzICJnQO';
+    const accessToken = this.TOKEN_TEMP;
     const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '696358046884463';
     if (!accessToken || !phoneNumberId) {
       throw new Error('WhatsApp TOKEN or PHONE_NUMBER_ID env vars are not set.');
@@ -336,7 +335,7 @@ export class ChatService {
     bufferStream.push(null); // End of stream
 
     // 4. Prepare WhatsApp upload
-    const accessToken = process.env.WHATSAPP_TOKEN || this.TOKEN_TEMP;
+    const accessToken = this.TOKEN_TEMP;
     const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '696358046884463';
 
     if (!accessToken || !phoneNumberId) {

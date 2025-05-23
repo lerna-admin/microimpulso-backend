@@ -35,34 +35,34 @@ export class TransactionsService {
   
   
   
-  async create(data: any): Promise<Transaction> {
-    const { loanRequestId, transactionType, amount, reference} = data;
+async create(data: any): Promise<Transaction> {
+  const { loanRequestId, transactionType, amount, reference } = data;
 
-    const loanRequest = await this.loanRequestRepo.findOne({
-      where: { id: loanRequestId },
-      relations: ['client', 'transactions'],
-    });
+  const loanRequest = await this.loanRequestRepo.findOne({
+    where: { id: loanRequestId },
+    relations: ['client', 'transactions'],
+  });
 
-    if (!loanRequest) {
-      throw new NotFoundException('Loan request not found');
-    }
+  if (!loanRequest) {
+    throw new NotFoundException('Loan request not found');
+  }
 
-    if (transactionType === TransactionType.DISBURSEMENT) {
-      // Update loan request status to APPROVED
-      loanRequest.status = LoanRequestStatus.APPROVED;
-      await this.loanRequestRepo.save(loanRequest);
+  if (transactionType === TransactionType.DISBURSEMENT) {
+    // Set loan request status to APPROVED
+    loanRequest.status = LoanRequestStatus.APPROVED;
+    await this.loanRequestRepo.save(loanRequest);
 
-      const client = loanRequest.client;
+    const client = loanRequest.client;
 
-      // Create the message to be sent to the client
-      const message = `✅ Tu préstamo de ${formatCOP(loanRequest.requestedAmount)} ha sido desembolsado.\n\n` +
-        `💵 Total a pagar: ${formatCOP(loanRequest.amount)}\n` +
-        `📅 Fecha límite de pago: ${formatDateOnly(loanRequest.endDateAt)}\n` +
-        `📆 Cuotas: Pago único\n\n` +
-        `Por favor realiza el pago a tiempo para evitar penalidades.`;
+    // Prepare text message
+    const message = `✅ Tu préstamo de ${formatCOP(loanRequest.requestedAmount)} ha sido desembolsado.\n\n` +
+      `💵 Total a pagar: ${formatCOP(loanRequest.amount)}\n` +
+      `📅 Fecha límite de pago: ${formatDateOnly(loanRequest.endDateAt)}\n` +
+      `📆 Cuotas: Pago único\n\n` +
+      `Por favor realiza el pago a tiempo para evitar penalidades.`;
 
-      // Create SVG representation of loan disbursement info
-      const svgContent = `
+    // Prepare SVG content
+    const svgContent = `
 <svg width="600" height="250" xmlns="http://www.w3.org/2000/svg">
   <style>
     .title { font: bold 22px sans-serif; fill: #222; }
@@ -79,56 +79,59 @@ export class TransactionsService {
   <text x="300" y="170" class="value">${formatCOP(loanRequest.amount)}</text>
 </svg>`.trim();
 
-      const svgBuffer = Buffer.from(svgContent, 'utf-8');
+    const svgBuffer = Buffer.from(svgContent, 'utf-8');
+    const pngBuffer = await sharp(svgBuffer).png().toBuffer();
 
-      // Convert SVG to PNG to be compatible with WhatsApp
-      const pngBuffer = await sharp(svgBuffer).png().toBuffer();
+    // Send WhatsApp message and image
+    await this.chatService.sendMessageToClient(client.id, message);
 
-      // Send text message
-      await this.chatService.sendMessageToClient(client.id, message);
+    await this.chatService.sendSimulationToClient(client.id, {
+      fieldname: 'file',
+      originalname: 'desembolso.png',
+      encoding: '7bit',
+      mimetype: 'image/png',
+      size: pngBuffer.length,
+      destination: '',
+      filename: 'desembolso.png',
+      path: '',
+      buffer: pngBuffer,
+      stream: Readable.from(pngBuffer),
+    });
+  }
 
-      // Send PNG image as attachment
-      await this.chatService.sendSimulationToClient(client.id, {
-        fieldname: 'file',
-        originalname: 'desembolso.png',
-        encoding: '7bit',
-        mimetype: 'image/png',
-        size: pngBuffer.length,
-        destination: '',
-        filename: 'desembolso.png',
-        path: '',
-        buffer: pngBuffer,
-        stream: Readable.from(pngBuffer),
-      });
-    }
+  // Register the transaction
+  const transaction = this.transactionRepo.create({
+    Transactiontype: transactionType,
+    amount,
+    reference,
+    loanRequest: { id: loanRequest.id }, // use reference instead of full object to ensure FK
+  });
 
-    // Register the transaction in the database
-    const transaction = this.transactionRepo.create({
-      Transactiontype: transactionType,
-      amount,
-      loanRequest,
-      reference
+  const saved = await this.transactionRepo.save(transaction);
+
+  if (transactionType === TransactionType.REPAYMENT) {
+    // Re-fetch transactions to calculate up-to-date repayment total
+    const allTransactions = await this.transactionRepo.find({
+      where: { loanRequest: { id: loanRequest.id } },
     });
 
-    const saved = await this.transactionRepo.save(transaction);
+    const totalPaid = allTransactions
+      .filter(tx => tx.Transactiontype === TransactionType.REPAYMENT)
+      .reduce((sum, tx) => sum + Number(tx.amount), 0);
 
-    // If it's a repayment, check if full payment has been completed
-    if (transactionType === TransactionType.REPAYMENT) {
-      const totalPaid = loanRequest.transactions
-        .filter(tx => tx.Transactiontype === TransactionType.REPAYMENT)
-        .reduce((sum, tx) => sum + Number(tx.amount), Number(amount));
+    // If fully paid, update status and deactivate client
+    if (totalPaid >= Number(loanRequest.amount)) {
+      loanRequest.status = LoanRequestStatus.COMPLETED;
+      loanRequest.client.status = ClientStatus.INACTIVE;
 
-      if (totalPaid >= Number(loanRequest.amount)) {
-        loanRequest.status = LoanRequestStatus.COMPLETED;
-        loanRequest.client.status = ClientStatus.INACTIVE;
-
-        await this.loanRequestRepo.save(loanRequest);
-        await this.loanRequestRepo.manager.save(loanRequest.client);
-      }
+      await this.loanRequestRepo.save(loanRequest);
+      await this.loanRequestRepo.manager.save(loanRequest.client);
     }
-
-    return saved;
   }
+
+  return saved;
+}
+
   
   
   

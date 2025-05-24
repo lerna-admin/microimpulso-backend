@@ -25,21 +25,19 @@ export class DocumentService {
     return this.documentRepository.findOne({ where: { id },relations: ['client'] });
   }
 
-  async getByClientId(clientId: number): Promise<Client | null> {
-    return this.clientRepository
-      .createQueryBuilder('client')
-      .leftJoinAndSelect('client.documents', 'document')
-      .leftJoinAndSelect('document.loanRequest', 'loanRequest')
-      .where('client.id = :clientId', { clientId })
-      .andWhere(
-        new Brackets((qb) => {
-          qb.where('document.loanRequestId IS NULL')
-            .orWhere('loanRequest.status NOT IN (:...excluded)', {
-              excluded: ['completed', 'rejected'],
-            });
-        }),
-      )
-      .getOne();
-  }
+ async getByClientId(clientId: number): Promise<Client | null> {
+  return this.clientRepository
+    .createQueryBuilder('client')
+    .leftJoinAndSelect(
+      'client.documents',
+      'document',
+      'document.loanRequestId IS NULL ' +
+      'OR loanRequest.status NOT IN (:...excluded)',
+      { excluded: ['completed', 'rejected'] },
+    )
+    .leftJoinAndSelect('document.loanRequest', 'loanRequest')
+    .where('client.id = :clientId', { clientId })
+    .getOne();
+}
 
 }

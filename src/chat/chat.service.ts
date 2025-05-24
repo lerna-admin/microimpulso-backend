@@ -417,6 +417,8 @@ export class ChatService {
     const page = pdfDoc.addPage([595.28, 841.89]); // A4
     const fontSize = 12;
 
+    loan.endDateAt = new Date(loan.endDateAt);
+
     const text = `
       LOAN CONTRACT
         

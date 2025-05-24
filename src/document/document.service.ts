@@ -13,38 +13,44 @@ export class DocumentService {
     private clientRepository: Repository<Client>,
     
   ) {}
-
+  
   async classify(id: string, classification: DocumentType): Promise<Document | null> {
     const doc = await this.documentRepository.findOne({ where: { id } });
     if (!doc) return null;
-
+    
     doc.classification = classification;
     return this.documentRepository.save(doc);
   }
   async findById(id: string): Promise<Document | null> {
     return this.documentRepository.findOne({ where: { id },relations: ['client'] });
   }
-
-async getByClientId(clientId: number): Promise<Client | null> {
-  const client = await this.clientRepository.findOne({
-    where: { id: clientId },
-  });
-  if (!client) return null;
-
-  client.documents = await this.documentRepository.find({
-    where: [
-      // docs with no loanRequest
-      { client: { id: clientId }, loanRequest: null },
-      // docs whose loanRequest is NOT completed/rejected
-      {
-        client: { id: clientId },
-        loanRequest: { status: Not(In(['completed', 'rejected'])) },
-      },
-    ],
-    relations: ['loanRequest'],
-  });
-
-  return client;
-}
-
+  
+  async getByClientId(clientId: number): Promise<Client | null> {
+    // 1) Fetch the client first
+    const client = await this.clientRepository.findOne({
+      where: { id: clientId },
+    });
+    if (!client) return null;
+    
+    // 2) Fetch the documents that satisfy your business rule
+    const documents = await this.documentRepository
+    .createQueryBuilder('document')
+    .leftJoinAndSelect('document.loanRequest', 'loanRequest')
+    .where('document.clientId = :clientId', { clientId })
+    .andWhere(
+      new Brackets((qb) => {
+        qb.where('document.loanRequestId IS NULL')
+        .orWhere('loanRequest.status NOT IN (:...excluded)', {
+          excluded: ['completed', 'rejected'],
+        });
+      }),
+    )
+    .getMany();
+    
+    // 3) Attach and return
+    client.documents = documents;
+    return client;
+  }
+  
+  
 }

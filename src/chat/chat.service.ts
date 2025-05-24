@@ -20,7 +20,7 @@ export class ChatService {
   private readonly logger = new Logger(ChatService.name);
   
   private TOKEN_TEMP: string =
-  'EAAYqvtVC2P8BO5ELQEdZB2IUP7DvCKoitCYpabzZAg6e8EnbPWdlz50f2pDmOo9PRXq2ctWSxmmkuhWILx18gTqKim5ovs5YZAnhSr6i2oWBIW0DzCHxQDnIfGTGcmBfOZBfOvwYgoYTe4KDUstb9DrXDirLylolkeKXaMu7MHpDulkk9cHKuYZBGZCnkhVELJxH8p05wpskCUOik39lAI5TP1xh3bmUu7';
+  'EAAYqvtVC2P8BO5DqCu3U3h7ZAZAruROLF8djSFQppZCnZBEHhlZB3PvHzZCUUdO80gYoPYlfSQCjRA6A0cZCfJHZAgBs9vceaAr8mSYAhDZBSZBdtZAZBsScZANOBSydfbftp1GFI6Hd8wNlGuzBV8qHdqwsi1lAySChms6iw0jYjg14ZAvsJ1Jz9huTHZA02JC9RP5wUHgtjT6TL42Dvn8ZAdOSPgiU9x0ysXLfz9aZC';
   
   constructor(
     @InjectRepository(Client)

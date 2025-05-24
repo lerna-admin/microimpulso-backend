@@ -33,35 +33,41 @@ export class TransactionsService {
     
   ) {}
   
-  
-  
   async create(data: any): Promise<Transaction> {
-    const { loanRequestId, transactionType, amount, reference} = data;
-
+    const { loanRequestId, transactionType, amount, reference } = data;
+    
     const loanRequest = await this.loanRequestRepo.findOne({
       where: { id: loanRequestId },
-      relations: ['client', 'transactions'],
+      relations: ['client'],
     });
-
+    
     if (!loanRequest) {
       throw new NotFoundException('Loan request not found');
     }
-
+    
+    // Register the transaction BEFORE doing anything else
+    const transaction = this.transactionRepo.create({
+      Transactiontype: transactionType,
+      amount,
+      reference,
+      loanRequest: { id: loanRequest.id }, // associate by ID to avoid relationship loss
+    });
+    
+    const saved = await this.transactionRepo.save(transaction);
+    
+    // If disbursement, notify client
     if (transactionType === TransactionType.DISBURSEMENT) {
-      // Update loan request status to APPROVED
-      loanRequest.status = LoanRequestStatus.APPROVED;
+      loanRequest.status = LoanRequestStatus.FUNDED;
       await this.loanRequestRepo.save(loanRequest);
-
+      
       const client = loanRequest.client;
-
-      // Create the message to be sent to the client
+      
       const message = `✅ Tu préstamo de ${formatCOP(loanRequest.requestedAmount)} ha sido desembolsado.\n\n` +
-        `💵 Total a pagar: ${formatCOP(loanRequest.amount)}\n` +
-        `📅 Fecha límite de pago: ${formatDateOnly(loanRequest.endDateAt)}\n` +
-        `📆 Cuotas: Pago único\n\n` +
-        `Por favor realiza el pago a tiempo para evitar penalidades.`;
-
-      // Create SVG representation of loan disbursement info
+      `💵 Total a pagar: ${formatCOP(loanRequest.amount)}\n` +
+      `📅 Fecha límite de pago: ${formatDateOnly(loanRequest.endDateAt)}\n` +
+      `📆 Cuotas: Pago único\n\n` +
+      `Por favor realiza el pago a tiempo para evitar penalidades.`;
+      
       const svgContent = `
 <svg width="600" height="250" xmlns="http://www.w3.org/2000/svg">
   <style>
@@ -78,16 +84,12 @@ export class TransactionsService {
   <text x="30" y="170" class="label">📆 Total a pagar:</text>
   <text x="300" y="170" class="value">${formatCOP(loanRequest.amount)}</text>
 </svg>`.trim();
-
+      
       const svgBuffer = Buffer.from(svgContent, 'utf-8');
-
-      // Convert SVG to PNG to be compatible with WhatsApp
       const pngBuffer = await sharp(svgBuffer).png().toBuffer();
-
-      // Send text message
+      
       await this.chatService.sendMessageToClient(client.id, message);
-
-      // Send PNG image as attachment
+      
       await this.chatService.sendSimulationToClient(client.id, {
         fieldname: 'file',
         originalname: 'desembolso.png',
@@ -101,32 +103,26 @@ export class TransactionsService {
         stream: Readable.from(pngBuffer),
       });
     }
-
-    // Register the transaction in the database
-    const transaction = this.transactionRepo.create({
-      Transactiontype: transactionType,
-      amount,
-      loanRequest,
-      reference
-    });
-
-    const saved = await this.transactionRepo.save(transaction);
-
-    // If it's a repayment, check if full payment has been completed
+    
+    // If repayment, check if debt is fully paid AFTER saving the transaction
     if (transactionType === TransactionType.REPAYMENT) {
-      const totalPaid = loanRequest.transactions
-        .filter(tx => tx.Transactiontype === TransactionType.REPAYMENT)
-        .reduce((sum, tx) => sum + Number(tx.amount), Number(amount));
-
+      const allTransactions = await this.transactionRepo.find({
+        where: { loanRequest: { id: loanRequest.id } },
+      });
+      
+      const totalPaid = allTransactions
+      .filter(tx => tx.Transactiontype === TransactionType.REPAYMENT)
+      .reduce((sum, tx) => sum + Number(tx.amount), 0);
+      
       if (totalPaid >= Number(loanRequest.amount)) {
         loanRequest.status = LoanRequestStatus.COMPLETED;
         loanRequest.client.status = ClientStatus.INACTIVE;
-
+        
         await this.loanRequestRepo.save(loanRequest);
         await this.loanRequestRepo.manager.save(loanRequest.client);
       }
     }
-
+    
     return saved;
   }
   

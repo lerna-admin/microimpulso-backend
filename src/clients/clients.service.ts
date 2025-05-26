@@ -135,7 +135,7 @@ export class ClientsService {
 
     result.push({
       client,
-      loan_request: {
+      loanRequest: {
         id: selectedLoan.id,
         status: selectedLoan.status,
         amount: selectedLoan.amount,

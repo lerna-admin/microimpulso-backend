@@ -13,7 +13,7 @@ export class ClientsController {
   }
 
   @Get('agent/:id')
-  findByAgent(@Param('id') agentId: number): Promise<Client[]> {
+  findByAgent(@Param('id') agentId: number): Promise<any> {
     return this.clientsService.findAllByAgent(agentId);
   }
 

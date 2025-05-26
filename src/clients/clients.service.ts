@@ -78,52 +78,81 @@ export class ClientsService {
     });
   }
 
-  async findAllByAgent(agentId: number): Promise<any[]> {
-    const loans = await this.loanRequestRepository.find({
-      where: {
-        status: LoanRequestStatus.FUNDED,
-        agent: { id: agentId },
-      },
-      relations: {
-        client: true,
-        transactions: true,
-      },
-      order: {
-        createdAt: 'DESC',
-      },
-    });
+ async findAllByAgent(agentId: number) {
+  const allLoans = await this.loanRequestRepository.find({
+    where: { agent: { id: agentId } },
+    relations: { client: true, transactions: true },
+    order: { createdAt: 'DESC' },
+  });
 
-    return loans.map((loan) => {
+  // 2. Prepara el resultado en el formato requerido
+  const result = {
+    active: [] as any[],
+    inactive: [] as any[],
+    rejected: [] as any[],
+  };
+
+  // 3. Agrupa los préstamos por cliente
+  const clientMap = new Map<number, any[]>();
+  for (const loan of allLoans) {
+    const cid = loan.client.id;
+    let list = clientMap.get(cid);
+    if (!list) {
+      list = [];
+      clientMap.set(cid, list);
+    }
+    list.push(loan);
+  }
+
+  // 4. Recorre cada cliente y clasifica
+  for (const [, loans] of clientMap) {
+    const client = loans[0].client;
+
+    const hasFunded   = loans.some(l => l.status === LoanRequestStatus.FUNDED);
+    const allComplete = loans.every(l => l.status === LoanRequestStatus.COMPLETED);
+    const hasRejected = loans.some(l => l.status === LoanRequestStatus.REJECTED);
+
+    // Enriquecemos cada préstamo antes de clasificar
+    const enriched = loans.map(loan => {
       const totalRepayment = loan.transactions
-        .filter((t) => t.Transactiontype === 'repayment')
-        .reduce((sum, t) => sum + Number(t.amount), 0);
+        .filter(t => t.Transactiontype === 'repayment')
+        .reduce((s, t) => s + +t.amount, 0);
 
       const amountBorrowed = loan.transactions
-        .filter((t) => t.Transactiontype === 'disbursement')
-        .reduce((sum, t) => sum + Number(t.amount), 0);
+        .filter(t => t.Transactiontype === 'disbursement')
+        .reduce((s, t) => s + +t.amount, 0);
 
-      const totalToPay = Number(loan.amount) - totalRepayment;
+      const totalToPay = amountBorrowed - totalRepayment;
 
-      const mode = `${totalToPay / 1000} x 1`;
       const diasMora =
         loan.endDateAt && new Date() > new Date(loan.endDateAt)
-          ? Math.floor((Date.now() - new Date(loan.endDateAt).getTime()) / (1000 * 60 * 60 * 24))
+          ? Math.floor((Date.now() - new Date(loan.endDateAt).getTime()) / 86_400_000)
           : 0;
 
       return {
-        client: loan.client,
-        loanRequest: {
-          ...loan,
-          transactions: loan.transactions,
-          mode,
-        },
+        client,
+        loanRequest: { ...loan },
         totalRepayment,
         amountBorrowed,
         totalToPay,
         diasMora,
       };
     });
+
+    if (hasFunded) {
+      // Solo enviamos los FUNDED a "active"
+      result.active.push(...enriched.filter(e => e.loanRequest.status === LoanRequestStatus.FUNDED));
+    } else if (allComplete) {
+      result.inactive.push(...enriched);
+    } else if (hasRejected) {
+      // Solo enviamos los REJECTED a "rejected"
+      result.rejected.push(...enriched.filter(e => e.loanRequest.status === LoanRequestStatus.REJECTED));
+    }
   }
+
+  return result;
+}
+
 
   async findOne(id: number): Promise<any | null> {
     const result = await this.clientRepository

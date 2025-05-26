@@ -34,6 +34,8 @@ export class ClientsService {
     private readonly loanRequestRepository: Repository<LoanRequest>,
   ) {}
 
+
+  // TODO HACER LOS MISMOS CAMBIOS DEL AGENT BY ID ACA PARA LOS DEMAS ROLES
   async findAll(): Promise<any[]> {
     const loans = await this.loanRequestRepository.find({
       where: {

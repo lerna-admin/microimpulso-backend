@@ -35,48 +35,94 @@ export class ClientsService {
   ) {}
 
   async findAll(): Promise<any[]> {
-    const loans = await this.loanRequestRepository.find({
-      where: {
-        status: LoanRequestStatus.FUNDED,
+  const loans = await this.loanRequestRepository.find({
+    where: {
+      status: LoanRequestStatus.FUNDED,
+    },
+    relations: {
+      client: true,
+      transactions: true,
+    },
+    order: {
+      createdAt: 'DESC',
+    },
+  });
+
+  const clientMap = new Map<number, any[]>();
+
+  for (const loan of loans) {
+    const clientId = loan.client.id;
+    if (!clientMap.has(clientId)) {
+      clientMap.set(clientId, []);
+    }
+    clientMap.get(clientId)!.push(loan);
+  }
+
+  const result: any[] = [];
+
+  for (const [clientId, clientLoans] of clientMap.entries()) {
+    const client = clientLoans[0].client;
+
+    const hasFunded = clientLoans.some((l) => l.status === 'funded');
+    const allCompleted = clientLoans.every((l) => l.status === 'completed');
+    const hasRejected = clientLoans.some((l) => l.status === 'rejected');
+
+    let status: 'active' | 'inactive' | 'rejected' | 'unknown' = 'unknown';
+    if (hasFunded) status = 'active';
+    else if (allCompleted) status = 'inactive';
+    else if (hasRejected) status = 'rejected';
+
+    if (status === 'unknown') continue;
+
+    const selectedLoan = clientLoans.find((l) =>
+      status === 'active' ? l.status === 'funded' :
+      status === 'inactive' ? l.status === 'completed' :
+      status === 'rejected' ? l.status === 'rejected' :
+      false
+    );
+
+    const totalRepayment = selectedLoan.transactions
+      .filter((t) => t.Transactiontype === 'repayment')
+      .reduce((sum, t) => sum + Number(t.amount), 0);
+
+    const amountBorrowed = selectedLoan.transactions
+      .filter((t) => t.Transactiontype === 'disbursement')
+      .reduce((sum, t) => sum + Number(t.amount), 0);
+
+    const totalToPay = amountBorrowed - totalRepayment;
+
+    const diasMora =
+      selectedLoan.endDateAt && new Date() > new Date(selectedLoan.endDateAt)
+        ? Math.floor((Date.now() - new Date(selectedLoan.endDateAt).getTime()) / 86_400_000)
+        : 0;
+
+    result.push({
+      client,
+      loanRequest: {
+        id: selectedLoan.id,
+        status: selectedLoan.status,
+        amount: selectedLoan.amount,
+        requestedAmount: selectedLoan.requestedAmount,
+        createdAt: selectedLoan.createdAt,
+        updatedAt: selectedLoan.updatedAt,
+        type: selectedLoan.type,
+        mode: selectedLoan.mode,
+        mora: selectedLoan.mora,
+        endDateAt: selectedLoan.endDateAt,
+        paymentDay: selectedLoan.paymentDay,
+        transactions: selectedLoan.transactions,
       },
-      relations: {
-        client: true,
-        transactions: true,
-      },
-      order: {
-        createdAt: 'DESC',
-      },
-    });
-
-    return loans.map((loan) => {
-      const montoPrestado = loan.transactions
-        .filter((t) => t.Transactiontype === 'disbursement')
-        .reduce((sum, t) => sum + Number(t.amount), 0);
-
-      const totalPagado = loan.transactions
-        .filter((t) => t.Transactiontype === 'repayment')
-        .reduce((sum, t) => sum + Number(t.amount), 0);
-
-      const pendientePorPagar = Number(loan.amount) - totalPagado;
-
-      const diasMora =
-        loan.endDateAt && new Date() > new Date(loan.endDateAt)
-          ? Math.floor((Date.now() - new Date(loan.endDateAt).getTime()) / (1000 * 60 * 60 * 24))
-          : 0;
-
-      return {
-        client: loan.client,
-        loanRequest: {
-          ...loan,
-          transactions: loan.transactions,
-        },
-        montoPrestado,
-        totalPagado,
-        pendientePorPagar,
-        diasMora,
-      };
+      totalRepayment,
+      amountBorrowed,
+      totalToPay,
+      diasMora,
+      status,
     });
   }
+
+  return result;
+}
+
 
  async findAllByAgent(agentId: number): Promise<any[]> {
   const loans = await this.loanRequestRepository.find({

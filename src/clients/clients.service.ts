@@ -35,181 +35,202 @@ export class ClientsService {
   ) { }
 
   // TODO HACER LOS MISMOS CAMBIOS DEL AGENT BY ID ACA PARA LOS DEMAS ROLES
-  async findAll(): Promise<any[]> {
-    const loans = await this.loanRequestRepository.find({
-      where: {
-        status: LoanRequestStatus.FUNDED,
-      },
-      relations: {
-        client: true,
-        transactions: true,
-      },
-      order: {
-        createdAt: 'DESC',
-      },
-    });
+async findAll(limit: number = 10, page: number = 1): Promise<any> {
+  const loans = await this.loanRequestRepository.find({
+    where: {
+    },
+    relations: {
+      client: true,
+      transactions: true,
+    },
+    order: {
+      createdAt: 'DESC',
+    },
+  });
 
-    const clientMap = new Map<number, any[]>();
+  const clientMap = new Map<number, any[]>();
 
-    for (const loan of loans) {
-      const clientId = loan.client.id;
-      if (!clientMap.has(clientId)) {
-        clientMap.set(clientId, []);
-      }
-      clientMap.get(clientId)!.push(loan);
+  for (const loan of loans) {
+    const clientId = loan.client.id;
+    if (!clientMap.has(clientId)) {
+      clientMap.set(clientId, []);
     }
-
-    const result: any[] = [];
-
-    for (const [clientId, clientLoans] of clientMap.entries()) {
-      const client = clientLoans[0].client;
-
-      const hasFunded = clientLoans.some((l) => l.status === 'funded');
-      const allCompleted = clientLoans.every((l) => l.status === 'completed');
-      const hasRejected = clientLoans.some((l) => l.status === 'rejected');
-
-      let status: 'active' | 'inactive' | 'rejected' | 'unknown' = 'unknown';
-      if (hasFunded) status = 'active';
-      else if (allCompleted) status = 'inactive';
-      else if (hasRejected) status = 'rejected';
-
-      if (status === 'unknown') continue;
-
-      const selectedLoan = clientLoans.find((l) =>
-        status === 'active' ? l.status === 'funded' :
-          status === 'inactive' ? l.status === 'completed' :
-            status === 'rejected' ? l.status === 'rejected' :
-              false
-      );
-
-      const totalRepayment = selectedLoan.transactions
-        .filter((t) => t.Transactiontype === 'repayment')
-        .reduce((sum, t) => sum + Number(t.amount), 0);
-
-      const amountBorrowed = selectedLoan.transactions
-        .filter((t) => t.Transactiontype === 'disbursement')
-        .reduce((sum, t) => sum + Number(t.amount), 0);
-
-      const totalToPay = amountBorrowed - totalRepayment;
-
-      const diasMora =
-        selectedLoan.endDateAt && new Date() > new Date(selectedLoan.endDateAt)
-          ? Math.floor((Date.now() - new Date(selectedLoan.endDateAt).getTime()) / 86_400_000)
-          : 0;
-
-      result.push({
-        client,
-        loanRequest: {
-          id: selectedLoan.id,
-          status: selectedLoan.status,
-          amount: selectedLoan.amount,
-          requestedAmount: selectedLoan.requestedAmount,
-          createdAt: selectedLoan.createdAt,
-          updatedAt: selectedLoan.updatedAt,
-          type: selectedLoan.type,
-          mode: selectedLoan.mode,
-          mora: selectedLoan.mora,
-          endDateAt: selectedLoan.endDateAt,
-          paymentDay: selectedLoan.paymentDay,
-          transactions: selectedLoan.transactions,
-        },
-        totalRepayment,
-        amountBorrowed,
-        totalToPay,
-        diasMora,
-        status,
-      });
-    }
-
-    return result;
+    clientMap.get(clientId)!.push(loan);
   }
 
-  async findAllByAgent(agentId: number): Promise<any[]> {
-    const loans = await this.loanRequestRepository.find({
-      where: { agent: { id: agentId } },
-      relations: { client: true, transactions: true },
-      order: { createdAt: 'DESC' },
+  const allResults: any[] = [];
+
+  for (const [clientId, clientLoans] of clientMap.entries()) {
+    const client = clientLoans[0].client;
+
+    const hasFunded = clientLoans.some((l) => l.status === 'funded');
+    const allCompleted = clientLoans.every((l) => l.status === 'completed');
+    const hasRejected = clientLoans.some((l) => l.status === 'rejected');
+
+    let status: 'active' | 'inactive' | 'rejected' | 'unknown' = 'unknown';
+    if (hasFunded) status = 'active';
+    else if (allCompleted) status = 'inactive';
+    else if (hasRejected) status = 'rejected';
+
+    if (status === 'unknown') continue;
+
+    const selectedLoan = clientLoans.find((l) =>
+      status === 'active' ? l.status === 'funded' :
+      status === 'inactive' ? l.status === 'completed' :
+      status === 'rejected' ? l.status === 'rejected' :
+      false
+    );
+
+    const totalRepayment = selectedLoan.transactions
+      .filter((t) => t.Transactiontype === 'repayment')
+      .reduce((sum, t) => sum + Number(t.amount), 0);
+
+    const amountBorrowed = selectedLoan.transactions
+      .filter((t) => t.Transactiontype === 'disbursement')
+      .reduce((sum, t) => sum + Number(t.amount), 0);
+
+    const remainingAmount = amountBorrowed - totalRepayment;
+
+    const daysLate =
+      selectedLoan.endDateAt && new Date() > new Date(selectedLoan.endDateAt)
+        ? Math.floor((Date.now() - new Date(selectedLoan.endDateAt).getTime()) / 86_400_000)
+        : 0;
+
+    allResults.push({
+      client,
+      loanRequest: {
+        id: selectedLoan.id,
+        status: selectedLoan.status,
+        amount: selectedLoan.amount,
+        requestedAmount: selectedLoan.requestedAmount,
+        createdAt: selectedLoan.createdAt,
+        updatedAt: selectedLoan.updatedAt,
+        type: selectedLoan.type,
+        mode: selectedLoan.mode,
+        mora: selectedLoan.mora,
+        endDateAt: selectedLoan.endDateAt,
+        paymentDay: selectedLoan.paymentDay,
+        transactions: selectedLoan.transactions,
+      },
+      totalRepayment,
+      amountBorrowed,
+      remainingAmount,
+      daysLate,
+      status,
     });
-
-    const clientMap = new Map<number, any[]>();
-
-    for (const loan of loans) {
-      const clientId = loan.client.id;
-      if (!clientMap.has(clientId)) {
-        clientMap.set(clientId, []);
-      }
-      clientMap.get(clientId)!.push(loan);
-    }
-
-    const result: any[] = [];
-
-    for (const [clientId, clientLoans] of clientMap.entries()) {
-      const client = clientLoans[0].client;
-
-      const hasFunded = clientLoans.some((l) => l.status === 'funded');
-      const allCompleted = clientLoans.every((l) => l.status === 'completed');
-      const hasRejected = clientLoans.some((l) => l.status === 'rejected');
-
-      let status: 'active' | 'inactive' | 'rejected' | 'unknown' = 'unknown';
-      if (hasFunded) status = 'active';
-      else if (allCompleted) status = 'inactive';
-      else if (hasRejected) status = 'rejected';
-
-      if (status === 'unknown') continue; // omitimos los que no tienen estado claro
-
-      const selectedLoan = clientLoans.find((l) =>
-        status === 'active'
-          ? l.status === 'funded'
-          : status === 'inactive'
-            ? l.status === 'completed'
-            : status === 'rejected'
-              ? l.status === 'rejected'
-              : false,
-      );
-
-      const totalRepayment = selectedLoan.transactions
-        .filter((t) => t.Transactiontype === 'repayment')
-        .reduce((sum, t) => sum + Number(t.amount), 0);
-
-      const amountBorrowed = selectedLoan.transactions
-        .filter((t) => t.Transactiontype === 'disbursement')
-        .reduce((sum, t) => sum + Number(t.amount), 0);
-
-      const totalToPay = amountBorrowed - totalRepayment;
-
-      const mode = `${selectedLoan.amount / 1000} x 1`;
-
-      const diasMora =
-        selectedLoan.endDateAt && new Date() > new Date(selectedLoan.endDateAt)
-          ? Math.floor((Date.now() - new Date(selectedLoan.endDateAt).getTime()) / 86_400_000)
-          : 0;
-
-      result.push({
-        client,
-        loanRequest: {
-          id: selectedLoan.id,
-          status: selectedLoan.status,
-          amount: selectedLoan.amount,
-          requestedAmount: selectedLoan.requestedAmount,
-          createdAt: selectedLoan.createdAt,
-          updatedAt: selectedLoan.updatedAt,
-          type: selectedLoan.type,
-          mode: mode,
-          mora: selectedLoan.mora,
-          endDateAt: selectedLoan.endDateAt,
-          paymentDay: selectedLoan.paymentDay,
-          transactions: selectedLoan.transactions,
-        },
-        totalRepayment,
-        amountBorrowed,
-        totalToPay,
-        diasMora,
-        status,
-      });
-    }
-
-    return result;
   }
+
+  const totalItems = allResults.length;
+  const startIndex = (page - 1) * limit;
+  const paginatedData = allResults.slice(startIndex, startIndex + limit);
+
+  return {
+    page,
+    limit,
+    totalItems,
+    totalPages: Math.ceil(totalItems / limit),
+    data: paginatedData,
+  };
+}
+
+
+ async findAllByAgent(agentId: number, limit: number = 10, page: number = 1): Promise<any> {
+  const loans = await this.loanRequestRepository.find({
+    where: { agent: { id: agentId } },
+    relations: { client: true, transactions: true },
+    order: { createdAt: 'DESC' },
+  });
+
+  const clientMap = new Map<number, any[]>();
+
+  for (const loan of loans) {
+    const clientId = loan.client.id;
+    if (!clientMap.has(clientId)) {
+      clientMap.set(clientId, []);
+    }
+    clientMap.get(clientId)!.push(loan);
+  }
+
+  const allResults: any[] = [];
+
+  for (const [clientId, clientLoans] of clientMap.entries()) {
+    const client = clientLoans[0].client;
+
+    const hasFunded = clientLoans.some((l) => l.status === 'funded');
+    const allCompleted = clientLoans.every((l) => l.status === 'completed');
+    const hasRejected = clientLoans.some((l) => l.status === 'rejected');
+
+    let status: 'active' | 'inactive' | 'rejected' | 'unknown' = 'unknown';
+    if (hasFunded) status = 'active';
+    else if (allCompleted) status = 'inactive';
+    else if (hasRejected) status = 'rejected';
+
+    if (status === 'unknown') continue;
+
+    const selectedLoan = clientLoans.find((l) =>
+      status === 'active'
+        ? l.status === 'funded'
+        : status === 'inactive'
+        ? l.status === 'completed'
+        : status === 'rejected'
+        ? l.status === 'rejected'
+        : false,
+    );
+
+    const totalRepayment = selectedLoan.transactions
+      .filter((t) => t.Transactiontype === 'repayment')
+      .reduce((sum, t) => sum + Number(t.amount), 0);
+
+    const amountBorrowed = selectedLoan.transactions
+      .filter((t) => t.Transactiontype === 'disbursement')
+      .reduce((sum, t) => sum + Number(t.amount), 0);
+
+    const remainingAmount = amountBorrowed - totalRepayment;
+
+    const daysLate =
+      selectedLoan.endDateAt && new Date() > new Date(selectedLoan.endDateAt)
+        ? Math.floor((Date.now() - new Date(selectedLoan.endDateAt).getTime()) / 86_400_000)
+        : 0;
+
+    const mode = `${selectedLoan.amount / 1000} x 1`;
+
+    allResults.push({
+      client,
+      loanRequest: {
+        id: selectedLoan.id,
+        status: selectedLoan.status,
+        amount: selectedLoan.amount,
+        requestedAmount: selectedLoan.requestedAmount,
+        createdAt: selectedLoan.createdAt,
+        updatedAt: selectedLoan.updatedAt,
+        type: selectedLoan.type,
+        mode,
+        mora: selectedLoan.mora,
+        endDateAt: selectedLoan.endDateAt,
+        paymentDay: selectedLoan.paymentDay,
+        transactions: selectedLoan.transactions,
+      },
+      totalRepayment,
+      amountBorrowed,
+      remainingAmount,
+      daysLate,
+      status,
+    });
+  }
+
+  const totalItems = allResults.length;
+  const startIndex = (page - 1) * limit;
+  const paginatedData = allResults.slice(startIndex, startIndex + limit);
+
+  return {
+    page,
+    limit,
+    totalItems,
+    totalPages: Math.ceil(totalItems / limit),
+    data: paginatedData,
+  };
+}
+
 
   async findOne(id: number): Promise<any | null> {
     const result = await this.clientRepository

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Param, Body, Patch } from '@nestjs/common';
+import { Controller, Get, Post, Param, Body, Patch, Query } from '@nestjs/common';
 import { ClientsService } from './clients.service';
 import { Client } from 'src/entities/client.entity';
 
@@ -6,15 +6,21 @@ import { Client } from 'src/entities/client.entity';
 export class ClientsController {
   constructor(private readonly clientsService: ClientsService) {}
 
-  // GET /clients → return all clients
   @Get()
-  findAll(): Promise<any[]> {
-    return this.clientsService.findAll();
+  findAll(
+    @Query('limit') limit = 10,
+    @Query('page') page = 1,
+  ): Promise<any> {
+    return this.clientsService.findAll(Number(limit), Number(page));
   }
 
   @Get('agent/:id')
-  findByAgent(@Param('id') agentId: number): Promise<any> {
-    return this.clientsService.findAllByAgent(agentId);
+  findByAgent(
+    @Param('id') agentId: number,
+    @Query('limit') limit = 10,
+    @Query('page') page = 1,
+  ): Promise<any> {
+    return this.clientsService.findAllByAgent(agentId, Number(limit), Number(page));
   }
 
   // GET /clients/:id → return a specific client by ID

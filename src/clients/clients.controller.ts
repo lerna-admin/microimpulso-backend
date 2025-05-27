@@ -8,7 +8,7 @@ export class ClientsController {
 
   // GET /clients → return all clients
   @Get()
-  findAll(): Promise<Client[]> {
+  findAll(): Promise<any[]> {
     return this.clientsService.findAll();
   }
 

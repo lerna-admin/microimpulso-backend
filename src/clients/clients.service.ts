@@ -56,7 +56,6 @@ async findAll(
   });
 
   const clientMap = new Map<number, any[]>();
-
   for (const loan of loans) {
     const clientId = loan.client.id;
     if (!clientMap.has(clientId)) {
@@ -66,6 +65,8 @@ async findAll(
   }
 
   const allResults: any[] = [];
+  let totalActiveAmountBorrowed = 0;
+  let totalActiveRepayment = 0;
 
   for (const [clientId, clientLoans] of clientMap.entries()) {
     const client = clientLoans[0].client;
@@ -80,11 +81,6 @@ async findAll(
     else if (hasRejected) status = 'rejected';
 
     if (status === 'unknown') continue;
-
-    // Apply filters
-    if (filters?.status && filters.status !== status) continue;
-    if (filters?.document && !client.document?.includes(filters.document)) continue;
-    if (filters?.name && !`${client.firstName} ${client.lastName}`.toLowerCase().includes(filters.name.toLowerCase())) continue;
 
     const selectedLoan = clientLoans.find((l) =>
       status === 'active' ? l.status === 'funded' :
@@ -107,6 +103,17 @@ async findAll(
       selectedLoan.endDateAt && new Date() > new Date(selectedLoan.endDateAt)
         ? Math.floor((Date.now() - new Date(selectedLoan.endDateAt).getTime()) / 86_400_000)
         : 0;
+
+    // Global totals (not affected by filters)
+    if (status === 'active') {
+      totalActiveAmountBorrowed += amountBorrowed;
+      totalActiveRepayment += totalRepayment;
+    }
+
+    // Apply filters
+    if (filters?.status && filters.status.toLowerCase() !== status) continue;
+    if (filters?.document && !client.document?.includes(filters.document)) continue;
+    if (filters?.name && !`${client.firstName || ''} ${client.lastName || ''}`.toLowerCase().includes(filters.name.toLowerCase())) continue;
 
     allResults.push({
       client,
@@ -141,9 +148,12 @@ async findAll(
     limit,
     totalItems,
     totalPages: Math.ceil(totalItems / limit),
+    totalActiveAmountBorrowed,
+    totalActiveRepayment,
     data: paginatedData,
   };
 }
+
 
 
 
@@ -164,7 +174,6 @@ async findAllByAgent(
   });
 
   const clientMap = new Map<number, any[]>();
-
   for (const loan of loans) {
     const clientId = loan.client.id;
     if (!clientMap.has(clientId)) {
@@ -174,6 +183,8 @@ async findAllByAgent(
   }
 
   const allResults: any[] = [];
+  let totalActiveAmountBorrowed = 0;
+  let totalActiveRepayment = 0;
 
   for (const [clientId, clientLoans] of clientMap.entries()) {
     const client = clientLoans[0].client;
@@ -188,11 +199,6 @@ async findAllByAgent(
     else if (hasRejected) status = 'rejected';
 
     if (status === 'unknown') continue;
-
-    // Apply filters
-    if (filters?.status && filters.status.toLowerCase() !== status) continue;
-    if (filters?.document && !client.document?.includes(filters.document)) continue;
-    if (filters?.name && !`${client.firstName || ''} ${client.lastName || ''}`.toLowerCase().includes(filters.name.toLowerCase())) continue;
 
     const selectedLoan = clientLoans.find((l) =>
       status === 'active'
@@ -220,6 +226,17 @@ async findAllByAgent(
         : 0;
 
     const mode = `${selectedLoan.amount / 1000} x 1`;
+
+    // Totals for ALL active users (global, not filtered)
+    if (status === 'active') {
+      totalActiveAmountBorrowed += amountBorrowed;
+      totalActiveRepayment += totalRepayment;
+    }
+
+    // Apply filters AFTER calculating global totals
+    if (filters?.status && filters.status.toLowerCase() !== status) continue;
+    if (filters?.document && !client.document?.includes(filters.document)) continue;
+    if (filters?.name && !`${client.firstName || ''} ${client.lastName || ''}`.toLowerCase().includes(filters.name.toLowerCase())) continue;
 
     allResults.push({
       client,
@@ -254,9 +271,12 @@ async findAllByAgent(
     limit,
     totalItems,
     totalPages: Math.ceil(totalItems / limit),
+    totalActiveAmountBorrowed,
+    totalActiveRepayment,
     data: paginatedData,
   };
 }
+
 
 
 

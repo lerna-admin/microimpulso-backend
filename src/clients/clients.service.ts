@@ -67,6 +67,7 @@ async findAll(
   const allResults: any[] = [];
   let totalActiveAmountBorrowed = 0;
   let totalActiveRepayment = 0;
+  let activeClientsCount = 0;
 
   for (const [clientId, clientLoans] of clientMap.entries()) {
     const client = clientLoans[0].client;
@@ -104,13 +105,14 @@ async findAll(
         ? Math.floor((Date.now() - new Date(selectedLoan.endDateAt).getTime()) / 86_400_000)
         : 0;
 
-    // Global totals (not affected by filters)
+    // Totals independent of filters
     if (status === 'active') {
       totalActiveAmountBorrowed += amountBorrowed;
       totalActiveRepayment += totalRepayment;
+      activeClientsCount += 1;
     }
 
-    // Apply filters
+    // Filters for output
     if (filters?.status && filters.status.toLowerCase() !== status) continue;
     if (filters?.document && !client.document?.includes(filters.document)) continue;
     if (filters?.name && !`${client.firstName || ''} ${client.lastName || ''}`.toLowerCase().includes(filters.name.toLowerCase())) continue;
@@ -150,9 +152,11 @@ async findAll(
     totalPages: Math.ceil(totalItems / limit),
     totalActiveAmountBorrowed,
     totalActiveRepayment,
+    activeClientsCount,
     data: paginatedData,
   };
 }
+
 
 
 
@@ -185,6 +189,7 @@ async findAllByAgent(
   const allResults: any[] = [];
   let totalActiveAmountBorrowed = 0;
   let totalActiveRepayment = 0;
+  let activeClientsCount = 0;
 
   for (const [clientId, clientLoans] of clientMap.entries()) {
     const client = clientLoans[0].client;
@@ -227,13 +232,14 @@ async findAllByAgent(
 
     const mode = `${selectedLoan.amount / 1000} x 1`;
 
-    // Totals for ALL active users (global, not filtered)
+    // Always track global totals for active clients
     if (status === 'active') {
       totalActiveAmountBorrowed += amountBorrowed;
       totalActiveRepayment += totalRepayment;
+      activeClientsCount += 1;
     }
 
-    // Apply filters AFTER calculating global totals
+    // Filters for visible data
     if (filters?.status && filters.status.toLowerCase() !== status) continue;
     if (filters?.document && !client.document?.includes(filters.document)) continue;
     if (filters?.name && !`${client.firstName || ''} ${client.lastName || ''}`.toLowerCase().includes(filters.name.toLowerCase())) continue;
@@ -273,9 +279,11 @@ async findAllByAgent(
     totalPages: Math.ceil(totalItems / limit),
     totalActiveAmountBorrowed,
     totalActiveRepayment,
+    activeClientsCount,
     data: paginatedData,
   };
 }
+
 
 
 

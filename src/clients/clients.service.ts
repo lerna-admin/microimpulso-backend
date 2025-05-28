@@ -35,10 +35,17 @@ export class ClientsService {
   ) { }
 
   // TODO HACER LOS MISMOS CAMBIOS DEL AGENT BY ID ACA PARA LOS DEMAS ROLES
-async findAll(limit: number = 10, page: number = 1): Promise<any> {
+async findAll(
+  limit: number = 10,
+  page: number = 1,
+  filters?: {
+    status?: 'active' | 'inactive' | 'rejected';
+    document?: string;
+    name?: string;
+  }
+): Promise<any> {
   const loans = await this.loanRequestRepository.find({
-    where: {
-    },
+    where: {},
     relations: {
       client: true,
       transactions: true,
@@ -73,6 +80,11 @@ async findAll(limit: number = 10, page: number = 1): Promise<any> {
     else if (hasRejected) status = 'rejected';
 
     if (status === 'unknown') continue;
+
+    // Apply filters
+    if (filters?.status && filters.status !== status) continue;
+    if (filters?.document && !client.document?.includes(filters.document)) continue;
+    if (filters?.name && !`${client.firstName} ${client.lastName}`.toLowerCase().includes(filters.name.toLowerCase())) continue;
 
     const selectedLoan = clientLoans.find((l) =>
       status === 'active' ? l.status === 'funded' :
@@ -134,7 +146,17 @@ async findAll(limit: number = 10, page: number = 1): Promise<any> {
 }
 
 
- async findAllByAgent(agentId: number, limit: number = 10, page: number = 1): Promise<any> {
+
+async findAllByAgent(
+  agentId: number,
+  limit: number = 10,
+  page: number = 1,
+  filters?: {
+    status?: 'active' | 'inactive' | 'rejected';
+    document?: string;
+    name?: string;
+  }
+): Promise<any> {
   const loans = await this.loanRequestRepository.find({
     where: { agent: { id: agentId } },
     relations: { client: true, transactions: true },
@@ -166,6 +188,11 @@ async findAll(limit: number = 10, page: number = 1): Promise<any> {
     else if (hasRejected) status = 'rejected';
 
     if (status === 'unknown') continue;
+
+    // Apply filters
+    if (filters?.status && filters.status.toLowerCase() !== status) continue;
+    if (filters?.document && !client.document?.includes(filters.document)) continue;
+    if (filters?.name && !`${client.firstName || ''} ${client.lastName || ''}`.toLowerCase().includes(filters.name.toLowerCase())) continue;
 
     const selectedLoan = clientLoans.find((l) =>
       status === 'active'
@@ -230,6 +257,7 @@ async findAll(limit: number = 10, page: number = 1): Promise<any> {
     data: paginatedData,
   };
 }
+
 
 
   async findOne(id: number): Promise<any | null> {

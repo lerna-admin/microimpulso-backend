@@ -5,36 +5,59 @@ import { Client } from 'src/entities/client.entity';
 @Controller('clients')
 export class ClientsController {
   constructor(private readonly clientsService: ClientsService) {}
-
+  
   @Get()
   findAll(
     @Query('limit') limit = 10,
     @Query('page') page = 1,
+    @Query('status') status?: string,
+    @Query('document') document?: string,
+    @Query('name') name?: string,
   ): Promise<any> {
-    return this.clientsService.findAll(Number(limit), Number(page));
+    return this.clientsService.findAll(
+      Number(limit),
+      Number(page),
+      {
+        status: status?.toLowerCase() as 'active' | 'inactive' | 'rejected',
+        document,
+        name,
+      },
+    );
   }
-
-  @Get('agent/:id')
-  findByAgent(
-    @Param('id') agentId: number,
+  
+  @Get('agent/:agentId')
+  findAllByAgent(
+    @Param('agentId') agentId: number,
     @Query('limit') limit = 10,
     @Query('page') page = 1,
+    @Query('status') status?: string,
+    @Query('document') document?: string,
+    @Query('name') name?: string,
   ): Promise<any> {
-    return this.clientsService.findAllByAgent(agentId, Number(limit), Number(page));
+    return this.clientsService.findAllByAgent(
+      agentId,
+      Number(limit),
+      Number(page),
+      {
+        status: status?.toLowerCase() as 'active' | 'inactive' | 'rejected',
+        document,
+        name,
+      }
+    );
   }
-
+  
   // GET /clients/:id → return a specific client by ID
   @Get(':id')
   findOne(@Param('id') id: number) {
     return this.clientsService.findOne(id);
   }
-
+  
   // POST /clients → create a new client
   @Post()
   create(@Body() body: any) {
     return this.clientsService.create(body);
   }
-   // ✅ PATCH /clients/:id → update existing client
+  // ✅ PATCH /clients/:id → update existing client
   @Patch(':id')
   update(@Param('id') id: number, @Body() body: any) {
     return this.clientsService.update(+id, body);

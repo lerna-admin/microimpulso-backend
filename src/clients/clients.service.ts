@@ -69,6 +69,10 @@ async findAll(
   let totalActiveRepayment = 0;
   let activeClientsCount = 0;
 
+  let mora15 = 0;
+  let critical20 = 0;
+  let noPayment30 = 0;
+
   for (const [clientId, clientLoans] of clientMap.entries()) {
     const client = clientLoans[0].client;
 
@@ -100,19 +104,25 @@ async findAll(
 
     const remainingAmount = amountBorrowed - totalRepayment;
 
-    const daysLate =
-      selectedLoan.endDateAt && new Date() > new Date(selectedLoan.endDateAt)
-        ? Math.floor((Date.now() - new Date(selectedLoan.endDateAt).getTime()) / 86_400_000)
-        : 0;
+    const endDate = selectedLoan.endDateAt ? new Date(selectedLoan.endDateAt) : null;
+    const now = new Date();
 
-    // Totals independent of filters
+    const daysLate = endDate && now > endDate
+      ? Math.floor((now.getTime() - endDate.getTime()) / 86_400_000)
+      : 0;
+
+    if (status === 'active' && daysLate > 0) {
+      if (daysLate > 15) mora15++;
+      if (daysLate > 20) critical20++;
+      if (daysLate >= 30) noPayment30++;
+    }
+
     if (status === 'active') {
       totalActiveAmountBorrowed += amountBorrowed;
       totalActiveRepayment += totalRepayment;
       activeClientsCount += 1;
     }
 
-    // Filters for output
     if (filters?.status && filters.status.toLowerCase() !== status) continue;
     if (filters?.document && !client.document?.includes(filters.document)) continue;
     if (filters?.name && !`${client.firstName || ''} ${client.lastName || ''}`.toLowerCase().includes(filters.name.toLowerCase())) continue;
@@ -153,6 +163,9 @@ async findAll(
     totalActiveAmountBorrowed,
     totalActiveRepayment,
     activeClientsCount,
+    mora15,
+    critical20,
+    noPayment30,
     data: paginatedData,
   };
 }
@@ -191,6 +204,10 @@ async findAllByAgent(
   let totalActiveRepayment = 0;
   let activeClientsCount = 0;
 
+  let mora15 = 0;
+  let critical20 = 0;
+  let noPayment30 = 0;
+
   for (const [clientId, clientLoans] of clientMap.entries()) {
     const client = clientLoans[0].client;
 
@@ -225,21 +242,28 @@ async findAllByAgent(
 
     const remainingAmount = amountBorrowed - totalRepayment;
 
-    const daysLate =
-      selectedLoan.endDateAt && new Date() > new Date(selectedLoan.endDateAt)
-        ? Math.floor((Date.now() - new Date(selectedLoan.endDateAt).getTime()) / 86_400_000)
-        : 0;
+    const endDate = selectedLoan.endDateAt ? new Date(selectedLoan.endDateAt) : null;
+    const now = new Date();
+
+    const daysLate = endDate && now > endDate
+      ? Math.floor((now.getTime() - endDate.getTime()) / 86_400_000)
+      : 0;
+
+    // Late payment statistics (only for active loans)
+    if (status === 'active' && daysLate > 0) {
+      if (daysLate > 15) mora15++;
+      if (daysLate > 20) critical20++;
+      if (daysLate >= 30) noPayment30++;
+    }
 
     const mode = `${selectedLoan.amount / 1000} x 1`;
 
-    // Always track global totals for active clients
     if (status === 'active') {
       totalActiveAmountBorrowed += amountBorrowed;
       totalActiveRepayment += totalRepayment;
       activeClientsCount += 1;
     }
 
-    // Filters for visible data
     if (filters?.status && filters.status.toLowerCase() !== status) continue;
     if (filters?.document && !client.document?.includes(filters.document)) continue;
     if (filters?.name && !`${client.firstName || ''} ${client.lastName || ''}`.toLowerCase().includes(filters.name.toLowerCase())) continue;
@@ -280,6 +304,9 @@ async findAllByAgent(
     totalActiveAmountBorrowed,
     totalActiveRepayment,
     activeClientsCount,
+    mora15,
+    critical20,
+    noPayment30,
     data: paginatedData,
   };
 }

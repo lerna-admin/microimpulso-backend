@@ -112,10 +112,14 @@ async findAll(
       : 0;
 
     if (status === 'active' && daysLate > 0) {
-      if (daysLate > 15) mora15++;
-      if (daysLate > 20) critical20++;
-      if (daysLate >= 30) noPayment30++;
-    }
+  if (daysLate >= 30) {
+    noPayment30++;
+  } else if (daysLate > 20) {
+    critical20++;
+  } else if (daysLate > 15) {
+    mora15++;
+  }
+}
 
     if (status === 'active') {
       totalActiveAmountBorrowed += amountBorrowed;
@@ -251,10 +255,14 @@ async findAllByAgent(
 
     // Late payment statistics (only for active loans)
     if (status === 'active' && daysLate > 0) {
-      if (daysLate > 15) mora15++;
-      if (daysLate > 20) critical20++;
-      if (daysLate >= 30) noPayment30++;
-    }
+  if (daysLate >= 30) {
+    noPayment30++;
+  } else if (daysLate > 20) {
+    critical20++;
+  } else if (daysLate > 15) {
+    mora15++;
+  }
+}
 
     const mode = `${selectedLoan.amount / 1000} x 1`;
 

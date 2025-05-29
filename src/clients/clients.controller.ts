@@ -15,6 +15,8 @@ export class ClientsController {
     @Query('name') name?: string,
     @Query('type') type?: string,
     @Query('mode') mode?: string,
+    @Query('paymentDay') paymentDay?: string,
+    
     
   ): Promise<any> {
     return this.clientsService.findAll(
@@ -25,7 +27,8 @@ export class ClientsController {
         document,
         name,
         type,
-        mode
+        mode,
+        paymentDay
       },
     );
   }
@@ -40,6 +43,8 @@ export class ClientsController {
     @Query('name') name?: string,
        @Query('type') type?: string,
     @Query('mode') mode?: string,
+    @Query('paymentDay') paymentDay?: string,
+
   ): Promise<any> {
     return this.clientsService.findAllByAgent(
       agentId,
@@ -50,7 +55,8 @@ export class ClientsController {
         document,
         name,
         type,
-        mode
+        mode,
+        paymentDay
       }
     );
   }

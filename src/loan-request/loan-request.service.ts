@@ -3,7 +3,7 @@ import { CreateLoanRequestDto } from './dto/create-loan-request.dto';
 import { UpdateLoanRequestDto } from './dto/update-loan-request.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { LoanRequest } from 'src/entities/loan-request.entity';
+import { LoanRequest, LoanRequestStatus } from 'src/entities/loan-request.entity';
 
 @Injectable()
 export class LoanRequestService {
@@ -20,43 +20,212 @@ export class LoanRequestService {
     return await this.loanRequestRepository.save(loanRequest);
   }
   
-  async findAll(): Promise<LoanRequest[]> {
-    return this.loanRequestRepository
+async findAll(
+  limit: number = 10,
+  page: number = 1,
+  filters?: {
+    id?: number;
+    amount?: number;
+    requestedAmount?: number;
+    status?: LoanRequestStatus;
+    type?: string;
+    mode?: Date;
+    mora?: number;
+    endDateAt?: Date;
+    paymentDay?: string;
+    createdAt?: Date;
+    updatedAt?: Date;
+    clientId?: number;
+    agentId?: number;
+  }
+): Promise<{
+  data: LoanRequest[];
+  totalItems: number;
+  totalPages: number;
+  page: number;
+  limit: number;
+}> {
+  const qb = this.loanRequestRepository
     .createQueryBuilder('loan')
     .leftJoinAndSelect('loan.client', 'client')
     .leftJoinAndSelect('loan.agent', 'agent')
-    .select(['loan', 'client', 'agent.id', 'agent.name', 'agent.email', 'agent.role'])
-    .getMany();
+    .select([
+      'loan',
+      'client.id',
+      'agent.id',
+      'agent.name',
+      'agent.email',
+      'agent.role',
+    ]);
+
+  if (filters?.id !== undefined) {
+    qb.andWhere('loan.id = :id', { id: filters.id });
   }
+  if (filters?.amount !== undefined) {
+    qb.andWhere('loan.amount = :amount', { amount: filters.amount });
+  }
+  if (filters?.requestedAmount !== undefined) {
+    qb.andWhere('loan.requestedAmount = :reqAmt', {
+      reqAmt: filters.requestedAmount,
+    });
+  }
+  if (filters?.status) {
+    qb.andWhere('loan.status = :status', { status: filters.status });
+  }
+  if (filters?.type) {
+    qb.andWhere('loan.type = :type', { type: filters.type });
+  }
+  if (filters?.mode) {
+    qb.andWhere('loan.mode = :mode', { mode: filters.mode });
+  }
+  if (filters?.mora !== undefined) {
+    qb.andWhere('loan.mora = :mora', { mora: filters.mora });
+  }
+  if (filters?.endDateAt) {
+    qb.andWhere('loan.endDateAt = :endDate', { endDate: filters.endDateAt });
+  }
+  if (filters?.paymentDay) {
+    qb.andWhere('loan.paymentDay = :paymentDay', {
+      paymentDay: filters.paymentDay,
+    });
+  }
+  if (filters?.createdAt) {
+    qb.andWhere('loan.createdAt = :createdAt', {
+      createdAt: filters.createdAt,
+    });
+  }
+  if (filters?.updatedAt) {
+    qb.andWhere('loan.updatedAt = :updatedAt', {
+      updatedAt: filters.updatedAt,
+    });
+  }
+  if (filters?.clientId !== undefined) {
+    qb.andWhere('loan.clientId = :clientId', { clientId: filters.clientId });
+  }
+  if (filters?.agentId !== undefined) {
+    qb.andWhere('loan.agentId = :agentId', { agentId: filters.agentId });
+  }
+
+  qb.orderBy('loan.createdAt', 'DESC')
+    .skip((page - 1) * limit)
+    .take(limit);
+
+  const [data, totalItems] = await qb.getManyAndCount();
+
+  return {
+    data,
+    totalItems,
+    totalPages: Math.ceil(totalItems / limit),
+    page,
+    limit,
+  };
+}
+
   
-// loan-request.service.ts
-async findAllByAgent(agentId: number): Promise<LoanRequest[]> {
-  return this.loanRequestRepository
+async findAllByAgent(
+  agentId: number,
+  limit: number = 10,
+  page: number = 1,
+  filters?: {
+    id?: number;
+    amount?: number;
+    requestedAmount?: number;
+    status?: LoanRequestStatus;
+    type?: string;
+    mode?: Date;
+    mora?: number;
+    endDateAt?: Date;
+    paymentDay?: string;
+    createdAt?: Date;
+    updatedAt?: Date;
+    clientId?: number;
+  }
+): Promise<{
+  data: LoanRequest[];
+  totalItems: number;
+  totalPages: number;
+  page: number;
+  limit: number;
+}> {
+  const qb = this.loanRequestRepository
     .createQueryBuilder('loan')
     .leftJoinAndSelect('loan.client', 'client')
     .leftJoinAndSelect('loan.agent',  'agent')
     .leftJoinAndSelect('loan.transactions', 'tx')
     .select([
-      // ▶ loan + client completos (incluye todas las columnas declaradas)
       'loan',
       'client',
-      // ▶ solo lo necesario del agente
       'agent.id',
       'agent.name',
       'agent.email',
       'agent.role',
-      // ▶ columnas existentes en Transaction
       'tx.id',
       'tx.amount',
-      'tx.Transactiontype',   
+      'tx.Transactiontype',
       'tx.date',
       'tx.reference',
-      'tx.daysLate'
+      'tx.daysLate',
     ])
-    .where('loan.agentId = :agentId', { agentId })
-    .orderBy('loan.createdAt', 'DESC')
-    .addOrderBy('tx.date', 'ASC')       
-    .getMany();
+    // fixed agent filter
+    .where('loan.agentId = :agentId', { agentId });
+
+  // ---------- dynamic filters on loan columns ----------
+  if (filters?.id !== undefined) {
+    qb.andWhere('loan.id = :id', { id: filters.id });
+  }
+  if (filters?.amount !== undefined) {
+    qb.andWhere('loan.amount = :amount', { amount: filters.amount });
+  }
+  if (filters?.requestedAmount !== undefined) {
+    qb.andWhere('loan.requestedAmount = :req', {
+      req: filters.requestedAmount,
+    });
+  }
+  if (filters?.status) {
+    qb.andWhere('loan.status = :status', { status: filters.status });
+  }
+  if (filters?.type) {
+    qb.andWhere('loan.type = :type', { type: filters.type });
+  }
+  if (filters?.mode) {
+    qb.andWhere('loan.mode = :mode', { mode: filters.mode });
+  }
+  if (filters?.mora !== undefined) {
+    qb.andWhere('loan.mora = :mora', { mora: filters.mora });
+  }
+  if (filters?.endDateAt) {
+    qb.andWhere('loan.endDateAt = :endDate', {
+      endDate: filters.endDateAt,
+    });
+  }
+  if (filters?.paymentDay) {
+    qb.andWhere('loan.paymentDay = :pd', { pd: filters.paymentDay });
+  }
+  if (filters?.createdAt) {
+    qb.andWhere('loan.createdAt = :ca', { ca: filters.createdAt });
+  }
+  if (filters?.updatedAt) {
+    qb.andWhere('loan.updatedAt = :ua', { ua: filters.updatedAt });
+  }
+  if (filters?.clientId !== undefined) {
+    qb.andWhere('loan.clientId = :cid', { cid: filters.clientId });
+  }
+
+  // pagination & ordering
+  qb.orderBy('loan.createdAt', 'DESC')
+    .addOrderBy('tx.date', 'ASC')
+    .skip((page - 1) * limit)
+    .take(limit);
+
+  const [data, totalItems] = await qb.getManyAndCount();
+
+  return {
+    data,
+    totalItems,
+    totalPages: Math.ceil(totalItems / limit),
+    page,
+    limit,
+  };
 }
 
 

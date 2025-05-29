@@ -42,25 +42,23 @@ async findAll(
     status?: 'active' | 'inactive' | 'rejected';
     document?: string;
     name?: string;
+    mode?: string;   // ← NEW
+    type?: string;   // ← NEW
   }
 ): Promise<any> {
   const loans = await this.loanRequestRepository.find({
-    where: {},
+    where: {},                    // keep as-is; we filter in memory below
     relations: {
       client: true,
       transactions: true,
     },
-    order: {
-      createdAt: 'DESC',
-    },
+    order: { createdAt: 'DESC' },
   });
 
   const clientMap = new Map<number, any[]>();
   for (const loan of loans) {
     const clientId = loan.client.id;
-    if (!clientMap.has(clientId)) {
-      clientMap.set(clientId, []);
-    }
+    if (!clientMap.has(clientId)) clientMap.set(clientId, []);
     clientMap.get(clientId)!.push(loan);
   }
 
@@ -73,63 +71,200 @@ async findAll(
   let critical20 = 0;
   let noPayment30 = 0;
 
-  for (const [clientId, clientLoans] of clientMap.entries()) {
+  for (const [, clientLoans] of clientMap) {
     const client = clientLoans[0].client;
 
-    const hasFunded = clientLoans.some((l) => l.status === 'funded');
-    const allCompleted = clientLoans.every((l) => l.status === 'completed');
-    const hasRejected = clientLoans.some((l) => l.status === 'rejected');
+    /* --- derive consolidated status for this client --- */
+    const hasFunded   = clientLoans.some(l => l.status === 'funded');
+    const allCompleted = clientLoans.every(l => l.status === 'completed');
+    const hasRejected = clientLoans.some(l => l.status === 'rejected');
 
     let status: 'active' | 'inactive' | 'rejected' | 'unknown' = 'unknown';
     if (hasFunded) status = 'active';
     else if (allCompleted) status = 'inactive';
     else if (hasRejected) status = 'rejected';
-
     if (status === 'unknown') continue;
 
-    const selectedLoan = clientLoans.find((l) =>
-      status === 'active' ? l.status === 'funded' :
+    const selectedLoan = clientLoans.find(l =>
+      status === 'active'   ? l.status === 'funded'    :
       status === 'inactive' ? l.status === 'completed' :
-      status === 'rejected' ? l.status === 'rejected' :
+      status === 'rejected' ? l.status === 'rejected'  :
       false
-    );
+    )!;                                       // selectedLoan is guaranteed by logic above
 
-    const totalRepayment = selectedLoan.transactions
-      .filter((t) => t.Transactiontype === 'repayment')
+    /* --- build aggregates --- */
+    const totalRepayment  = selectedLoan.transactions
+      .filter(t => t.Transactiontype === 'repayment')
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
     const amountBorrowed = selectedLoan.transactions
-      .filter((t) => t.Transactiontype === 'disbursement')
+      .filter(t => t.Transactiontype === 'disbursement')
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
     const remainingAmount = amountBorrowed - totalRepayment;
 
-    const endDate = selectedLoan.endDateAt ? new Date(selectedLoan.endDateAt) : null;
-    const now = new Date();
-
+    const now      = new Date();
+    const endDate  = selectedLoan.endDateAt ? new Date(selectedLoan.endDateAt) : null;
     const daysLate = endDate && now > endDate
       ? Math.floor((now.getTime() - endDate.getTime()) / 86_400_000)
       : 0;
 
     if (status === 'active' && daysLate > 0) {
-  if (daysLate >= 30) {
-    noPayment30++;
-  } else if (daysLate > 20) {
-    critical20++;
-  } else if (daysLate > 15) {
-    mora15++;
-  }
-}
+      if      (daysLate >= 30) noPayment30++;
+      else if (daysLate > 20)  critical20++;
+      else if (daysLate > 15)  mora15++;
+    }
 
     if (status === 'active') {
       totalActiveAmountBorrowed += amountBorrowed;
-      totalActiveRepayment += totalRepayment;
-      activeClientsCount += 1;
+      totalActiveRepayment      += totalRepayment;
+      activeClientsCount++;
     }
 
-    if (filters?.status && filters.status.toLowerCase() !== status) continue;
+    /* ---------- NEW FILTERS + existing ones ---------- */
+    if (filters?.status   && filters.status.toLowerCase() !== status) continue;
     if (filters?.document && !client.document?.includes(filters.document)) continue;
-    if (filters?.name && !`${client.firstName || ''} ${client.lastName || ''}`.toLowerCase().includes(filters.name.toLowerCase())) continue;
+    if (filters?.name     && !`${client.firstName || ''} ${client.lastName || ''}`
+                               .toLowerCase()
+                               .includes(filters.name.toLowerCase())) continue;
+    if (filters?.mode     && selectedLoan.mode !== filters.mode) continue;         // ← NEW
+    if (filters?.type     && selectedLoan.type !== filters.type) continue;         // ← NEW
+
+    allResults.push({
+      client,
+      loanRequest: {
+        id: selectedLoan.id,
+        status: selectedLoan.status,
+        amount: selectedLoan.amount,
+        requestedAmount: selectedLoan.requestedAmount,
+        createdAt: selectedLoan.createdAt,
+        updatedAt: selectedLoan.updatedAt,
+        type: selectedLoan.type,
+        mode: selectedLoan.mode,
+        mora: selectedLoan.mora,
+        endDateAt: selectedLoan.endDateAt,
+        paymentDay: selectedLoan.paymentDay,
+        transactions: selectedLoan.transactions,
+      },
+      totalRepayment,
+      amountBorrowed,
+      remainingAmount,
+      daysLate,
+      status,
+    });
+  }
+
+  const totalItems   = allResults.length;
+  const startIndex   = (page - 1) * limit;
+  const paginated    = allResults.slice(startIndex, startIndex + limit);
+
+  return {
+    page,
+    limit,
+    totalItems,
+    totalPages: Math.ceil(totalItems / limit),
+    totalActiveAmountBorrowed,
+    totalActiveRepayment,
+    activeClientsCount,
+    mora15,
+    critical20,
+    noPayment30,
+    data: paginated,
+  };
+}
+
+async findAllByAgent(
+  agentId: number,
+  limit: number = 10,
+  page: number = 1,
+  filters?: {
+    status?: 'active' | 'inactive' | 'rejected';
+    document?: string;
+    name?: string;
+    mode?: string; // NEW
+    type?: string; // NEW
+  }
+): Promise<any> {
+  const loans = await this.loanRequestRepository.find({
+    where: { agent: { id: agentId } },
+    relations: { client: true, transactions: true },
+    order: { createdAt: 'DESC' },
+  });
+
+  /* --- group loans per client --- */
+  const clientMap = new Map<number, any[]>();
+  for (const loan of loans) {
+    const id = loan.client.id;
+    if (!clientMap.has(id)) clientMap.set(id, []);
+    clientMap.get(id)!.push(loan);
+  }
+
+  const allResults: any[] = [];
+  let totalActiveAmountBorrowed = 0;
+  let totalActiveRepayment = 0;
+  let activeClientsCount = 0;
+  let mora15 = 0;
+  let critical20 = 0;
+  let noPayment30 = 0;
+
+  for (const [, clientLoans] of clientMap) {
+    const client = clientLoans[0].client;
+
+    /* consolidated status for the client */
+    const hasFunded    = clientLoans.some(l => l.status === 'funded');
+    const allCompleted = clientLoans.every(l => l.status === 'completed');
+    const hasRejected  = clientLoans.some(l => l.status === 'rejected');
+
+    let status: 'active' | 'inactive' | 'rejected' | 'unknown' = 'unknown';
+    if (hasFunded) status = 'active';
+    else if (allCompleted) status = 'inactive';
+    else if (hasRejected) status = 'rejected';
+    if (status === 'unknown') continue;
+
+    const selectedLoan = clientLoans.find(l =>
+      status === 'active'   ? l.status === 'funded'    :
+      status === 'inactive' ? l.status === 'completed' :
+      status === 'rejected' ? l.status === 'rejected'  :
+      false
+    )!;
+
+    /* aggregates */
+    const totalRepayment = selectedLoan.transactions
+      .filter(t => t.Transactiontype === 'repayment')
+      .reduce((s, t) => s + Number(t.amount), 0);
+
+    const amountBorrowed = selectedLoan.transactions
+      .filter(t => t.Transactiontype === 'disbursement')
+      .reduce((s, t) => s + Number(t.amount), 0);
+
+    const remainingAmount = amountBorrowed - totalRepayment;
+
+    const now = new Date();
+    const endDate = selectedLoan.endDateAt ? new Date(selectedLoan.endDateAt) : null;
+    const daysLate = endDate && now > endDate
+      ? Math.floor((now.getTime() - endDate.getTime()) / 86_400_000)
+      : 0;
+
+    if (status === 'active' && daysLate > 0) {
+      if      (daysLate >= 30) noPayment30++;
+      else if (daysLate > 20)  critical20++;
+      else if (daysLate > 15)  mora15++;
+    }
+
+    if (status === 'active') {
+      totalActiveAmountBorrowed += amountBorrowed;
+      totalActiveRepayment      += totalRepayment;
+      activeClientsCount++;
+    }
+
+    /* --------- filters --------- */
+    if (filters?.status   && filters.status.toLowerCase() !== status) continue;
+    if (filters?.document && !client.document?.includes(filters.document)) continue;
+    if (filters?.name     && !`${client.firstName || ''} ${client.lastName || ''}`
+                               .toLowerCase()
+                               .includes(filters.name.toLowerCase())) continue;
+    if (filters?.mode     && selectedLoan.mode !== filters.mode) continue; // NEW
+    if (filters?.type     && selectedLoan.type !== filters.type) continue; // NEW
 
     allResults.push({
       client,
@@ -156,8 +291,8 @@ async findAll(
   }
 
   const totalItems = allResults.length;
-  const startIndex = (page - 1) * limit;
-  const paginatedData = allResults.slice(startIndex, startIndex + limit);
+  const pageStart  = (page - 1) * limit;
+  const paginated  = allResults.slice(pageStart, pageStart + limit);
 
   return {
     page,
@@ -170,154 +305,10 @@ async findAll(
     mora15,
     critical20,
     noPayment30,
-    data: paginatedData,
+    data: paginated,
   };
 }
 
-
-
-
-
-async findAllByAgent(
-  agentId: number,
-  limit: number = 10,
-  page: number = 1,
-  filters?: {
-    status?: 'active' | 'inactive' | 'rejected';
-    document?: string;
-    name?: string;
-  }
-): Promise<any> {
-  const loans = await this.loanRequestRepository.find({
-    where: { agent: { id: agentId } },
-    relations: { client: true, transactions: true },
-    order: { createdAt: 'DESC' },
-  });
-
-  const clientMap = new Map<number, any[]>();
-  for (const loan of loans) {
-    const clientId = loan.client.id;
-    if (!clientMap.has(clientId)) {
-      clientMap.set(clientId, []);
-    }
-    clientMap.get(clientId)!.push(loan);
-  }
-
-  const allResults: any[] = [];
-  let totalActiveAmountBorrowed = 0;
-  let totalActiveRepayment = 0;
-  let activeClientsCount = 0;
-
-  let mora15 = 0;
-  let critical20 = 0;
-  let noPayment30 = 0;
-
-  for (const [clientId, clientLoans] of clientMap.entries()) {
-    const client = clientLoans[0].client;
-
-    const hasFunded = clientLoans.some((l) => l.status === 'funded');
-    const allCompleted = clientLoans.every((l) => l.status === 'completed');
-    const hasRejected = clientLoans.some((l) => l.status === 'rejected');
-
-    let status: 'active' | 'inactive' | 'rejected' | 'unknown' = 'unknown';
-    if (hasFunded) status = 'active';
-    else if (allCompleted) status = 'inactive';
-    else if (hasRejected) status = 'rejected';
-
-    if (status === 'unknown') continue;
-
-    const selectedLoan = clientLoans.find((l) =>
-      status === 'active'
-        ? l.status === 'funded'
-        : status === 'inactive'
-        ? l.status === 'completed'
-        : status === 'rejected'
-        ? l.status === 'rejected'
-        : false,
-    );
-
-    const totalRepayment = selectedLoan.transactions
-      .filter((t) => t.Transactiontype === 'repayment')
-      .reduce((sum, t) => sum + Number(t.amount), 0);
-
-    const amountBorrowed = selectedLoan.transactions
-      .filter((t) => t.Transactiontype === 'disbursement')
-      .reduce((sum, t) => sum + Number(t.amount), 0);
-
-    const remainingAmount = amountBorrowed - totalRepayment;
-
-    const endDate = selectedLoan.endDateAt ? new Date(selectedLoan.endDateAt) : null;
-    const now = new Date();
-
-    const daysLate = endDate && now > endDate
-      ? Math.floor((now.getTime() - endDate.getTime()) / 86_400_000)
-      : 0;
-
-    // Late payment statistics (only for active loans)
-    if (status === 'active' && daysLate > 0) {
-  if (daysLate >= 30) {
-    noPayment30++;
-  } else if (daysLate > 20) {
-    critical20++;
-  } else if (daysLate > 15) {
-    mora15++;
-  }
-}
-
-    const mode = `${selectedLoan.amount / 1000} x 1`;
-
-    if (status === 'active') {
-      totalActiveAmountBorrowed += amountBorrowed;
-      totalActiveRepayment += totalRepayment;
-      activeClientsCount += 1;
-    }
-
-    if (filters?.status && filters.status.toLowerCase() !== status) continue;
-    if (filters?.document && !client.document?.includes(filters.document)) continue;
-    if (filters?.name && !`${client.firstName || ''} ${client.lastName || ''}`.toLowerCase().includes(filters.name.toLowerCase())) continue;
-
-    allResults.push({
-      client,
-      loanRequest: {
-        id: selectedLoan.id,
-        status: selectedLoan.status,
-        amount: selectedLoan.amount,
-        requestedAmount: selectedLoan.requestedAmount,
-        createdAt: selectedLoan.createdAt,
-        updatedAt: selectedLoan.updatedAt,
-        type: selectedLoan.type,
-        mode,
-        mora: selectedLoan.mora,
-        endDateAt: selectedLoan.endDateAt,
-        paymentDay: selectedLoan.paymentDay,
-        transactions: selectedLoan.transactions,
-      },
-      totalRepayment,
-      amountBorrowed,
-      remainingAmount,
-      daysLate,
-      status,
-    });
-  }
-
-  const totalItems = allResults.length;
-  const startIndex = (page - 1) * limit;
-  const paginatedData = allResults.slice(startIndex, startIndex + limit);
-
-  return {
-    page,
-    limit,
-    totalItems,
-    totalPages: Math.ceil(totalItems / limit),
-    totalActiveAmountBorrowed,
-    totalActiveRepayment,
-    activeClientsCount,
-    mora15,
-    critical20,
-    noPayment30,
-    data: paginatedData,
-  };
-}
 
 
 

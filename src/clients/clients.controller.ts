@@ -13,6 +13,9 @@ export class ClientsController {
     @Query('status') status?: string,
     @Query('document') document?: string,
     @Query('name') name?: string,
+    @Query('type') type?: string,
+    @Query('mode') mode?: string,
+    
   ): Promise<any> {
     return this.clientsService.findAll(
       Number(limit),
@@ -21,6 +24,8 @@ export class ClientsController {
         status: status?.toLowerCase() as 'active' | 'inactive' | 'rejected',
         document,
         name,
+        type,
+        mode
       },
     );
   }
@@ -33,6 +38,8 @@ export class ClientsController {
     @Query('status') status?: string,
     @Query('document') document?: string,
     @Query('name') name?: string,
+       @Query('type') type?: string,
+    @Query('mode') mode?: string,
   ): Promise<any> {
     return this.clientsService.findAllByAgent(
       agentId,
@@ -42,6 +49,8 @@ export class ClientsController {
         status: status?.toLowerCase() as 'active' | 'inactive' | 'rejected',
         document,
         name,
+        type,
+        mode
       }
     );
   }

@@ -5,6 +5,8 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   OneToMany,
+  JoinColumn,
+  ManyToOne,
 } from 'typeorm';
 import { Client } from './client.entity';
 import { ChatMessage } from './chat-message.entity';
@@ -74,4 +76,21 @@ export class User {
    */
   @OneToMany(() => LoanRequest, (loanRequest) => loanRequest.agent)
   loanRequests: LoanRequest[];
+
+  
+  /**
+   * Relation to administrator (self-relation)
+   */
+  @ManyToOne(() => User, (user) => user.subordinates, { nullable: true })
+  @JoinColumn({ name: 'adminId' })
+  administrator: User;
+
+  @Column({ nullable: true })
+  adminId: number;
+
+  /**
+   * Reverse side: administrator has many subordinates
+   */
+  @OneToMany(() => User, (user) => user.administrator)
+  subordinates: User[];
 }

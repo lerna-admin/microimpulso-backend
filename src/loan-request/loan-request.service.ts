@@ -2,7 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { CreateLoanRequestDto } from './dto/create-loan-request.dto';
 import { UpdateLoanRequestDto } from './dto/update-loan-request.dto';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Not, Repository } from 'typeorm';
 import { LoanRequest, LoanRequestStatus } from 'src/entities/loan-request.entity';
 
 @Injectable()
@@ -228,6 +228,24 @@ async findAllByAgent(
   };
 }
 
+/** Returns the single open loan request for the client */
+  async findOpenByClientId(clientId: number) {
+    const openRequest = await this.loanRequestRepository.findOne({
+      where: {
+        client: { id: clientId },
+        status: Not(In(['completed', 'rejected'])),
+      },
+      relations: { transactions: true, client: true },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (!openRequest) {
+      throw new NotFoundException(
+        `No open loan request found for client ${clientId}`,
+      );
+    }
+    return openRequest;
+  }
 
 
 async findById(id: number): Promise<LoanRequest | null> {

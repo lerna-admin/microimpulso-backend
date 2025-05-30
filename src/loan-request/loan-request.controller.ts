@@ -58,6 +58,15 @@ export class LoanRequestController {
     return this.loanRequestService.findAll(limit, page, filters);
   }
   
+  @Get('client/:id')
+  async getOpenByClient(
+    @Param('id', ParseIntPipe) clientId: number
+  ) {
+    return this.loanRequestService.findOpenByClientId(clientId);
+  }
+  
+  
+  
   @Get('agent/:id')
   async findByAgent(
     @Param('id', ParseIntPipe) agentId: number,

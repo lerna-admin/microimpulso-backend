@@ -4,6 +4,21 @@ import { Between, Repository } from 'typeorm';
 import { LoanRequest, LoanRequestStatus } from 'src/entities/loan-request.entity';
 import { Branch } from 'src/entities/branch.entity';
 import { AnalyticsReport, AnalyticsMonthlyReport, AnalyticsYearlyReport } from './analytics.model';
+export interface FundedByBranchComparison {
+  branchId: number;
+  branchName: string;
+  currentMonthFunded: number;
+  previousMonthFunded: number;
+}
+type FundedBranchStat = {
+  branchId: number;
+  branchName: string;
+  month: string;
+  totalAmount: number;
+  count: number;
+};
+
+
 
 @Injectable()
 export class AnalyticsService {
@@ -110,4 +125,120 @@ export class AnalyticsService {
 
     return result;
   }
+
+  
+  async getFundedCurrentVsPrevious(): Promise<FundedByBranchComparison[]> {
+  const now = new Date();
+  const { start: currentStart, end: currentEnd } = this.getDateRangeOfMonth(now.getFullYear(), now.getMonth());
+
+  const previousMonth = now.getMonth() === 0 ? 11 : now.getMonth() - 1;
+  const previousYear = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+  const { start: prevStart, end: prevEnd } = this.getDateRangeOfMonth(previousYear, previousMonth);
+
+  const [currentData, previousData] = await Promise.all([
+    this.getStatsBetween(currentStart, currentEnd),
+    this.getStatsBetween(prevStart, prevEnd),
+  ]);
+
+  const result: FundedByBranchComparison[] = [];
+  const branchIds = new Set([
+    ...currentData.map(b => b.branchId),
+    ...previousData.map(b => b.branchId),
+  ]);
+
+  for (const id of branchIds) {
+    const current = currentData.find(b => b.branchId === id);
+    const previous = previousData.find(b => b.branchId === id);
+
+    result.push({
+      branchId: id,
+      branchName: current?.branchName || previous?.branchName || 'N/A',
+      currentMonthFunded: current?.statusCounts['funded'] || 0,
+      previousMonthFunded: previous?.statusCounts['funded'] || 0,
+    });
+  }
+
+  return result;
+}
+async getFundedByBranchYearly(): Promise<FundedBranchStat[]> {
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const result: FundedBranchStat[] = [];
+
+  // Loop through current and previous year
+  for (const year of [currentYear - 1, currentYear]) {
+    for (let month = 0; month < 12; month++) {
+      const start = new Date(year, month, 1);
+      const end = new Date(year, month + 1, 0, 23, 59, 59, 999);
+
+      // Fetch funded loan requests in this month
+      const requests = await this.loanRequestRepo.find({
+        where: {
+          status: LoanRequestStatus.FUNDED,
+          createdAt: Between(start, end),
+        },
+        relations: ['agent', 'agent.branch'],
+      });
+
+      // Group by branch ID
+      const grouped: Map<number, FundedBranchStat> = new Map();
+
+      for (const req of requests) {
+        const branch = req.agent?.branch;
+        if (!branch) continue;
+
+        if (!grouped.has(branch.id)) {
+          grouped.set(branch.id, {
+            branchId: branch.id,
+            branchName: branch.name,
+            month: `${year}-${String(month + 1).padStart(2, '0')}`,
+            totalAmount: 0,
+            count: 0,
+          });
+        }
+
+        const stat = grouped.get(branch.id)!;
+        stat.totalAmount += req.amount || 0;
+        stat.count += 1;
+      }
+
+      result.push(...grouped.values());
+    }
+  }
+
+  return result;
+}
+async getFundedYearlySummary(): Promise<
+  { month: string; totalAmount: number; count: number }[]
+> {
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const result: { month: string; totalAmount: number; count: number }[] = [];
+
+  for (const year of [currentYear - 1, currentYear]) {
+    for (let month = 0; month < 12; month++) {
+      const start = new Date(year, month, 1);
+      const end = new Date(year, month + 1, 0, 23, 59, 59, 999);
+
+      const requests = await this.loanRequestRepo.find({
+        where: {
+          status: LoanRequestStatus.FUNDED,
+          createdAt: Between(start, end),
+        },
+      });
+
+      const totalAmount = requests.reduce((sum, req) => sum + (req.amount || 0), 0);
+      const count = requests.length;
+
+      result.push({
+        month: `${year}-${String(month + 1).padStart(2, '0')}`,
+        totalAmount,
+        count,
+      });
+    }
+  }
+
+  return result;
+}
+
 }

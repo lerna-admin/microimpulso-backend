@@ -5,11 +5,14 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   OneToMany,
+  JoinColumn,
+  ManyToOne,
 } from 'typeorm';
 import { Client } from './client.entity';
 import { ChatMessage } from './chat-message.entity';
 import { CashFlow } from './cash-flow.entity';
 import { LoanRequest } from './loan-request.entity';
+import { Branch } from './branch.entity';
 
 /**
  * Enum for user roles
@@ -74,4 +77,28 @@ export class User {
    */
   @OneToMany(() => LoanRequest, (loanRequest) => loanRequest.agent)
   loanRequests: LoanRequest[];
+
+  
+  /**
+   * Relation to administrator (self-relation)
+   */
+  @ManyToOne(() => User, (user) => user.subordinates, { nullable: true })
+  @JoinColumn({ name: 'adminId' })
+  administrator: User;
+
+  @Column({ nullable: true })
+  adminId: number;
+
+  /**
+   * Reverse side: administrator has many subordinates
+   */
+  @OneToMany(() => User, (user) => user.administrator)
+  subordinates: User[];
+  
+@ManyToOne(() => Branch, (branch) => branch.agents, { nullable: true })
+@JoinColumn({ name: 'branchId' })
+branch: Branch;
+
+@Column({ nullable: true })
+branchId: number;
 }

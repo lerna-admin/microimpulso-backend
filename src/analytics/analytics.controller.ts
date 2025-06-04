@@ -7,32 +7,32 @@ export class AnalyticsController {
 
   // ───── Branch-specific stats ─────
 
-  @Get('branch/current-month')
+  @Get('branches/current-month')
   getCurrentMonthStats() {
     return this.analyticsService.getCurrentMonthStats();
   }
 
-  @Get('branch/monthly-history')
+  @Get('branches/monthly-history')
   getMonthlyHistory() {
     return this.analyticsService.getMonthlyHistory();
   }
 
-  @Get('branch/yearly-history')
+  @Get('branches/yearly-history')
   getYearlyHistory() {
     return this.analyticsService.getYearlyHistory();
   }
 
-  @Get('branch/funded-current-vs-previous')
+  @Get('branches/funded-current-vs-previous')
   getFundedCurrentVsPrevious() {
     return this.analyticsService.getFundedCurrentVsPrevious();
   }
 
-  @Get('branch/funded-by-branch-yearly')
+  @Get('branches/funded-by-branch-yearly')
   getFundedByBranchYearly() {
     return this.analyticsService.getFundedByBranchYearly();
   }
 
-  @Get('branch/funded-yearly')
+  @Get('branches/funded-yearly')
   getFundedYearly() {
     return this.analyticsService.getFundedYearlySummary();
   }

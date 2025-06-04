@@ -21,8 +21,8 @@ export class LoanRequestService {
   }
   async renewLoanRequest(
     loanRequestId: number,
-    penaltyAmount: number,
-    newEndDate: string
+    amount: number,
+    newDate: string
   ): Promise<LoanRequest> {
     const loan = await this.loanRequestRepository.findOne({
       where: { id: loanRequestId },
@@ -34,7 +34,7 @@ export class LoanRequestService {
     const penaltyTx = this.loanRequestRepository.manager.create('Transaction', {
       loanRequest: loan,
       Transactiontype: 'penalty',
-      amount: penaltyAmount,
+      amount: amount,
       reference: 'Renewal penalty',
       date: new Date(),
     });
@@ -42,7 +42,7 @@ export class LoanRequestService {
     
     loan.isRenewed = true;
     loan.renewedAt = new Date();
-    loan.endDateAt = new Date(newEndDate);
+    loan.endDateAt = new Date(newDate);
     
     return this.loanRequestRepository.save(loan);
   }

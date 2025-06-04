@@ -129,14 +129,20 @@ export class LoanRequestController {
   update(@Param('id') id: number, @Body() data: Partial<LoanRequest>) {
     return this.loanRequestService.update(id, data);
   }
-  
-  
+
   @Post(':id/send-contract')
   async sendContract(@Param('id') id: number) {
     return this.chatService.sendContractToClient(id);
   }
   
-  
-  
+  // src/loan-request/loan-request.controller.ts
+  @Post(':id/renew')
+  async renewLoanRequest(
+    @Param('id', ParseIntPipe) id: number,
+    @Body('amount') amount: number,
+    @Body('newDate') newDate: string
+  ) {
+    return this.loanRequestService.renewLoanRequest(id, amount, newDate);
+  }
   
 }

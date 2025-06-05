@@ -4,10 +4,12 @@ import { LoanRequestController } from './loan-request.controller';
 import { LoanRequest } from 'src/entities/loan-request.entity';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ChatModule } from '../chat/chat.module'; // ✅ Importación necesaria para usar ChatService
+import { LoanTransaction } from '../entities/transaction.entity';
+
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([LoanRequest]),
+    TypeOrmModule.forFeature([LoanRequest,LoanTransaction]),
     ChatModule, // ✅ Esto permite usar ChatService en el controller o service
   ],
   controllers: [LoanRequestController],

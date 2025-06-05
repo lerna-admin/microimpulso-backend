@@ -11,7 +11,7 @@ import {
 import { Client } from './client.entity';
 import { User } from './user.entity';
 import { ChatMessage } from './chat-message.entity';
-import { Transaction } from './transaction.entity';
+import { LoanTransaction } from './transaction.entity';
 import { Document } from './document.entity';
 
 export enum LoanRequestStatus {
@@ -32,10 +32,10 @@ export class LoanRequest {
   @OneToMany(() => ChatMessage, (msg) => msg.loanRequest)
   chatMessages: ChatMessage[];
   
-  @OneToMany(() => Transaction, txn => txn.loanRequest, {
+  @OneToMany(() => LoanTransaction, txn => txn.loanRequest, {
     cascade: true,
   })
-  transactions: Transaction[];
+  transactions: LoanTransaction[];
   
   @OneToMany(() => Document, doc => doc.loanRequest, {
     cascade: true,

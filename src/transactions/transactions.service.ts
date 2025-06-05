@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Transaction, TransactionType } from 'src/entities/transaction.entity';
+import { LoanTransaction, TransactionType } from 'src/entities/transaction.entity';
 import { LoanRequest, LoanRequestStatus } from 'src/entities/loan-request.entity';
 import { ClientStatus } from 'src/entities/client.entity';
 import { ChatService} from 'src/chat/chat.service';
@@ -22,8 +22,8 @@ function formatDateOnly(date: Date | string | null | undefined): string {
 @Injectable()
 export class TransactionsService {
   constructor(
-    @InjectRepository(Transaction)
-    private readonly transactionRepo: Repository<Transaction>,
+    @InjectRepository(LoanTransaction)
+    private readonly transactionRepo: Repository<LoanTransaction>,
     
     @InjectRepository(LoanRequest)
     private readonly loanRequestRepo: Repository<LoanRequest>,
@@ -33,7 +33,7 @@ export class TransactionsService {
     
   ) {}
   
-  async create(data: any): Promise<Transaction> {
+  async create(data: any): Promise<LoanTransaction> {
     const { loanRequestId, transactionType, amount, reference } = data;
     
     const loanRequest = await this.loanRequestRepo.findOne({
@@ -128,7 +128,7 @@ export class TransactionsService {
   
   
   
-  async findAllByLoanRequest(loanRequestId: string): Promise<Transaction[]> {
+  async findAllByLoanRequest(loanRequestId: string): Promise<LoanTransaction[]> {
     return this.transactionRepo.find({
       where: { loanRequest: { id: Number(loanRequestId)} },
       order: { date: 'DESC' },

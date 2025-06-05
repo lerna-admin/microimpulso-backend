@@ -4,7 +4,7 @@ import { UpdateLoanRequestDto } from './dto/update-loan-request.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, In, Not, Repository } from 'typeorm';
 import { LoanRequest, LoanRequestStatus } from 'src/entities/loan-request.entity';
-import { TransactionType } from 'src/entities/transaction.entity';
+import { TransactionType, LoanTransaction} from 'src/entities/transaction.entity';
 
 @Injectable()
 export class LoanRequestService {
@@ -14,39 +14,45 @@ export class LoanRequestService {
   constructor(
     @InjectRepository(LoanRequest)
     private readonly loanRequestRepository: Repository<LoanRequest>,
+    @InjectRepository(LoanTransaction)
+    private readonly transactionRepository: Repository<LoanTransaction>
   ) {}
+  
   
   async create(createLoanRequestDto: CreateLoanRequestDto): Promise<LoanRequest> {
     const loanRequest = this.loanRequestRepository.create(createLoanRequestDto);
     return await this.loanRequestRepository.save(loanRequest);
   }
   async renewLoanRequest(
-    loanRequestId: number,
-    amount: number,
-    newDate: string
-  ): Promise<LoanRequest> {
-    const loan = await this.loanRequestRepository.findOne({
-      where: { id: loanRequestId },
-      relations: ['transactions'],
-    });
-    
-    if (!loan) throw new NotFoundException('Loan request not found');
-    
-    const penaltyTx = this.loanRequestRepository.manager.create('Transaction', {
-      loanRequest: loan,
-      Transactiontype: 'penalty',
-      amount: amount,
-      reference: 'Renewal penalty',
-      date: new Date(),
-    });
-    await this.loanRequestRepository.manager.save(penaltyTx);
-    
-    loan.isRenewed = true;
-    loan.renewedAt = new Date();
-    loan.endDateAt = new Date(newDate);
-    
-    return this.loanRequestRepository.save(loan);
-  }
+  loanRequestId: number,
+  amount: number,
+  newDate: string,
+): Promise<LoanRequest> {
+  const loan = await this.loanRequestRepository.findOne({
+    where: { id: loanRequestId },
+    relations: ['transactions'],   
+  });
+
+  if (!loan) throw new NotFoundException('Loan request not found');
+
+
+  const penaltyTx = this.transactionRepository.create({
+    Transactiontype: TransactionType.PENALTY,
+    amount,
+    reference: 'Renewal penalty',
+    date: new Date(),
+  });
+
+  loan.transactions.push(penaltyTx);  
+
+  loan.isRenewed = true;
+  loan.renewedAt = new Date();
+  loan.endDateAt = new Date(newDate);
+
+  return this.loanRequestRepository.save(loan);
+}
+
+  
   
   async findAll(
     limit: number = 10,
@@ -304,80 +310,80 @@ export class LoanRequestService {
     return await this.loanRequestRepository.save(updated);
   }
   async getClosingSummary(agentId: number) {
-  const now = new Date();
-
-  const startOfDay = new Date(now);
-  startOfDay.setHours(0, 0, 0, 0);
-
-  const endOfDay = new Date(now);
-  endOfDay.setHours(23, 59, 59, 999);
-
-  const fundedLoans = await this.loanRequestRepository.find({
-    where: {
-      agent: { id: agentId },
-      status: LoanRequestStatus.FUNDED,
-    },
-    relations: ['transactions', 'client'],
-  });
-
-  let cartera = 0;
-  let cobrado = 0;
-
-  for (const loan of fundedLoans) {
-    const disbursed = loan.transactions
+    const now = new Date();
+    
+    const startOfDay = new Date(now);
+    startOfDay.setHours(0, 0, 0, 0);
+    
+    const endOfDay = new Date(now);
+    endOfDay.setHours(23, 59, 59, 999);
+    
+    const fundedLoans = await this.loanRequestRepository.find({
+      where: {
+        agent: { id: agentId },
+        status: LoanRequestStatus.FUNDED,
+      },
+      relations: ['transactions', 'client'],
+    });
+    
+    let cartera = 0;
+    let cobrado = 0;
+    
+    for (const loan of fundedLoans) {
+      const disbursed = loan.transactions
       .filter(tx => tx.Transactiontype === TransactionType.DISBURSEMENT)
       .reduce((sum, tx) => sum + Number(tx.amount), 0);
-
-    const repaid = loan.transactions
+      
+      const repaid = loan.transactions
       .filter(tx => tx.Transactiontype === TransactionType.REPAYMENT)
       .reduce((sum, tx) => sum + Number(tx.amount), 0);
-
-    cartera += disbursed - repaid;
-
-    const repaidToday = loan.transactions
+      
+      cartera += disbursed - repaid;
+      
+      const repaidToday = loan.transactions
       .filter(tx =>
         tx.Transactiontype === TransactionType.REPAYMENT &&
         tx.date >= startOfDay && tx.date <= endOfDay
       )
       .reduce((sum, tx) => sum + Number(tx.amount), 0);
-
-    cobrado += repaidToday;
+      
+      cobrado += repaidToday;
+    }
+    
+    // 🔁 Date-only comparison for renewals
+    const todayDateStr = now.toISOString().split('T')[0];
+    
+    const renewedLoans = fundedLoans.filter(loan => {
+      if (!loan.isRenewed || !loan.renewedAt) return false;
+      const renewedDateStr = new Date(loan.renewedAt).toISOString().split('T')[0];
+      return renewedDateStr === todayDateStr;
+    });
+    
+    const renewed = renewedLoans.length;
+    const valorRenovados = renewedLoans.reduce((sum, loan) => sum + Number(loan.amount), 0);
+    
+    // Nuevas solicitudes del día
+    const newLoanRequests = await this.loanRequestRepository.find({
+      where: {
+        agent: { id: agentId },
+        status : LoanRequestStatus.NEW,
+      },
+    });
+    
+    const nuevos = newLoanRequests.length;
+    const valorNuevos = newLoanRequests.reduce((sum, loan) => sum + Number(loan.amount), 0);
+    
+    return {
+      cartera,
+      cobrado,
+      clientes: fundedLoans.length,
+      renovados: renewed,
+      valorRenovados,
+      nuevos,
+      valorNuevos,
+    };
   }
-
-  // 🔁 Date-only comparison for renewals
-  const todayDateStr = now.toISOString().split('T')[0];
-
-  const renewedLoans = fundedLoans.filter(loan => {
-    if (!loan.isRenewed || !loan.renewedAt) return false;
-    const renewedDateStr = new Date(loan.renewedAt).toISOString().split('T')[0];
-    return renewedDateStr === todayDateStr;
-  });
-
-  const renewed = renewedLoans.length;
-  const valorRenovados = renewedLoans.reduce((sum, loan) => sum + Number(loan.amount), 0);
-
-  // Nuevas solicitudes del día
-  const newLoanRequests = await this.loanRequestRepository.find({
-    where: {
-      agent: { id: agentId },
-      status : LoanRequestStatus.NEW,
-    },
-  });
-
-  const nuevos = newLoanRequests.length;
-  const valorNuevos = newLoanRequests.reduce((sum, loan) => sum + Number(loan.amount), 0);
-
-  return {
-    cartera,
-    cobrado,
-    clientes: fundedLoans.length,
-    renovados: renewed,
-    valorRenovados,
-    nuevos,
-    valorNuevos,
-  };
-}
-
+  
   
   
   

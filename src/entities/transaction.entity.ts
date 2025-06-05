@@ -4,6 +4,7 @@ import {
   Column,
   ManyToOne,
   CreateDateColumn,
+  JoinColumn,
 } from 'typeorm';
 import { LoanRequest } from './loan-request.entity';
 
@@ -15,14 +16,14 @@ export enum TransactionType {
 }
 
 @Entity()
-export class Transaction {
+export class LoanTransaction {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @ManyToOne(() => LoanRequest, loan => loan.transactions, {
-    onDelete: 'CASCADE',
-  })
+  @ManyToOne(() => LoanRequest, loan => loan.transactions, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'loanRequestId' }) 
   loanRequest: LoanRequest;
+
 
   @Column({ type: 'text', enum: TransactionType })
   Transactiontype: TransactionType;
@@ -38,6 +39,4 @@ export class Transaction {
 
   @Column({ type: 'int', nullable: true })
   daysLate?: number;
-
-
 }

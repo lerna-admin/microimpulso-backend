@@ -79,7 +79,7 @@ export class LoanRequestService {
     .leftJoinAndSelect('loan.agent', 'agent')
     .select([
       'loan',
-      'client.id',
+      'client',
       'agent.id',
       'agent.name',
       'agent.email',

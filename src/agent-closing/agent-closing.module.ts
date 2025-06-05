@@ -4,6 +4,8 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AgentClosing } from '../entities/agent-closing.entity';
 import { ClosingService } from './agent-closing.service';
 import { ClosingController } from './agent-closing.controller';
+import { LoanRequestModule } from '../loan-request/loan-request.module';
+
 
 import { UsersModule } from '../users/users.module';   // ⬅️  provides UsersService
 // If your OwnAgentGuard lives in another module (AuthModule, etc.)
@@ -17,6 +19,7 @@ import { UsersModule } from '../users/users.module';   // ⬅️  provides Users
   imports: [
     TypeOrmModule.forFeature([AgentClosing]),
     UsersModule,
+    LoanRequestModule
   ],
 
   /* REST entry-point */

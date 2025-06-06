@@ -170,141 +170,155 @@ export class ClientsService {
     }
     
     
-    async findAllByAgent(
-      agentId: number,
-      limit: number = 10,
-      page: number = 1,
-      filters?: {
-        status?: 'active' | 'inactive' | 'rejected';
-        document?: string;
-        name?: string;
-        mode?: string;        // ← NEW
-        type?: string;        // ← NEW
-        paymentDay?: string;  // ← NEW
-      }
-    ): Promise<any> {
-      const loans = await this.loanRequestRepository.find({
-        where: { agent: { id: agentId } },
-        relations: { client: true, transactions: true },
-        order: { createdAt: 'DESC' },
-      });
-      
-      const clientMap = new Map<number, any[]>();
-      for (const loan of loans) {
-        const cid = loan.client.id;
-        if (!clientMap.has(cid)) clientMap.set(cid, []);
-        clientMap.get(cid)!.push(loan);
-      }
-      
-      const allResults: any[] = [];
-      let totalActiveAmountBorrowed = 0;
-      let totalActiveRepayment = 0;
-      let activeClientsCount = 0;
-      let mora15 = 0;
-      let critical20 = 0;
-      let noPayment30 = 0;
-      
-      for (const [, clientLoans] of clientMap) {
-        const client = clientLoans[0].client;
-        
-        const hasFunded    = clientLoans.some(l => l.status === 'funded');
-        const allCompleted = clientLoans.every(l => l.status === 'completed');
-        const hasRejected  = clientLoans.some(l => l.status === 'rejected');
-        
-        let status: 'active' | 'inactive' | 'rejected' | 'unknown' = 'unknown';
-        if (hasFunded) status = 'active';
-        else if (allCompleted) status = 'inactive';
-        else if (hasRejected) status = 'rejected';
-        if (status === 'unknown') continue;
-        
-        const sel = clientLoans.find(l =>
-          status === 'active'   ? l.status === 'funded'    :
-          status === 'inactive' ? l.status === 'completed' :
-          status === 'rejected' ? l.status === 'rejected'  :
-          false
-        )!;
-        
-        const totalRepayment = sel.transactions
+ async findAllByAgent(
+  agentId: number,
+  limit: number = 10,
+  page: number = 1,
+  filters?: {
+    status?: 'active' | 'inactive' | 'rejected';
+    document?: string;
+    name?: string;
+    mode?: string;
+    type?: string;
+    paymentDay?: string;
+  }
+): Promise<any> {
+  const loans = await this.loanRequestRepository.find({
+    where: { agent: { id: agentId } },
+    relations: { client: true, transactions: true },
+    order: { createdAt: 'DESC' },
+  });
+
+  const clientMap = new Map<number, any[]>();
+  for (const loan of loans) {
+    const cid = loan.client.id;
+    if (!clientMap.has(cid)) clientMap.set(cid, []);
+    clientMap.get(cid)!.push(loan);
+  }
+
+  const allResults: any[] = [];
+  let totalActiveAmountBorrowed = 0;
+  let totalActiveRepayment = 0;
+  let activeClientsCount = 0;
+  let mora15 = 0;
+  let critical20 = 0;
+  let noPayment30 = 0;
+
+  for (const [, clientLoans] of clientMap) {
+    const client = clientLoans[0].client;
+
+    const hasFunded = clientLoans.some(l => l.status === 'funded');
+    const allCompleted = clientLoans.every(l => l.status === 'completed');
+    const hasRejected = clientLoans.some(l => l.status === 'rejected');
+
+    let status: 'active' | 'inactive' | 'rejected' | 'unknown' = 'unknown';
+    if (hasFunded) status = 'active';
+    else if (allCompleted) status = 'inactive';
+    else if (hasRejected) status = 'rejected';
+    if (status === 'unknown') continue;
+
+    if (filters?.status && filters.status.toLowerCase() !== status) continue;
+    if (filters?.document && !client.document?.includes(filters.document)) continue;
+    if (
+      filters?.name &&
+      !`${client.firstName || ''} ${client.lastName || ''}`
+        .toLowerCase()
+        .includes(filters.name.toLowerCase())
+    ) continue;
+
+    const relevantLoans = clientLoans.filter(l =>
+      status === 'active' ? l.status === 'funded'
+      : status === 'inactive' ? l.status === 'completed'
+      : status === 'rejected' ? l.status === 'rejected'
+      : false
+    );
+
+    let clientTotalRepayment = 0;
+    let clientAmountBorrowed = 0;
+    let worstDaysLate = 0;
+
+    for (const loan of relevantLoans) {
+      if (filters?.mode && loan.mode !== filters.mode) continue;
+      if (filters?.type && loan.type !== filters.type) continue;
+      if (filters?.paymentDay && loan.paymentDay !== filters.paymentDay) continue;
+
+      const totalRepayment = loan.transactions
         .filter(t => t.Transactiontype === 'repayment')
         .reduce((s, t) => s + Number(t.amount), 0);
-        
-        const amountBorrowed = sel.transactions
+
+      const amountBorrowed = loan.transactions
         .filter(t => t.Transactiontype === 'disbursement')
         .reduce((s, t) => s + Number(t.amount), 0);
-        
-        const remainingAmount = amountBorrowed - totalRepayment;
-        
-        const now = new Date();
-        const endDate = sel.endDateAt ? new Date(sel.endDateAt) : null;
-        const daysLate = endDate && now > endDate
+
+      const remainingAmount = amountBorrowed - totalRepayment;
+
+      const now = new Date();
+      const endDate = loan.endDateAt ? new Date(loan.endDateAt) : null;
+      const daysLate = endDate && now > endDate
         ? Math.floor((now.getTime() - endDate.getTime()) / 86_400_000)
         : 0;
-        
-        if (status === 'active' && daysLate > 0) {
-          if      (daysLate >= 30) noPayment30++;
-          else if (daysLate > 20)  critical20++;
-          else if (daysLate > 15)  mora15++;
-        }
-        
-        if (status === 'active') {
-          totalActiveAmountBorrowed += amountBorrowed;
-          totalActiveRepayment      += totalRepayment;
-          activeClientsCount++;
-        }
-        
-        // apply all filters
-        if (filters?.status     && filters.status.toLowerCase()   !== status)         continue;
-        if (filters?.document   && !client.document?.includes(filters.document))      continue;
-        if (filters?.name       && !`${client.firstName || ''} ${client.lastName || ''}`
-          .toLowerCase()
-          .includes(filters.name.toLowerCase()))         continue;
-          if (filters?.mode       && sel.mode                         !== filters.mode)   continue;
-          if (filters?.type       && sel.type                         !== filters.type)   continue;
-          if (filters?.paymentDay && sel.paymentDay                   !== filters.paymentDay) continue;  // ← NEW
-          
-          allResults.push({
-            client,
-            loanRequest: {
-              id: sel.id,
-              status: sel.status,
-              amount: sel.amount,
-              requestedAmount: sel.requestedAmount,
-              createdAt: sel.createdAt,
-              updatedAt: sel.updatedAt,
-              type: sel.type,
-              mode: sel.mode,
-              mora: sel.mora,
-              endDateAt: sel.endDateAt,
-              paymentDay: sel.paymentDay,
-              transactions: sel.transactions,
-            },
-            totalRepayment,
-            amountBorrowed,
-            remainingAmount,
-            daysLate,
-            status,
-          });
-        }
-        
-        const totalItems = allResults.length;
-        const startIndex = (page - 1) * limit;
-        const paginated  = allResults.slice(startIndex, startIndex + limit);
-        
-        return {
-          page,
-          limit,
-          totalItems,
-          totalPages: Math.ceil(totalItems / limit),
-          totalActiveAmountBorrowed,
-          totalActiveRepayment,
-          activeClientsCount,
-          mora15,
-          critical20,
-          noPayment30,
-          data: paginated,
-        };
+
+      worstDaysLate = Math.max(worstDaysLate, daysLate);
+
+      if (status === 'active' && daysLate > 0) {
+        if (daysLate >= 30) noPayment30++;
+        else if (daysLate > 20) critical20++;
+        else if (daysLate > 15) mora15++;
       }
-      
+
+      allResults.push({
+        client,
+        loanRequest: {
+          id: loan.id,
+          status: loan.status,
+          amount: loan.amount,
+          requestedAmount: loan.requestedAmount,
+          createdAt: loan.createdAt,
+          updatedAt: loan.updatedAt,
+          type: loan.type,
+          mode: loan.mode,
+          mora: loan.mora,
+          endDateAt: loan.endDateAt,
+          paymentDay: loan.paymentDay,
+          transactions: loan.transactions,
+        },
+        totalRepayment,
+        amountBorrowed,
+        remainingAmount,
+        daysLate,
+        status,
+      });
+
+      clientTotalRepayment += totalRepayment;
+      clientAmountBorrowed += amountBorrowed;
+    }
+
+    if (status === 'active') {
+      totalActiveAmountBorrowed += clientAmountBorrowed;
+      totalActiveRepayment += clientTotalRepayment;
+      activeClientsCount++;
+    }
+  }
+
+  const totalItems = allResults.length;
+  const startIndex = (page - 1) * limit;
+  const paginated = allResults.slice(startIndex, startIndex + limit);
+
+  return {
+    page,
+    limit,
+    totalItems,
+    totalPages: Math.ceil(totalItems / limit),
+    totalActiveAmountBorrowed,
+    totalActiveRepayment,
+    activeClientsCount,
+    mora15,
+    critical20,
+    noPayment30,
+    data: paginated,
+  };
+}
+
       
       
       

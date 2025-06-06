@@ -300,13 +300,15 @@ export class ClientsService {
       const totalItems = allResults.length;
       const startIndex = (page - 1) * limit;
       const paginated = allResults.slice(startIndex, startIndex + limit);
-      
+      const totalSaldoClientes = totalActiveAmountBorrowed - totalActiveRepayment;
+
       return {
         page,
         limit,
         totalItems,
         totalPages: Math.ceil(totalItems / limit),
         totalActiveAmountBorrowed,
+        totalSaldoClientes,
         totalActiveRepayment,
         activeClientsCount,
         mora15,

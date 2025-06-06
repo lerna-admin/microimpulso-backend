@@ -9,17 +9,20 @@ export class AuthController {
   async login(@Body() body: { document: string; password: string }) {
     const { document, password } = body;
 
+    // Validate input presence
     if (!document || !password) {
       throw new BadRequestException('Document and password are required');
     }
 
+    // Attempt to validate user and generate token
     const result = await this.authService.validateUserAndGenerateToken(document, password);
 
+    // If credentials are invalid, reject request
     if (!result) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const [token] = result;
-    return { token };
+    // Return token, user role, and closing status
+    return result;
   }
 }

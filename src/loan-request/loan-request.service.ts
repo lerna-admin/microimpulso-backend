@@ -354,7 +354,7 @@ export class LoanRequestService {
       .filter(tx => tx.Transactiontype === TransactionType.REPAYMENT)
       .reduce((sum, tx) => sum + Number(tx.amount), 0);
       
-      cartera += disbursed - repaid;
+      cartera += loan.amount - repaid;
       
       const repaidToday = loan.transactions
       .filter(tx =>

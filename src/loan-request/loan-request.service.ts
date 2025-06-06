@@ -266,8 +266,8 @@ export class LoanRequestService {
   async findOpenByClientId(clientId: number) {
     const openRequest = await this.loanRequestRepository.findOne({
       where: {
-        client: { id: clientId },
-        status: Not(In(['completed', 'rejected'])),
+        client: { id: clientId }/**,
+        status: Not(In(['completed', 'rejected'])),*/
       },
       relations: { transactions: true, client: true },
       order: { createdAt: 'DESC' },

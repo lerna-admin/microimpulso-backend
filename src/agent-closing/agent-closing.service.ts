@@ -10,19 +10,19 @@ export class ClosingService {
   constructor(
     @InjectRepository(AgentClosing)
     private readonly closingRepo: Repository<AgentClosing>,
-
+    
     // Optional: pull KPIs for the daily summary
     private readonly loanRequestService: LoanRequestService,
   ) {}
-
+  
   /** ------------------------------------------------------------------
-   * Closes the day for a specific agent.
-   * Throws 400 if he already closed today.
-   * ------------------------------------------------------------------ */
+  * Closes the day for a specific agent.
+  * Throws 400 if he already closed today.
+  * ------------------------------------------------------------------ */
   async closeDay(agent: User) {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
-
+    
     // Has this agent already closed today?
     const alreadyClosed = await this.closingRepo.findOne({
       where: {
@@ -32,10 +32,10 @@ export class ClosingService {
     });
     if (alreadyClosed)
       throw new BadRequestException('Day already closed for this agent.');
-
+    
     // OPTIONAL – gather a KPI snapshot to store with the closing record
     const summary = await this.loanRequestService.getClosingSummary(agent.id);
-
+    
     const closing = this.closingRepo.create({
       agent,
       closedAt: new Date(),
@@ -45,17 +45,17 @@ export class ClosingService {
       nuevos: summary.nuevos,
       resumenJson: JSON.stringify(summary),
     });
-
+    
     return this.closingRepo.save(closing);
   }
-
+  
   /** ------------------------------------------------------------------
-   * Returns true if the agent has already closed today.
-   * ------------------------------------------------------------------ */
+  * Returns true if the agent has already closed today.
+  * ------------------------------------------------------------------ */
   async isClosedToday(agentId: number): Promise<boolean> {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
-
+    
     return !!(await this.closingRepo.findOne({
       where: {
         agent: { id: agentId },
@@ -64,4 +64,23 @@ export class ClosingService {
       select: ['id'], // fetch only the PK – faster
     }));
   }
+
+async hasClosedToday(agentId: number): Promise<boolean> {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const tomorrow = new Date(today);
+  tomorrow.setDate(today.getDate() + 1);
+
+  const record = await this.closingRepo.findOne({
+    where: {
+      agent: { id: agentId },
+      closedAt: Between(today, tomorrow),
+    },
+  });
+
+  return !!record;
+}
+
+  
 }

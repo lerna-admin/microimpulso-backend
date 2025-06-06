@@ -280,7 +280,23 @@ export class LoanRequestService {
     }
     return openRequest;
   }
-  
+   async findAllByClient(clientId: number) {
+    const openRequest = await this.loanRequestRepository.find({
+      where: {
+        client: { id: clientId }/**,
+        status: Not(In(['completed', 'rejected'])),*/
+      },
+      relations: { transactions: true, client: true, agent: true},
+      order: { createdAt: 'DESC' },
+    });
+    
+    if (!openRequest) {
+      throw new NotFoundException(
+        `No open loan request found for client ${clientId}`,
+      );
+    }
+    return openRequest;
+  }
   
   async findById(id: number): Promise<LoanRequest | null> {
     return this.loanRequestRepository

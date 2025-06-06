@@ -286,7 +286,7 @@ export class LoanRequestService {
         client: { id: clientId }/**,
         status: Not(In(['completed', 'rejected'])),*/
       },
-      relations: { transactions: true, client: true },
+      relations: { transactions: true, client: true, agent: true},
       order: { createdAt: 'DESC' },
     });
     

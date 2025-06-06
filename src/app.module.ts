@@ -11,6 +11,7 @@ import { DocumentModule } from './document/document.module';
 import { TransactionsModule } from './transactions/transactions.module';
 import { ChatService } from './chat/chat.service';
 import { AnalyticsModule } from './analytics/analytics.module';
+import { ClosingModule } from './agent-closing/agent-closing.module';
 @Module({
   imports: [
     TypeOrmModule.forRoot({
@@ -28,6 +29,7 @@ import { AnalyticsModule } from './analytics/analytics.module';
     DocumentModule,
     TransactionsModule,
     AnalyticsModule,
+    ClosingModule
   ],
   controllers: [ChatController],
 })

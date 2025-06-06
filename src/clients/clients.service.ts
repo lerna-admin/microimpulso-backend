@@ -183,12 +183,14 @@ export class ClientsService {
         paymentDay?: string;
       }
     ): Promise<any> {
+      // Fetch all loan requests assigned to the agent
       const loans = await this.loanRequestRepository.find({
         where: { agent: { id: agentId } },
         relations: { client: true, transactions: true },
         order: { createdAt: 'DESC' },
       });
       
+      // Group loans by client
       const clientMap = new Map<number, any[]>();
       for (const loan of loans) {
         const cid = loan.client.id;
@@ -204,6 +206,7 @@ export class ClientsService {
       let critical20 = 0;
       let noPayment30 = 0;
       
+      // Process each client's loan group
       for (const [, clientLoans] of clientMap) {
         const client = clientLoans[0].client;
         
@@ -217,6 +220,7 @@ export class ClientsService {
         else if (hasRejected) status = 'rejected';
         if (status === 'unknown') continue;
         
+        // Apply client-level filters
         if (filters?.status && filters.status.toLowerCase() !== status) continue;
         if (filters?.document && !client.document?.includes(filters.document)) continue;
         if (
@@ -226,6 +230,7 @@ export class ClientsService {
           .includes(filters.name.toLowerCase())
         ) continue;
         
+        // Filter relevant loans by their status
         const relevantLoans = clientLoans.filter(l =>
           status === 'active' ? l.status === 'funded'
           : status === 'inactive' ? l.status === 'completed'
@@ -237,32 +242,36 @@ export class ClientsService {
         let clientAmountBorrowed = 0;
         
         for (const loan of relevantLoans) {
+          // Apply loan-level filters
           if (filters?.mode && String(loan.mode) !== filters.mode) continue;
           if (filters?.type && loan.type !== filters.type) continue;
           if (filters?.paymentDay && loan.paymentDay !== filters.paymentDay) continue;
           
+          // Sum repayment transactions
           const totalRepayment = loan.transactions
           .filter(t => t.Transactiontype === 'repayment')
           .reduce((s, t) => s + Number(t.amount), 0);
           
-          const amountBorrowed = loan.transactions
-          .filter(t => t.Transactiontype === 'disbursement')
-          .reduce((s, t) => s + Number(t.amount), 0);
+          // Use loan.amount as base for amount borrowed
+          const amountBorrowed = Number(loan.amount);
           
           const remainingAmount = amountBorrowed - totalRepayment;
           
+          // Calculate late days
           const now = new Date();
           const endDate = loan.endDateAt ? new Date(loan.endDateAt) : null;
           const daysLate = endDate && now > endDate
           ? Math.floor((now.getTime() - endDate.getTime()) / 86_400_000)
           : 0;
           
+          // Track late loans by severity
           if (status === 'active' && daysLate > 0) {
             if (daysLate >= 30) noPayment30++;
             else if (daysLate > 20) critical20++;
             else if (daysLate > 15) mora15++;
           }
           
+          // Push loan details to response array
           allResults.push({
             client,
             loanRequest: {
@@ -286,10 +295,12 @@ export class ClientsService {
             status,
           });
           
+          // Accumulate totals
           clientTotalRepayment += totalRepayment;
           clientAmountBorrowed += amountBorrowed;
         }
         
+        // Only count totals for active clients
         if (status === 'active') {
           totalActiveAmountBorrowed += clientAmountBorrowed;
           totalActiveRepayment += clientTotalRepayment;
@@ -297,19 +308,21 @@ export class ClientsService {
         }
       }
       
+      // Compute final summary values
       const totalItems = allResults.length;
       const startIndex = (page - 1) * limit;
       const paginated = allResults.slice(startIndex, startIndex + limit);
+      
       const totalSaldoClientes = totalActiveAmountBorrowed - totalActiveRepayment;
-
+      
       return {
         page,
         limit,
         totalItems,
         totalPages: Math.ceil(totalItems / limit),
         totalActiveAmountBorrowed,
-        totalSaldoClientes,
         totalActiveRepayment,
+        totalSaldoClientes, // ✅ New: remaining balance from all active loans
         activeClientsCount,
         mora15,
         critical20,

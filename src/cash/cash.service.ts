@@ -118,60 +118,63 @@ export class CashService {
     
     
     /** Get totals for a specific day */
-
-async getDailyTotals(branchId: number, date: Date) {
-    const start = new Date(date);
-    start.setHours(0, 0, 0, 0);
-
-    const end = new Date(date);
-    end.setHours(23, 59, 59, 999);
-
-    // Obtener todos los movimientos del día
-    const movements = await this.cashRepo.find({
-        where: {
-            branch: { id: branchId },
-            createdAt: Between(start, end),
-        },
-    });
-
-    // Obtener movimientos anteriores para calcular cajaAnterior
-    const previousMovements = await this.cashRepo.find({
-        where: {
-            branch: { id: branchId },
-            createdAt: LessThan(start),
-        },
-    });
-
-    const cajaAnterior = previousMovements.reduce((total, m) => {
-        const amount = Number(m.amount);
-        if (m.type === 'ENTRADA') return total + amount;
-        if (m.type === 'SALIDA') return total - amount;
-        return total;
-    }, 0);
-
-    const entradasCaja = movements
-        .filter((m) => m.type === 'ENTRADA')
+    
+    
+    async getDailyTotals(branchId: number, date: Date) {
+        const start = new Date(date);
+        start.setHours(0, 0, 0, 0);
+        
+        const end = new Date(date);
+        end.setHours(23, 59, 59, 999);
+        
+        const movements = await this.cashRepo.find({
+            where: {
+                branch: { id: branchId },
+                createdAt: Between(start, end),
+            },
+        });
+        
+        const previousMovements = await this.cashRepo.find({
+            where: {
+                branch: { id: branchId },
+                createdAt: LessThan(start),
+            },
+        });
+        
+        const cajaAnterior = previousMovements.reduce((total, m) => {
+            const amount = Number(m.amount);
+            return m.type === 'ENTRADA' ? total + amount : total - amount;
+        }, 0);
+        
+        const entraCaja = movements
+        .filter((m) => m.category === 'ENTRADA_GERENCIA')
         .reduce((sum, m) => sum + Number(m.amount), 0);
-
-    const salidasCaja = movements
-        .filter((m) => m.type === 'SALIDA')
-        .reduce((sum, m) => sum + Number(m.amount), 0);
-
-    const totalCobros = movements
+        
+        const totalCobros = movements
         .filter((m) => m.category === 'COBRO_CLIENTE')
         .reduce((sum, m) => sum + Number(m.amount), 0);
-
-    const totalDesembolsos = movements
+        
+        const totalDesembolsos = movements
         .filter((m) => m.category === 'PRESTAMO')
         .reduce((sum, m) => sum + Number(m.amount), 0);
-
-    return {
-        cajaAnterior,
-        entradasCaja,
-        salidasCaja,
-        totalCobros,
-        totalDesembolsos,
-    };
-}
-
+        
+        const totalGastos = movements
+        .filter((m) => m.category === 'GASTO_PROVEEDOR')
+        .reduce((sum, m) => sum + Number(m.amount), 0);
+        
+        const cajaReal = cajaAnterior + entraCaja + totalCobros - totalDesembolsos - totalGastos;
+        
+        const assets = [
+            { label: "Caja anterior", value: cajaAnterior, trend: "" },
+            { label: "Entra caja", value: entraCaja, trend: "increase" },
+            { label: "Cobro", value: totalCobros, trend: "increase" },
+            { label: "Prestamos", value: totalDesembolsos, trend: "decrease" },
+            { label: "Gastos", value: totalGastos, trend: "decrease" },
+            { label: "Caja real", value: cajaReal, trend: "" },
+        ];
+        
+        return assets;
+    }
+    
+    
 }

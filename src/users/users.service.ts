@@ -70,10 +70,14 @@ export class UsersService {
     });
   }
   
-  // Find user by document
+  // Find user by document, including full branch info
   async findByDocument(document: string): Promise<User | null> {
-    return this.userRepository.findOne({ where: { document } });
+    return this.userRepository.findOne({
+      where: { document },
+      relations: { branch: true }, // Include branch details
+    });
   }
+  
   
   // Create a new user
   async create(data: Partial<User>): Promise<User> {

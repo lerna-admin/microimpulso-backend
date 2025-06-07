@@ -82,9 +82,16 @@ export class CashController {
     
     /** Daily cash summary (totals) */
     @Get('summary')
-    async getSummary(@Query('date') date: string) {
-        const mockBranchId = 1;
+    async getSummary(
+        @Query('date') date: string,
+        @Query('branchId') branchId: number,
+    ) {
+        if (!branchId) {
+            throw new BadRequestException('branchId is required');
+        }
+        
         const parsedDate = date ? new Date(date) : new Date();
-        return this.cashService.getDailyTotals(mockBranchId, parsedDate);
+        return this.cashService.getDailyTotals(branchId, parsedDate);
     }
+    
 }

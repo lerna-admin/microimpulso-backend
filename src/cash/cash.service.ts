@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { CashMovement, CashMovementType } from 'src/entities/cash-movement.entity';
 import { CashMovementCategory } from 'src/entities/cash-movement-category.enum';
 import { Between, ILike, Repository } from 'typeorm';
+import { LessThan } from 'typeorm';
 
 @Injectable()
 export class CashService {
@@ -117,41 +118,60 @@ export class CashService {
     
     
     /** Get totals for a specific day */
-    async getDailyTotals(branchId: number, date: Date) {
-        const start = new Date(date);
-        start.setHours(0, 0, 0, 0);
-        const end = new Date(date);
-        end.setHours(23, 59, 59, 999);
-        
-        const movements = await this.cashRepo.find({
-            where: {
-                branch: { id: branchId },
-                createdAt: Between(start, end),
-            },
-        });
-        
-        const entradasCaja = movements
+
+async getDailyTotals(branchId: number, date: Date) {
+    const start = new Date(date);
+    start.setHours(0, 0, 0, 0);
+
+    const end = new Date(date);
+    end.setHours(23, 59, 59, 999);
+
+    // Obtener todos los movimientos del día
+    const movements = await this.cashRepo.find({
+        where: {
+            branch: { id: branchId },
+            createdAt: Between(start, end),
+        },
+    });
+
+    // Obtener movimientos anteriores para calcular cajaAnterior
+    const previousMovements = await this.cashRepo.find({
+        where: {
+            branch: { id: branchId },
+            createdAt: LessThan(start),
+        },
+    });
+
+    const cajaAnterior = previousMovements.reduce((total, m) => {
+        const amount = Number(m.amount);
+        if (m.type === 'ENTRADA') return total + amount;
+        if (m.type === 'SALIDA') return total - amount;
+        return total;
+    }, 0);
+
+    const entradasCaja = movements
         .filter((m) => m.type === 'ENTRADA')
         .reduce((sum, m) => sum + Number(m.amount), 0);
-        
-        const salidasCaja = movements
+
+    const salidasCaja = movements
         .filter((m) => m.type === 'SALIDA')
         .reduce((sum, m) => sum + Number(m.amount), 0);
-        
-        const totalCobros = movements
+
+    const totalCobros = movements
         .filter((m) => m.category === 'COBRO_CLIENTE')
         .reduce((sum, m) => sum + Number(m.amount), 0);
-        
-        const totalDesembolsos = movements
+
+    const totalDesembolsos = movements
         .filter((m) => m.category === 'PRESTAMO')
         .reduce((sum, m) => sum + Number(m.amount), 0);
-        
-        return {
-            cajaAnterior: 0, // Puedes reemplazarlo con cálculo histórico
-            entradasCaja,
-            salidasCaja,
-            totalCobros,
-            totalDesembolsos,
-        };
-    }
+
+    return {
+        cajaAnterior,
+        entradasCaja,
+        salidasCaja,
+        totalCobros,
+        totalDesembolsos,
+    };
+}
+
 }

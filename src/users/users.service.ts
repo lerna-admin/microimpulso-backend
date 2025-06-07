@@ -59,11 +59,14 @@ async findAll(options: {
 
 
   
-  // Find user by ID
-  async findById(id: number): Promise<User | null> {
-    return this.userRepository.findOne({ where: { id } });
-  }
-  
+// Find user by ID, including branch details
+async findById(id: number): Promise<User | null> {
+  return this.userRepository.findOne({
+    where: { id },
+    relations: ['branch'], // Include full branch info
+  });
+}
+
   // Find user by document
   async findByDocument(document: string): Promise<User | null> {
     return this.userRepository.findOne({ where: { document } });

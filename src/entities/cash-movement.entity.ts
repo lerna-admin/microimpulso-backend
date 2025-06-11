@@ -18,11 +18,13 @@ export enum CashMovementType {
   SALIDA = 'SALIDA',
 }
 
+
 @Entity()
 export class CashMovement {
   @PrimaryGeneratedColumn()
   id: number;
 
+  /* ────────────────────────────── Relations ───────────────────────────── */
   @ManyToOne(() => Branch)
   @JoinColumn({ name: 'branchId' })
   branch: Branch;
@@ -31,10 +33,15 @@ export class CashMovement {
   @JoinColumn({ name: 'adminId' })
   admin: User;
 
-  @Column({ type: 'text' }) // cambio aquí
+  @ManyToOne(() => LoanTransaction, { nullable: true })
+  @JoinColumn({ name: 'transactionId' })
+  transaction?: LoanTransaction;
+
+  /* ─────────────────────────────── Fields ─────────────────────────────── */
+  @Column({ type: 'text' })
   type: CashMovementType;
 
-  @Column({ type: 'text' }) // cambio aquí
+  @Column({ type: 'text' })
   category: CashMovementCategory;
 
   @Column({ type: 'decimal', precision: 10, scale: 2 })
@@ -43,31 +50,22 @@ export class CashMovement {
   @Column({ type: 'text', nullable: true })
   reference?: string;
 
-  @ManyToOne(() => LoanTransaction, { nullable: true })
-  @JoinColumn({ name: 'transactionId' })
-  transaction?: LoanTransaction;
-
-  /* Timestamp (stored local for SQLite, UTC elsewhere) -------------- */
+  /* ───────────────────────────── Timestamp ──────────────────────────────
+   * - SQLite: store local Bogotá time with DATETIME('now','localtime').
+   * - Other engines: rely on CURRENT_TIMESTAMP and server TZ (typically UTC).
+   * - Transformer always returns the value in America/Bogota.
+   * --------------------------------------------------------------------- */
   @CreateDateColumn({
-    // Use SQLite-specific syntax in dev, generic in prod
-    type:
-      process.env.DB_TYPE === 'sqlite' ? 'datetime' : 'timestamptz',
+    type: true ? 'datetime' : undefined,
     default: () =>
-      process.env.DB_TYPE === 'sqlite'
-        ? "DATETIME('now','localtime')" // Bogotá time when using SQLite
-        : 'CURRENT_TIMESTAMP',          // relies on server TZ for other DBs
+      true ? "DATETIME('now','localtime')" : 'CURRENT_TIMESTAMP',
     transformer: {
-      // keep raw value when persisting
       to: (value: Date) => value,
-      // convert DB value to America/Bogota on fetch
       from: (value: Date | string) => {
-        const tz = 'America/Bogota';
-        const dateObj =
-          typeof value === 'string' ? new Date(value) : value;
-        return toZonedTime(dateObj, tz);
+        const dateObj = typeof value === 'string' ? new Date(value) : value;
+        return toZonedTime(dateObj, 'America/Bogota');
       },
     },
   })
   createdAt: Date;
 }
-

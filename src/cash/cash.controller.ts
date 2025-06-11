@@ -10,49 +10,49 @@ import { CashService } from './cash.service';
 
 @Controller('cash')
 export class CashController {
-    constructor(private readonly cashService: CashService) {}
-    
+    constructor(private readonly cashService: CashService) { }
+
     /** Register a manual movement */
     @Post()
     async registerMovement(@Body() body: any) {
         const { typeMovement, amount, category, description } = body;
         console.log('BODY RECIBIDO:', body);
         console.log("SI ES")
-        
+
         // Validar tipo de movimiento
         if (typeof typeMovement !== 'string') {
             throw new BadRequestException('typeMovement must be a string');
         }
-        
+
         if (!['ENTRADA', 'SALIDA'].includes(typeMovement)) {
             throw new BadRequestException('typeMovement must be either "ENTRADA" or "SALIDA"');
         }
-        
+
         // Validar amount
         if (amount === undefined || amount === null) {
             throw new BadRequestException('amount is required');
         }
-        
+
         if (typeof amount !== 'number') {
             throw new BadRequestException('amount must be a number');
         }
-        
+
         if (isNaN(amount) || amount <= 0) {
             throw new BadRequestException('amount must be a number greater than 0');
         }
-        
+
         // Validar categoría
         if (typeof category !== 'string') {
             throw new BadRequestException('category must be a string');
         }
-        
+
         if (!category.trim()) {
             throw new BadRequestException('category cannot be empty');
         }
-        
+
         const mockAdminId = 1;
         const mockBranchId = 1;
-        
+
         return this.cashService.registerMovement({
             typeMovement: typeMovement,
             amount,
@@ -62,9 +62,7 @@ export class CashController {
             branchId: mockBranchId,
         });
     }
-    
-    
-    
+
     /** Paginated list of movements with optional search */
     @Get()
     async getMovements(
@@ -72,14 +70,15 @@ export class CashController {
         @Query('limit') limit: number = 10,
         @Query('page') page: number = 1,
         @Query('search') search?: string,
+        @Query('date') date?: string,
     ) {
         if (!branchId || isNaN(Number(branchId))) {
             throw new BadRequestException('branchId is required and must be a valid number');
         }
-        
-        return this.cashService.getMovements(Number(branchId), limit, page, search);
+
+        return this.cashService.getMovements(Number(branchId), limit, page, search, date);
     }
-    
+
     /** Daily cash summary (totals) */
     @Get('summary')
     async getSummary(
@@ -89,9 +88,9 @@ export class CashController {
         if (!branchId) {
             throw new BadRequestException('branchId is required');
         }
-        
+
         const parsedDate = date ? new Date(date) : new Date();
         return this.cashService.getDailyTotals(branchId, parsedDate);
     }
-    
+
 }

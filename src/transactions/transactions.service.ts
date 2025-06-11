@@ -60,8 +60,8 @@ export class TransactionsService {
 
     // Register cash movement based on transaction type
     const tz = 'America/Bogota';
-    const nowBogota   = toZonedTime(new Date(), tz);      // 20:38 −05:00
-    const utcInstant  = fromZonedTime(nowBogota, tz);     // 20:38 convertida a UTC-0
+    const nowBogota   = toZonedTime(new Date(), tz);     
+    const utcInstant  = fromZonedTime(nowBogota, tz);    
     const movement = this.cashMovementRepo.create({
       type: transactionType === TransactionType.REPAYMENT ? CashMovementType.ENTRADA : CashMovementType.SALIDA,
       category: transactionType === TransactionType.REPAYMENT ? CashMovementCategory.COBRO_CLIENTE : CashMovementCategory.PRESTAMO,
@@ -69,8 +69,7 @@ export class TransactionsService {
       reference,
       transaction: { id: saved.id },
       admin: { id: 1 } as any,
-      branch: { id: 1 } as any,
-      createdAt:  utcInstant
+      branch: { id: 1 } as any
     });
 
     await this.cashMovementRepo.save(movement);

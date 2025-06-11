@@ -10,6 +10,8 @@ import { LoanTransaction } from './transaction.entity';
 import { User } from './user.entity';
 import { Branch } from './branch.entity';
 import { CashMovementCategory } from './cash-movement-category.enum';
+import { toZonedTime } from 'date-fns-tz';
+
 
 export enum CashMovementType {
   ENTRADA = 'ENTRADA',
@@ -45,7 +47,27 @@ export class CashMovement {
   @JoinColumn({ name: 'transactionId' })
   transaction?: LoanTransaction;
 
-  @CreateDateColumn()
+  /* Timestamp (stored local for SQLite, UTC elsewhere) -------------- */
+  @CreateDateColumn({
+    // Use SQLite-specific syntax in dev, generic in prod
+    type:
+      process.env.DB_TYPE === 'sqlite' ? 'datetime' : 'timestamptz',
+    default: () =>
+      process.env.DB_TYPE === 'sqlite'
+        ? "DATETIME('now','localtime')" // Bogotá time when using SQLite
+        : 'CURRENT_TIMESTAMP',          // relies on server TZ for other DBs
+    transformer: {
+      // keep raw value when persisting
+      to: (value: Date) => value,
+      // convert DB value to America/Bogota on fetch
+      from: (value: Date | string) => {
+        const tz = 'America/Bogota';
+        const dateObj =
+          typeof value === 'string' ? new Date(value) : value;
+        return toZonedTime(dateObj, tz);
+      },
+    },
+  })
   createdAt: Date;
 }
 

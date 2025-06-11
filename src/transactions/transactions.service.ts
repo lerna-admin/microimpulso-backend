@@ -70,7 +70,7 @@ export class TransactionsService {
       transaction: { id: saved.id },
       admin: { id: 1 } as any,
       branch: { id: 1 } as any,
-      createdAt: utcInstant
+      createdAt:  utcInstant
     });
 
     await this.cashMovementRepo.save(movement);

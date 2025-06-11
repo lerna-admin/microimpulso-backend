@@ -10,6 +10,7 @@ import { Buffer } from 'buffer';
 import { Readable } from 'stream';
 import * as sharp from 'sharp';
 import { CashMovementCategory } from 'src/entities/cash-movement-category.enum';
+import { toZonedTime, format, fromZonedTime } from 'date-fns-tz';
 
 function formatCOP(value: number | string | null | undefined): string {
   if (!value) return 'N/A';
@@ -58,6 +59,9 @@ export class TransactionsService {
     const saved = await this.transactionRepo.save(transaction);
 
     // Register cash movement based on transaction type
+    const tz = 'America/Bogota';
+    const nowBogota   = toZonedTime(new Date(), tz);      // 20:38 −05:00
+    const utcInstant  = fromZonedTime(nowBogota, tz);     // 20:38 convertida a UTC-0
     const movement = this.cashMovementRepo.create({
       type: transactionType === TransactionType.REPAYMENT ? CashMovementType.ENTRADA : CashMovementType.SALIDA,
       category: transactionType === TransactionType.REPAYMENT ? CashMovementCategory.COBRO_CLIENTE : CashMovementCategory.PRESTAMO,
@@ -66,6 +70,7 @@ export class TransactionsService {
       transaction: { id: saved.id },
       admin: { id: 1 } as any,
       branch: { id: 1 } as any,
+      createdAt: utcInstant
     });
 
     await this.cashMovementRepo.save(movement);

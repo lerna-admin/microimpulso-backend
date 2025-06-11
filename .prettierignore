@@ -1,0 +1,9 @@
+# Ignora todo el proyecto
+*
+
+# O ignora solo ciertas carpetas o archivos:
+node_modules
+dist
+build
+src/some-folder/
+src/legacy-code.js

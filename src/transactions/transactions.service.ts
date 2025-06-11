@@ -34,7 +34,7 @@ export class TransactionsService {
     private readonly cashMovementRepo: Repository<CashMovement>,
 
     private readonly chatService: ChatService,
-  ) {}
+  ) { }
 
   async create(data: any): Promise<LoanTransaction> {
     const { loanRequestId, transactionType, amount, reference } = data;
@@ -59,8 +59,8 @@ export class TransactionsService {
 
     // Register cash movement based on transaction type
     const movement = this.cashMovementRepo.create({
-      type: transactionType === TransactionType.REPAYMENT ? CashMovementType.ENTRADA: CashMovementType.SALIDA,
-      category: transactionType === TransactionType.REPAYMENT ? CashMovementCategory.PRESTAMO : CashMovementCategory.COBRO_CLIENTE,
+      type: transactionType === TransactionType.REPAYMENT ? CashMovementType.ENTRADA : CashMovementType.SALIDA,
+      category: transactionType === TransactionType.REPAYMENT ? CashMovementCategory.COBRO_CLIENTE : CashMovementCategory.PRESTAMO,
       amount,
       reference,
       transaction: { id: saved.id },

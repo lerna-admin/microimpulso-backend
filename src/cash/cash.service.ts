@@ -222,7 +222,7 @@ export class CashService {
             .andWhere('tx.Transactiontype = :type', {
                 type: TransactionType.DISBURSEMENT,
             })
-            .andWhere('tx.createdAt < :start', { start })
+            .andWhere('tx.date < :start', { start })
             .andWhere('loan.clientId IN (:...ids)', { ids: clientIds })
             .distinct(true)
             .getRawMany();

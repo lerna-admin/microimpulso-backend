@@ -257,11 +257,9 @@ export class CashService {
             { label: 'Gastos',        value: totalGastos,    trend: 'decrease' },
             { label: 'Caja real',     value: cajaReal,       trend: '' },
             
-            { label: 'Renovados (valor)', value: totalRenovados, trend: 'increase' },
-            { label: 'Renovados (cantidad)', value: countRenovados, trend: 'increase' },
+            { label: 'Renovados', value: totalRenovados, trend: 'increase', amount:countRenovados },
             
-            { label: 'Nuevos (valor)', value: totalNuevos,    trend: 'increase' },
-            { label: 'Nuevos (cantidad)', value: countNuevos,    trend: 'increase' },
+            { label: 'Nuevos', value: totalNuevos,    trend: 'increase', amount: countNuevos },
         ];
     }
 }

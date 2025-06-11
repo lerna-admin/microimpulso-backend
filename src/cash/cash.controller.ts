@@ -89,7 +89,7 @@ export class CashController {
             throw new BadRequestException('branchId is required');
         }
 
-        const parsedDate = date ? new Date(date) : new Date();
+        const parsedDate = date;
         return this.cashService.getDailyTotals(branchId, parsedDate);
     }
 

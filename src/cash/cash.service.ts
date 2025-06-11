@@ -4,7 +4,7 @@ import { CashMovement, CashMovementType } from 'src/entities/cash-movement.entit
 import { CashMovementCategory } from 'src/entities/cash-movement-category.enum';
 import { Between, ILike, Repository } from 'typeorm';
 import { LessThan } from 'typeorm';
-import { startOfDay, endOfDay } from 'date-fns';
+import { startOfDay, endOfDay, parseISO } from 'date-fns';
 import { toZonedTime, fromZonedTime } from 'date-fns-tz';
 import { AgentClosing } from 'src/entities/agent-closing.entity';
 
@@ -140,32 +140,35 @@ export class CashService {
     /** Get totals for a specific day */
     
     
+    
     /**
     * Returns the cash/KPI dashboard for a branch on a given date.
-    * The function guarantees that:
-    *   cajaAnterior(D+1) === cajaReal(D)
-    * by computing cajaReal with the generic net (entradas-salidas)
-    * instead of a subset of categories.
+    * Works with either a Date instance or an ISO-date string coming from the frontend.
     */
-    async getDailyTotals(branchId: number, date: Date) {
-        /* -----------------------------------------------------------
-        * 1️⃣  Build [start, end] for the requested date in America/Bogota
-        * ----------------------------------------------------------- */
+    async getDailyTotals(branchId: number, rawDate: Date | string) {
+        /* ────────────────────────────────────────────────────────────────
+        * 1️⃣ Normalize input → Date in America/Bogota
+        * ---------------------------------------------------------------- */
         const tz = 'America/Bogota';
         
-        // interpret the input date in the target zone
-        const zoned = toZonedTime(date, tz);
+        // Convert string to Date if needed
+        const asDate =
+        typeof rawDate === 'string' ? parseISO(rawDate) : rawDate;
         
-        // get 00:00 and 23:59 **in that zone**
+        // Interpret the given date in Bogotá timezone
+        const zoned = toZonedTime(asDate, tz);
+        
+        // Local boundaries 00:00 and 23:59
         const zonedStart = startOfDay(zoned);
         const zonedEnd   = endOfDay(zoned);
         
-        // convert those instants back to UTC for DB filtering
+        // Convert boundaries back to UTC for DB filtering
         const start = fromZonedTime(zonedStart, tz);
         const end   = fromZonedTime(zonedEnd,   tz);
-        /* -----------------------------------------------------------
-        * 2️⃣  Movements for today and before today
-        * ----------------------------------------------------------- */
+        
+        /* ────────────────────────────────────────────────────────────────
+        * 2️⃣ Fetch movements
+        * ---------------------------------------------------------------- */
         const [movements, previousMovements] = await Promise.all([
             this.cashRepo.find({
                 where: { branch: { id: branchId }, createdAt: Between(start, end) },
@@ -175,44 +178,43 @@ export class CashService {
             }),
         ]);
         
-        /* -----------------------------------------------------------
-        * 3️⃣  Opening cash = net of all past movements
-        * ----------------------------------------------------------- */
-        const cajaAnterior = previousMovements.reduce((total, m) => {
-            const amount = Number(m.amount);
-            return m.type === 'ENTRADA' ? total + amount : total - amount;
+        /* ────────────────────────────────────────────────────────────────
+        * 3️⃣ Opening cash
+        * ---------------------------------------------------------------- */
+        const cajaAnterior = previousMovements.reduce((tot, m) => {
+            const amt = Number(m.amount);
+            return m.type === 'ENTRADA' ? tot + amt : tot - amt;
         }, 0);
         
-        /* -----------------------------------------------------------
-        * 4️⃣  Generic net for today (all entradas vs salidas)
-        * ----------------------------------------------------------- */
+        /* ────────────────────────────────────────────────────────────────
+        * 4️⃣ Net for the day
+        * ---------------------------------------------------------------- */
         const totalEntradas = movements
         .filter((m) => m.type === 'ENTRADA')
-        .reduce((sum, m) => sum + Number(m.amount), 0);
+        .reduce((s, m) => s + Number(m.amount), 0);
         
         const totalSalidas = movements
         .filter((m) => m.type === 'SALIDA')
-        .reduce((sum, m) => sum + Number(m.amount), 0);
+        .reduce((s, m) => s + Number(m.amount), 0);
         
         const cajaReal = cajaAnterior + totalEntradas - totalSalidas;
         
-        /* -----------------------------------------------------------
-        * 5️⃣  Optional: category breakdown for UI KPIs
-        * ----------------------------------------------------------- */
+        /* ────────────────────────────────────────────────────────────────
+        * 5️⃣ Category breakdown
+        * ---------------------------------------------------------------- */
         const byCategory = (cat: string) =>
             movements
         .filter((m) => m.category === cat)
-        .reduce((sum, m) => sum + Number(m.amount), 0);
+        .reduce((s, m) => s + Number(m.amount), 0);
         
         const entraCaja        = byCategory('ENTRADA_GERENCIA');
         const totalCobros      = byCategory('COBRO_CLIENTE');
         const totalDesembolsos = byCategory('PRESTAMO');
         const totalGastos      = byCategory('GASTO_PROVEEDOR');
         
-        /* -----------------------------------------------------------
-        * 6️⃣  KPIs from AgentClosing (renovados / nuevos)
-        *      Requires closingRepo injected in constructor
-        * ----------------------------------------------------------- */
+        /* ────────────────────────────────────────────────────────────────
+        * 6️⃣ KPIs from AgentClosing
+        * ---------------------------------------------------------------- */
         const closings = await this.closingRepo.find({
             where: {
                 agent: { branch: { id: branchId } },
@@ -222,17 +224,17 @@ export class CashService {
         });
         
         const totalRenovados = closings.reduce(
-            (sum, c) => sum + Number(c.renovados ?? 0),
+            (s, c) => s + Number(c.renovados ?? 0),
             0,
         );
         const totalNuevos = closings.reduce(
-            (sum, c) => sum + Number(c.nuevos ?? 0),
+            (s, c) => s + Number(c.nuevos ?? 0),
             0,
         );
         
-        /* -----------------------------------------------------------
-        * 7️⃣  Final dashboard array returned to the caller
-        * ----------------------------------------------------------- */
+        /* ────────────────────────────────────────────────────────────────
+        * 7️⃣ Final dashboard
+        * ---------------------------------------------------------------- */
         return [
             { label: 'Caja anterior', value: cajaAnterior,   trend: '' },
             { label: 'Entra caja',    value: entraCaja,      trend: 'increase' },
@@ -244,5 +246,4 @@ export class CashService {
             { label: 'Nuevos',        value: totalNuevos,    trend: 'increase' },
         ];
     }
-    
 }

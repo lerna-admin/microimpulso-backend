@@ -145,15 +145,15 @@ export class CashService {
     /**
     * Returns the cash/KPI dashboard for a branch on a given date.
     * “Renovados” and “Nuevos” are computed on-the-fly from DISBURSEMENT
-    * transactions, based on the requestedAmount field.
+    * transactions, using requestedAmount for value KPIs plus a count KPI.
     */
     async getDailyTotals(branchId: number, rawDate: Date | string) {
         /* ───── 1. Build [start, end] in America/Bogota ───── */
         const tz = 'America/Bogota';
-        const asDate = typeof rawDate === 'string' ? parseISO(rawDate) : rawDate;
-        const zoned       = toZonedTime(asDate, tz);
-        const zonedStart  = startOfDay(zoned);
-        const zonedEnd    = endOfDay(zoned);
+        const asDate     = typeof rawDate === 'string' ? parseISO(rawDate) : rawDate;
+        const zoned      = toZonedTime(asDate, tz);
+        const zonedStart = startOfDay(zoned);
+        const zonedEnd   = endOfDay(zoned);
         const start = fromZonedTime(zonedStart, tz);
         const end   = fromZonedTime(zonedEnd,   tz);
         
@@ -169,18 +169,18 @@ export class CashService {
         
         /* ───── 3. Opening cash ───── */
         const cajaAnterior = previousMovements.reduce((tot, m) => {
-            const amt = Number(m.amount);
+            const amt = +m.amount;
             return m.type === 'ENTRADA' ? tot + amt : tot - amt;
         }, 0);
         
         /* ───── 4. Net for the day ───── */
         const totalEntradas = movements
         .filter((m) => m.type === 'ENTRADA')
-        .reduce((s, m) => s + Number(m.amount), 0);
+        .reduce((s, m) => s + +m.amount, 0);
         
         const totalSalidas = movements
         .filter((m) => m.type === 'SALIDA')
-        .reduce((s, m) => s + Number(m.amount), 0);
+        .reduce((s, m) => s + +m.amount, 0);
         
         const cajaReal = cajaAnterior + totalEntradas - totalSalidas;
         
@@ -188,15 +188,14 @@ export class CashService {
         const byCategory = (cat: string) =>
             movements
         .filter((m) => m.category === cat)
-        .reduce((s, m) => s + Number(m.amount), 0);
+        .reduce((s, m) => s + +m.amount, 0);
         
         const entraCaja        = byCategory('ENTRADA_GERENCIA');
         const totalCobros      = byCategory('COBRO_CLIENTE');
         const totalDesembolsos = byCategory('PRESTAMO');
         const totalGastos      = byCategory('GASTO_PROVEEDOR');
         
-        /* ───── 6. KPIs “Renovados” & “Nuevos” from transactions ───── */
-        // 6.1 Fetch all DISBURSEMENT transactions for the branch on that date
+        /* ───── 6. KPIs from DISBURSEMENT transactions ───── */
         const disbursements = await this.loanTransactionRepo.find({
             where: {
                 Transactiontype: TransactionType.DISBURSEMENT,
@@ -206,10 +205,9 @@ export class CashService {
             relations: { loanRequest: { client: true, agent: { branch: true } } },
         });
         
-        // 6.2 Gather unique client IDs
         const clientIds = disbursements.map((tx) => tx.loanRequest.client.id);
         
-        // 6.3 Which of those clients already had a funded loan before today?
+        // Fetch clients with previous disbursements (before 'start')
         const previousClientIds: number[] = [];
         if (clientIds.length) {
             const prev = await this.loanTransactionRepo
@@ -226,21 +224,27 @@ export class CashService {
             .andWhere('loan.clientId IN (:...ids)', { ids: clientIds })
             .distinct(true)
             .getRawMany();
-            previousClientIds.push(...prev.map((r) => Number(r.clientId)));
+            previousClientIds.push(...prev.map((r) => +r.clientId));
         }
         const prevSet = new Set(previousClientIds);
         
-        // 6.4 Sum requestedAmount for renewed vs new loans
+        /* Sum & count KPIs */
         let totalRenovados = 0;
         let totalNuevos = 0;
+        let countRenovados = 0;
+        let countNuevos = 0;
         
         for (const tx of disbursements) {
-            const req: LoanRequest = tx.loanRequest;
-            const value = Number(req.requestedAmount ?? req.amount);
-            if (prevSet.has(req.client.id)) {
-                totalRenovados += value;
+            const req  = tx.loanRequest as LoanRequest;
+            const amt  = +(req.requestedAmount ?? req.amount);
+            const isRenewed = prevSet.has(req.client.id);
+            
+            if (isRenewed) {
+                totalRenovados += amt;
+                countRenovados += 1;
             } else {
-                totalNuevos += value;
+                totalNuevos += amt;
+                countNuevos += 1;
             }
         }
         
@@ -252,8 +256,12 @@ export class CashService {
             { label: 'Préstamos',     value: totalDesembolsos, trend: 'decrease' },
             { label: 'Gastos',        value: totalGastos,    trend: 'decrease' },
             { label: 'Caja real',     value: cajaReal,       trend: '' },
-            { label: 'Renovados',     value: totalRenovados, trend: 'increase' },
-            { label: 'Nuevos',        value: totalNuevos,    trend: 'increase' },
+            
+            { label: 'Renovados (valor)', value: totalRenovados, trend: 'increase' },
+            { label: 'Renovados (cantidad)', value: countRenovados, trend: 'increase' },
+            
+            { label: 'Nuevos (valor)', value: totalNuevos,    trend: 'increase' },
+            { label: 'Nuevos (cantidad)', value: countNuevos,    trend: 'increase' },
         ];
     }
 }

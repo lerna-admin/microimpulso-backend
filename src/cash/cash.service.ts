@@ -214,32 +214,39 @@ export class CashService {
             relations: { loanRequest: { client: true, agent: { branch: true } } },
         });
         
-        /* Sum & count KPIs ------------------------------------------------ */
-        const totalRenovados  = penalties.reduce(
-            (s, p) => s + +(p.amount ?? p.loanRequest.requestedAmount ?? 0),
+        /* Build unique renewed requests for today */
+        const renewedByRequest = new Map<number, LoanRequest>();
+        for (const pen of penalties) {
+            const req = pen.loanRequest as LoanRequest;
+            if (!renewedByRequest.has(req.id)) {
+                renewedByRequest.set(req.id, req);
+            }
+        }
+        
+        const totalRenovados = [...renewedByRequest.values()].reduce(
+            (sum, req) => sum + +(req.requestedAmount ?? req.amount ?? 0),
             0,
         );
-        const countRenovados = penalties.length;
+        const countRenovados = renewedByRequest.size;
         
-        /* “Nuevos” = first-time disbursements (no previous DISBURSEMENT,       */
-        /*           and that did **not** renew today)                          */
-        const clientIds          = disbursements.map((tx) => tx.loanRequest.client.id);
-        const prevClientIds      = clientIds.length
+        /* For "Nuevos", use set of renewed requests */
+        const clientIds = disbursements.map((tx) => tx.loanRequest.client.id);
+        const prevClientIds = clientIds.length
         ? await this.loanTransactionRepo
         .createQueryBuilder('tx')
         .select('loan.clientId', 'clientId')
         .innerJoin('tx.loanRequest', 'loan')
-        .innerJoin('loan.agent',     'agent')
+        .innerJoin('loan.agent', 'agent')
         .where('agent.branchId = :branchId', { branchId })
         .andWhere('tx.Transactiontype = :type', { type: TransactionType.DISBURSEMENT })
-        .andWhere('tx.date < :start',          { start })
+        .andWhere('tx.date < :start', { start })
         .andWhere('loan.clientId IN (:...ids)', { ids: clientIds })
         .distinct(true)
         .getRawMany()
         .then((rows) => rows.map((r) => +r.clientId))
         : [];
         
-        const renewedToday = new Set(penalties.map((p) => p.loanRequest.client.id));
+        const renewedToday = new Set([...renewedByRequest.keys()]);
         const previousSet  = new Set(prevClientIds);
         
         let totalNuevos  = 0;
@@ -253,11 +260,12 @@ export class CashService {
             /** A “nuevo” is a client
             *  ▸ without past DISBURSEMENT
             *  ▸ and who did not renew today (no PENALTY today)                 */
-            if (!previousSet.has(clientId) && !renewedToday.has(clientId)) {
+            if (!previousSet.has(clientId) && !renewedToday.has(req.id)) {
                 totalNuevos += amt;
                 countNuevos += 1;
             }
         }
+        
         
         
         /* ───── 7. Final dashboard ───── */

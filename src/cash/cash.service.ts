@@ -195,7 +195,7 @@ export class CashService {
         const totalDesembolsos = byCategory('PRESTAMO');
         const totalGastos      = byCategory('GASTO_PROVEEDOR');
         
-        /* ───── 6. KPIs from DISBURSEMENT transactions ───── */
+        /* ───── 6. KPIs ───── */
         const disbursements = await this.loanTransactionRepo.find({
             where: {
                 Transactiontype: TransactionType.DISBURSEMENT,
@@ -205,48 +205,60 @@ export class CashService {
             relations: { loanRequest: { client: true, agent: { branch: true } } },
         });
         
-        const clientIds = disbursements.map((tx) => tx.loanRequest.client.id);
+        const penalties = await this.loanTransactionRepo.find({
+            where: {
+                Transactiontype: TransactionType.PENALTY,
+                date: Between(start, end),
+                loanRequest: { agent: { branch: { id: branchId } } },
+            },
+            relations: { loanRequest: { client: true, agent: { branch: true } } },
+        });
         
-        // Fetch clients with previous disbursements (before 'start')
-        const previousClientIds: number[] = [];
-        if (clientIds.length) {
-            const prev = await this.loanTransactionRepo
-            .createQueryBuilder('tx')
-            .select('loan.clientId', 'clientId')
-            .innerJoin('tx.loanRequest', 'loan')
-            .innerJoin('loan.agent', 'agent')
-            .innerJoin('agent.branch', 'branch')
-            .where('branch.id = :branchId', { branchId })
-            .andWhere('tx.Transactiontype = :type', {
-                type: TransactionType.DISBURSEMENT,
-            })
-            .andWhere('tx.date < :start', { start })
-            .andWhere('loan.clientId IN (:...ids)', { ids: clientIds })
-            .distinct(true)
-            .getRawMany();
-            previousClientIds.push(...prev.map((r) => +r.clientId));
-        }
-        const prevSet = new Set(previousClientIds);
+        /* Sum & count KPIs ------------------------------------------------ */
+        const totalRenovados  = penalties.reduce(
+            (s, p) => s + +(p.amount ?? p.loanRequest.requestedAmount ?? 0),
+            0,
+        );
+        const countRenovados = penalties.length;
         
-        /* Sum & count KPIs */
-        let totalRenovados = 0;
-        let totalNuevos = 0;
-        let countRenovados = 0;
-        let countNuevos = 0;
+        /* “Nuevos” = first-time disbursements (no previous DISBURSEMENT,       */
+        /*           and that did **not** renew today)                          */
+        const clientIds          = disbursements.map((tx) => tx.loanRequest.client.id);
+        const prevClientIds      = clientIds.length
+        ? await this.loanTransactionRepo
+        .createQueryBuilder('tx')
+        .select('loan.clientId', 'clientId')
+        .innerJoin('tx.loanRequest', 'loan')
+        .innerJoin('loan.agent',     'agent')
+        .where('agent.branchId = :branchId', { branchId })
+        .andWhere('tx.Transactiontype = :type', { type: TransactionType.DISBURSEMENT })
+        .andWhere('tx.date < :start',          { start })
+        .andWhere('loan.clientId IN (:...ids)', { ids: clientIds })
+        .distinct(true)
+        .getRawMany()
+        .then((rows) => rows.map((r) => +r.clientId))
+        : [];
+        
+        const renewedToday = new Set(penalties.map((p) => p.loanRequest.client.id));
+        const previousSet  = new Set(prevClientIds);
+        
+        let totalNuevos  = 0;
+        let countNuevos  = 0;
         
         for (const tx of disbursements) {
-            const req  = tx.loanRequest as LoanRequest;
-            const amt  = +(req.requestedAmount ?? req.amount);
-            const isRenewed = prevSet.has(req.client.id);
+            const req = tx.loanRequest as LoanRequest;
+            const amt = +(req.requestedAmount ?? req.amount);
+            const clientId = req.client.id;
             
-            if (isRenewed) {
-                totalRenovados += amt;
-                countRenovados += 1;
-            } else {
+            /** A “nuevo” is a client
+            *  ▸ without past DISBURSEMENT
+            *  ▸ and who did not renew today (no PENALTY today)                 */
+            if (!previousSet.has(clientId) && !renewedToday.has(clientId)) {
                 totalNuevos += amt;
                 countNuevos += 1;
             }
         }
+        
         
         /* ───── 7. Final dashboard ───── */
         return [

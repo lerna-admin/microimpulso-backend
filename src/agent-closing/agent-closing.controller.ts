@@ -6,6 +6,7 @@ import {
   ParseIntPipe,
   UseGuards,
   NotFoundException,
+  Delete,
 } from '@nestjs/common';
 
 import { ClosingService } from './agent-closing.service';
@@ -37,5 +38,15 @@ export class ClosingController {
       throw new NotFoundException(`Agent with ID ${agentId} not found`);
     }
     return this.closingService.closeDay(agent);             // returns AgentClosing
+  }
+  /* ================================================================
+   * DELETE /closing/agent/:id/close-day  → remove today’s closing
+   *   • Only exposed in the admin UI, so no role guard here.
+   * ================================================================ */
+  @Delete('agent/:id/close-day')
+  async reopenDay(@Param('id', ParseIntPipe) agentId: number) {
+    const agent = await this.usersService.findById(agentId);
+    if (!agent) throw new NotFoundException(`Agent ${agentId} not found`);
+    return this.closingService.reopenDay(agent);             // AgentClosing
   }
 }

@@ -73,7 +73,7 @@ export class UsersService {
   async findById(id: number): Promise<User | null> {
     return this.userRepository.findOne({
       where: { id },
-      relations: ['branch'], // Include full branch info
+      relations: ['branch', 'permissions'], // Include full branch info
     });
   }
   

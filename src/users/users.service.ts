@@ -20,7 +20,7 @@ export class UsersService {
       document?: string;
       role?: UserRole;
       adminId?: number;
-      branchId?: number;
+      branchId?: string;
       
     };
   }): Promise<{ data: User[]; total: number; page: number; limit: number }> {

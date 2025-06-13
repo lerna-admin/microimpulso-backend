@@ -10,6 +10,7 @@ import { TransactionsModule } from './transactions/transactions.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { ClosingModule } from './agent-closing/agent-closing.module';
 import { CashModule } from './cash/cash.module';
+import { PermissionModule } from './permissions/permissions.module';
 @Module({
   imports: [
     TypeOrmModule.forRoot({
@@ -28,6 +29,7 @@ import { CashModule } from './cash/cash.module';
     AnalyticsModule,
     ClosingModule,
     CashModule,
+    PermissionModule
   ],
 })
 export class AppModule {}

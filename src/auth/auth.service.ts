@@ -19,7 +19,7 @@ export class AuthService {
   async validateUserAndGenerateToken(
     document: string,
     password: string
-  ): Promise<{ token: string; role: string; branch:any, closedRoute: boolean } | null> {
+  ): Promise<{ token: string; role: string; branch:any, closedRoute: boolean, permission:any } | null> {
     const user = await this.usersService.findByDocument(document);
 
     // Basic password validation (replace with bcrypt.compare if using hashes)
@@ -45,6 +45,7 @@ export class AuthService {
       role: user.role,
       branch: user.branch,
       closedRoute,
+      permission : user.permissions,
     };
   }
 }

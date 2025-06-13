@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User, UserRole} from '../entities/user.entity';
+import { truncate } from 'fs';
 
 @Injectable()
 export class UsersService {
@@ -74,7 +75,7 @@ export class UsersService {
   async findByDocument(document: string): Promise<User | null> {
     return this.userRepository.findOne({
       where: { document },
-      relations: { branch: true }, // Include branch details
+      relations: { branch: true, permissions: true }, // Include branch details
     });
   }
   

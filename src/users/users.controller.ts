@@ -15,9 +15,10 @@ async findAll(
   @Query('document') document?: string,
   @Query('role') role?: UserRole,
   @Query('adminId') adminIdRaw?: string,
+    @Query('branchId') branchId?: string,
+
 ): Promise<{ data: User[]; total: number; page: number; limit: number }> {
   const adminId = adminIdRaw && !isNaN(Number(adminIdRaw)) ? Number(adminIdRaw) : undefined;
-
   return this.usersService.findAll({
     page,
     limit,
@@ -27,6 +28,7 @@ async findAll(
       document,
       role,
       adminId,
+      branchId
     },
   });
 }

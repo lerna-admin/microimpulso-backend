@@ -20,6 +20,8 @@ export class UsersService {
       document?: string;
       role?: UserRole;
       adminId?: number;
+      branchId?: number;
+      
     };
   }): Promise<{ data: User[]; total: number; page: number; limit: number }> {
     const { page, limit, filters } = options;
@@ -52,6 +54,10 @@ export class UsersService {
     
     if (filters.adminId !== undefined) {
       query.andWhere('user.adminId = :adminId', { adminId: filters.adminId });
+    }
+
+    if (filters.branchId !== undefined) {
+      query.andWhere('user.branchId = :branchId', { branchId: filters.branchId });
     }
     
     query.skip((page - 1) * limit).take(limit);

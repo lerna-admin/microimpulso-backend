@@ -1,5 +1,5 @@
 // permissions.controller.ts
-import { Controller, Post, Param, Body, Get } from '@nestjs/common';
+import { Controller, Post, Param, Body, Get, BadRequestException } from '@nestjs/common';
 import { PermissionService } from './permissions.service';
 
 @Controller('permission')
@@ -7,9 +7,15 @@ export class PermissionController {
     constructor(private readonly permissionService: PermissionService) {}
     
     @Post('create')
-    async createPermission(@Body('name') name: string) {
-        return this.permissionService.createPermission(name);
+    async createPermission(
+        @Body('name') name: string,
+        @Body('description') description?: string,
+        @Body('label') label?: string,
+    ) {
+        if (!name) throw new BadRequestException('Permission name is required');
+        return this.permissionService.createPermission(name, description, label);
     }
+    
     
     @Post('assign/:userId/:permissionId')
     async assignPermission(
@@ -34,5 +40,5 @@ export class PermissionController {
     async getPermissions() {
         return this.permissionService.getPermissions();
     }
-
+    
 }

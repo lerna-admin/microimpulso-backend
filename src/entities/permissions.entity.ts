@@ -11,7 +11,11 @@ export class Permission {
 
   @Column({ nullable: true })
   description?: string; // Optional: Human-readable description
+  
+  @Column({ nullable: true })
+  label?: string; // Optional: Human-readable name
 
   @ManyToMany(() => User, (user) => user.permissions)
   users: User[];
+
 }

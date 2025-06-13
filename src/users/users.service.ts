@@ -3,12 +3,15 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User, UserRole} from '../entities/user.entity';
 import { truncate } from 'fs';
+import { Permission } from 'src/entities/permissions.entity';
 
 @Injectable()
 export class UsersService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(Permission)
+    private readonly permissionRepository: Repository<Permission>,
   ) {}
   
   async findAll(options: {
@@ -55,7 +58,7 @@ export class UsersService {
     if (filters.adminId !== undefined) {
       query.andWhere('user.adminId = :adminId', { adminId: filters.adminId });
     }
-
+    
     if (filters.branchId !== undefined) {
       query.andWhere('user.branchId = :branchId', { branchId: filters.branchId });
     }
@@ -71,18 +74,69 @@ export class UsersService {
   
   // Find user by ID, including branch details
   async findById(id: number): Promise<User | null> {
-    return this.userRepository.findOne({
+    /* 1️⃣  Load the user with current permissions */
+    const user = await this.userRepository.findOne({
       where: { id },
-      relations: ['branch', 'permissions'], // Include full branch info
+      relations: ['branch', 'permissions'],
     });
+    if (!user) return null;
+    
+    /* 2️⃣  Load the full permission catalogue */
+    const allPermissions = await this.permissionRepository.find();
+    
+    /* 3️⃣  Build a quick-lookup Set of granted permission IDs */
+    const grantedSet = new Set(user.permissions.map(p => p.id));
+    
+    /* 4️⃣  Produce the enriched list */
+    const permissionsWithFlag = allPermissions.map(p => ({
+      id:          p.id,
+      name:        p.name,
+      description: p.description,
+      label:       p.label,
+      granted:     grantedSet.has(p.id),
+    }));
+    
+    /* 5️⃣  Return user with the complete permission list */
+    return {
+      ...user,
+      permissions: permissionsWithFlag,
+    } as unknown as User;
   }
   
-  // Find user by document, including full branch info
+  /**
+  * Find user by document and return
+  *  ▸ branch data
+  *  ▸ an array with **all** permissions
+  *    - granted → true
+  *    - not granted → false
+  */
   async findByDocument(document: string): Promise<User | null> {
-    return this.userRepository.findOne({
+    // 1️⃣ Load user with the permissions he / she already has
+    const user = await this.userRepository.findOne({
       where: { document },
-      relations: { branch: true, permissions: true }, // Include branch details
+      relations: { branch: true, permissions: true },
     });
+    if (!user) return null; // not found
+    
+    // 2️⃣ Load the full permission catalogue
+    const allPermissions = await this.permissionRepository.find();
+    
+    // 3️⃣ Build the “complete” permission list with a boolean flag
+    const permissionMap = new Set(user.permissions.map(p => p.id));
+    const permissionsWithFlag = allPermissions.map(p => ({
+      id:          p.id,
+      name:        p.name,
+      description: p.description,
+      label:       p.label,
+      granted:     permissionMap.has(p.id), // true / false
+    }));
+    
+    // 4️⃣ Replace the original array with the enriched one
+    //     (or attach under another key if you prefer)
+    return {
+      ...user,
+      permissions: permissionsWithFlag,
+    } as unknown as User;
   }
   
   

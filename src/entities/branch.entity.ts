@@ -30,4 +30,5 @@ export class Branch {
 
   @OneToMany(() => User, (user) => user.branch)
   agents: User[];
+  
 }

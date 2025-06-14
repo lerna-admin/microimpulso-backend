@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { LoanTransaction, TransactionType } from 'src/entities/transaction.entity';
@@ -27,37 +27,50 @@ export class TransactionsService {
   constructor(
     @InjectRepository(LoanTransaction)
     private readonly transactionRepo: Repository<LoanTransaction>,
-
+    
     @InjectRepository(LoanRequest)
     private readonly loanRequestRepo: Repository<LoanRequest>,
-
+    
     @InjectRepository(CashMovement)
     private readonly cashMovementRepo: Repository<CashMovement>,
-
+    
     private readonly chatService: ChatService,
   ) { }
-
+  
   async create(data: any): Promise<LoanTransaction> {
     const { loanRequestId, transactionType, amount, reference } = data;
-
+    
     const loanRequest = await this.loanRequestRepo.findOne({
       where: { id: loanRequestId },
-      relations: ['client'],
+      relations: [
+        'client',
+        'agent',              
+        'agent.branch',       
+        'agent.branch.admin', 
+      ],
     });
-
+    
     if (!loanRequest) {
       throw new NotFoundException('Loan request not found');
     }
-
+    const branchId = loanRequest.agent?.branch?.id;
+    const adminId  = loanRequest.agent?.branch?.administrator?.id;
+    
+    if (!branchId || !adminId) {
+      throw new BadRequestException(
+        'No se pudo determinar branchId o adminId desde el agente'
+      );
+    }
+    
     const transaction = this.transactionRepo.create({
       Transactiontype: transactionType,
       amount,
       reference,
       loanRequest: { id: loanRequest.id },
     });
-
+    
     const saved = await this.transactionRepo.save(transaction);
-
+    
     // Register cash movement based on transaction type
     const tz = 'America/Bogota';
     const nowBogota   = toZonedTime(new Date(), tz);     
@@ -68,24 +81,24 @@ export class TransactionsService {
       amount,
       reference,
       transaction: { id: saved.id },
-      admin: { id: 1 } as any,
-      branch: { id: 1 } as any
+      adminId,                   // 🔑 tomado del branch.admin
+      branchId,                  // 🔑 tomado del agente
     });
-
+    
     await this.cashMovementRepo.save(movement);
-
+    
     if (transactionType === TransactionType.DISBURSEMENT) {
       loanRequest.status = LoanRequestStatus.FUNDED;
       await this.loanRequestRepo.save(loanRequest);
-
+      
       const client = loanRequest.client;
-
+      
       const message = `✅ Tu préstamo de ${formatCOP(loanRequest.requestedAmount)} ha sido desembolsado.\n\n` +
-        `💵 Total a pagar: ${formatCOP(loanRequest.amount)}\n` +
-        `📅 Fecha límite de pago: ${formatDateOnly(loanRequest.endDateAt)}\n` +
-        `📆 Cuotas: Pago único\n\n` +
-        `Por favor realiza el pago a tiempo para evitar penalidades.`;
-
+      `💵 Total a pagar: ${formatCOP(loanRequest.amount)}\n` +
+      `📅 Fecha límite de pago: ${formatDateOnly(loanRequest.endDateAt)}\n` +
+      `📆 Cuotas: Pago único\n\n` +
+      `Por favor realiza el pago a tiempo para evitar penalidades.`;
+      
       const svgContent = `
 <svg width="600" height="250" xmlns="http://www.w3.org/2000/svg">
   <style>
@@ -102,12 +115,12 @@ export class TransactionsService {
   <text x="30" y="170" class="label">📆 Total a pagar:</text>
   <text x="300" y="170" class="value">${formatCOP(loanRequest.amount)}</text>
 </svg>`.trim();
-
+      
       const svgBuffer = Buffer.from(svgContent, 'utf-8');
       const pngBuffer = await sharp(svgBuffer).png().toBuffer();
-
+      
       await this.chatService.sendMessageToClient(client.id, message);
-
+      
       await this.chatService.sendSimulationToClient(client.id, {
         fieldname: 'file',
         originalname: 'desembolso.png',
@@ -121,28 +134,28 @@ export class TransactionsService {
         stream: Readable.from(pngBuffer),
       });
     }
-
+    
     if (transactionType === TransactionType.REPAYMENT) {
       const allTransactions = await this.transactionRepo.find({
         where: { loanRequest: { id: loanRequest.id } },
       });
-
+      
       const totalPaid = allTransactions
-        .filter(tx => tx.Transactiontype === TransactionType.REPAYMENT)
-        .reduce((sum, tx) => sum + Number(tx.amount), 0);
-
+      .filter(tx => tx.Transactiontype === TransactionType.REPAYMENT)
+      .reduce((sum, tx) => sum + Number(tx.amount), 0);
+      
       if (totalPaid >= Number(loanRequest.amount)) {
         loanRequest.status = LoanRequestStatus.COMPLETED;
         loanRequest.client.status = ClientStatus.INACTIVE;
-
+        
         await this.loanRequestRepo.save(loanRequest);
         await this.loanRequestRepo.manager.save(loanRequest.client);
       }
     }
-
+    
     return saved;
   }
-
+  
   async findAllByLoanRequest(loanRequestId: string): Promise<LoanTransaction[]> {
     return this.transactionRepo.find({
       where: { loanRequest: { id: Number(loanRequestId) } },

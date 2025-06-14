@@ -385,18 +385,16 @@ export class LoanRequestService {
     
     const renewed = renewedLoans.length;
     const valorRenovados = renewedLoans.reduce((sum, loan) => sum + Number(loan.requestedAmount), 0);
-    
-    
-    const todayStart = new Date();
-todayStart.setHours(0, 0, 0, 0);
+    const disbStart = new Date();
+disbStart.setHours(0, 0, 0, 0);
 
-const todayEnd = new Date();
-todayEnd.setHours(23, 59, 59, 999);
+const disbEnd = new Date();
+disbEnd.setHours(23, 59, 59, 999);
 
 const disbursementsToday = await this.transactionRepository.find({
   where: {
     Transactiontype: TransactionType.DISBURSEMENT,
-    date: Between(todayStart, todayEnd),
+    date: Between(disbStart, disbEnd),
   },
   relations: ['loanRequest', 'loanRequest.agent'],
 });
@@ -405,12 +403,23 @@ const agentDisbursements = disbursementsToday.filter(
   tx => tx.loanRequest?.agent?.id === agentId
 );
 
+// 🔍 Logs para depuración
+console.log('[Nuevos] disbStart:', disbStart);
+console.log('[Nuevos] disbEnd  :', disbEnd);
+console.log('[Nuevos] agentId  :', agentId);
+console.log('[Nuevos] transacciones totales del día:', disbursementsToday.length);
+console.log('[Nuevos] transacciones del agente:', agentDisbursements.length);
+
 const nuevos = agentDisbursements.length;
 const valorNuevos = agentDisbursements.reduce(
   (sum, tx) => sum + Number(tx.loanRequest?.requestedAmount ?? tx.amount),
   0
 );
 
+console.log('[Nuevos] total amount:', valorNuevos);
+
+    
+    
     
     return {
       cartera,

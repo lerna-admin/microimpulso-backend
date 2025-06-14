@@ -46,7 +46,7 @@ export class TransactionsService {
         'client',
         'agent',              
         'agent.branch',       
-        'agent.branch.admin', 
+        'agent.branch.administrator', 
       ],
     });
     

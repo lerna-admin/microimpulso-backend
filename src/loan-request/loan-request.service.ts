@@ -386,29 +386,48 @@ export class LoanRequestService {
     const renewed = renewedLoans.length;
     const valorRenovados = renewedLoans.reduce((sum, loan) => sum + Number(loan.requestedAmount), 0);
     
-    /* ─── Today’s disbursements for this agent ─── */
+    
+    /* ─── 1. Build today’s [start, end] in server-local time ─── */
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+    
+    const endOfDay = new Date();
+    endOfDay.setHours(23, 59, 59, 999);
+    
+    const agentIdNum = Number(agentId);
+    
+    console.log('[Nuevos] startOfDay:', startOfDay.toISOString());
+    console.log('[Nuevos] endOfDay  :', endOfDay.toISOString());
+    console.log('[Nuevos] agentId   :', agentIdNum);
+    
+    /* ─── 2. Query: today’s DISBURSEMENTS for this agent ─── */
     const disbursementsToday = await this.transactionRepository.find({
       where: {
         Transactiontype: TransactionType.DISBURSEMENT,
-        date: Between(startOfDay, endOfDay),  // today, server-local
+        date: Between(startOfDay, endOfDay),
+        loanRequest: { agent: { id: agentIdNum } },
       },
       relations: ['loanRequest', 'loanRequest.agent'],
     });
     
-    /* keep only rows for the current agent */
-    const filtered = disbursementsToday.filter(
-      tx => tx.loanRequest?.agent?.id === agentId,
+    console.log('[Nuevos] rows fetched:', disbursementsToday.length);
+    disbursementsToday.forEach(tx =>
+      console.log(
+        `[Nuevos] txId=${tx.id}  date=${tx.date}  requested=${tx.loanRequest?.requestedAmount}  amount=${tx.amount}`,
+      ),
     );
     
-    /* KPIs */
-    const nuevos      = filtered.length;                              // 2
-    const valorNuevos = filtered.reduce(                              // 800 000
+    /* ─── 3. KPIs ─── */
+    const nuevos = disbursementsToday.length;
+    const valorNuevos = disbursementsToday.reduce(
       (sum, tx) => sum + Number(tx.loanRequest?.requestedAmount ?? tx.amount),
       0,
     );
     
-    /* ...leave the rest of the method unchanged ... */
+    console.log('[Nuevos] count        :', nuevos);
+    console.log('[Nuevos] total amount :', valorNuevos);
     
+    /* assign / return as needed */
     
     
     return {

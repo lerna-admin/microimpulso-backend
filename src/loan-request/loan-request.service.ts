@@ -71,6 +71,8 @@ export class LoanRequestService {
       updatedAt?: Date;
       clientId?: number;
       agentId?: number;
+      branchId?: number;
+      
     }
   ): Promise<{
     data: LoanRequest[];
@@ -139,6 +141,10 @@ export class LoanRequestService {
     if (filters?.agentId !== undefined) {
       qb.andWhere('loan.agentId = :agentId', { agentId: filters.agentId });
     }
+    if (filters?.branchId !== undefined) {
+      qb.andWhere('loan.agent.branchId = :branchId', { branchId: filters.branchId });
+    }
+    
     
     qb.orderBy('loan.createdAt', 'DESC')
     .skip((page - 1) * limit)

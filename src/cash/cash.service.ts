@@ -141,16 +141,12 @@ export class CashService {
     * transactions, using requestedAmount for value KPIs plus a count KPI.
     */
     async getDailyTotals(branchId: number, rawDate: Date | string) {
-        /* ───── 1. Build [start, end] in America/Bogota ───── */
-        const tz = 'America/Bogota';
-        const asDate     = typeof rawDate === 'string' ? parseISO(rawDate) : rawDate;
-        const zoned      = toZonedTime(asDate, tz);
-        const zonedStart = startOfDay(zoned);
-        const zonedEnd   = endOfDay(zoned);
-        const start = fromZonedTime(zonedStart, tz);
-        const end   = fromZonedTime(zonedEnd,   tz);
+        // ───── 1. Build [start, end] using server time ─────
+        const asDate = typeof rawDate === 'string' ? parseISO(rawDate) : rawDate;
+        const start = startOfDay(asDate);
+        const end = endOfDay(asDate);
         
-        /* ───── 2. Movements (cash) ───── */
+        // ───── 2. Movements (cash) ─────
         const [movements, previousMovements] = await Promise.all([
             this.cashRepo.find({
                 where: { branch: { id: branchId }, createdAt: Between(start, end) },

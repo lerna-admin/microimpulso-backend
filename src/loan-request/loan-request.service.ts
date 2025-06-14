@@ -387,7 +387,7 @@ export class LoanRequestService {
     const valorRenovados = renewedLoans.reduce((sum, loan) => sum + Number(loan.requestedAmount), 0);
     
     
-    
+    /* ─── 1. Today’s disbursements ─── */
     const disbursementsToday = await this.transactionRepository.find({
       where: {
         Transactiontype: TransactionType.DISBURSEMENT,
@@ -396,15 +396,20 @@ export class LoanRequestService {
       relations: ['loanRequest', 'loanRequest.agent'],
     });
     
+    /* ─── 2. Keep only the ones for this agent ─── */
     const filtered = disbursementsToday.filter(
-      tx => tx.loanRequest?.agent?.id === agentId
+      tx => tx.loanRequest?.agent?.id === agentId,
     );
     
-    const nuevos = filtered.length;
+    /* ─── 3. Direct totals for *today* (no look-back) ─── */
+    const nuevos      = filtered.length;
     const valorNuevos = filtered.reduce(
       (sum, tx) => sum + Number(tx.loanRequest?.requestedAmount ?? tx.amount),
-      0
+      0,
     );
+    
+    /* assign or return as needed */
+    
     
     return {
       cartera,

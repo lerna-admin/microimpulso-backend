@@ -387,8 +387,11 @@ export class LoanRequestService {
     const valorRenovados = renewedLoans.reduce((sum, loan) => sum + Number(loan.requestedAmount), 0);
 const localDate = now.toISOString().split('T')[0]; // '2025-06-14'
 
-const disbStart = new Date(`${localDate}T00:00:00`);
-const disbEnd = new Date(`${localDate}T23:59:59.999`);
+const disbStart = new Date();
+disbStart.setHours(0, 0, 0, 0);
+
+const disbEnd = new Date();
+disbEnd.setHours(23, 59, 59, 999);
 
 const disbursementsToday = await this.transactionRepository.find({
   where: {

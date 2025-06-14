@@ -31,8 +31,11 @@ export class LoanTransaction {
   @Column('decimal', { precision: 12, scale: 2 })
   amount: number;
 
-  @CreateDateColumn()
-  date: Date;
+ @CreateDateColumn({
+  type: 'datetime',
+  default: () => "DATETIME('now','localtime')",
+})
+date: Date;
 
   @Column({ nullable: true })
   reference?: string;

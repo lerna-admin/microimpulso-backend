@@ -393,13 +393,16 @@ export class LoanRequestService {
   const disbEnd = new Date();
   disbEnd.setHours(23, 59, 59, 999);
 
-  const disbursementsToday = await this.transactionRepository.find({
-    where: {
-      Transactiontype: TransactionType.DISBURSEMENT,
-      date: Between(disbStart, disbEnd),
-    },
-    relations: ['loanRequest', 'loanRequest.agent'],
-  });
+  const todayStr = now.toISOString().split('T')[0]; // "2025-06-14"
+
+const disbursementsToday = await this.transactionRepository
+  .createQueryBuilder('tx')
+  .leftJoinAndSelect('tx.loanRequest', 'loanRequest')
+  .leftJoinAndSelect('loanRequest.agent', 'agent')
+  .where('tx.Transactiontype = :type', { type: TransactionType.DISBURSEMENT })
+  .andWhere('date(tx.date) = :today', { today: todayStr })
+  .getMany();
+
 
   const agentDisbursements = disbursementsToday.filter(
     tx => tx.loanRequest?.agent?.id === agentId

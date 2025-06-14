@@ -335,13 +335,15 @@ export class LoanRequestService {
   
  async getClosingSummary(agentId: number) {
   const now = new Date();
-  
+
+  /* ─── Build day window (server-local) ─── */
   const startOfDay = new Date(now);
   startOfDay.setHours(0, 0, 0, 0);
-  
+
   const endOfDay = new Date(now);
   endOfDay.setHours(23, 59, 59, 999);
-  
+
+  /* ─── 1. Funded loans for this agent ─── */
   const fundedLoans = await this.loanRequestRepository.find({
     where: {
       agent: { id: agentId },
@@ -350,92 +352,78 @@ export class LoanRequestService {
     relations: ['transactions', 'client'],
   });
 
+  /* ─── 1-a. cartera (outstanding balance) ─── */
   let cartera = 0;
-  let cobrado = 0;
-
   for (const loan of fundedLoans) {
-    const disbursed = loan.transactions
-      .filter(tx => tx.Transactiontype === TransactionType.DISBURSEMENT)
-      .reduce((sum, tx) => sum + Number(tx.amount), 0);
-
     const repaid = loan.transactions
       .filter(tx => tx.Transactiontype === TransactionType.REPAYMENT)
       .reduce((sum, tx) => sum + Number(tx.amount), 0);
 
     cartera += loan.amount - repaid;
-
-    const repaidToday = loan.transactions
-      .filter(tx =>
-        tx.Transactiontype === TransactionType.REPAYMENT &&
-        tx.date >= startOfDay && tx.date <= endOfDay
-      )
-      .reduce((sum, tx) => sum + Number(tx.amount), 0);
-
-    cobrado += repaidToday;
   }
 
-  // 🔁 Date-only comparison for renewals
-  const todayDateStr = now.toISOString().split('T')[0];
+  /* ─── 2. cobrado (today’s repayments) ─── */
+  const todayStr = now.toISOString().split('T')[0]; // e.g. "2025-06-14"
 
+  const repaymentsToday = await this.transactionRepository
+    .createQueryBuilder('tx')
+    .leftJoin('tx.loanRequest', 'loanRequest')
+    .leftJoin('loanRequest.agent', 'agent')
+    .where('tx.Transactiontype = :type', { type: TransactionType.REPAYMENT })
+    .andWhere('date(tx.date) = :today', { today: todayStr })
+    .andWhere('agent.id = :agentId', { agentId })
+    .getMany();
+
+  const cobrado = repaymentsToday.reduce(
+    (sum, tx) => sum + Number(tx.amount),
+    0,
+  );
+
+  console.log('[Cobrado] rows fetched:', repaymentsToday.length);
+  console.log('[Cobrado] total amount:', cobrado);
+
+  /* ─── 3. Renewals (date-only comparison) ─── */
   const renewedLoans = fundedLoans.filter(loan => {
     if (!loan.isRenewed || !loan.renewedAt) return false;
-    const renewedDateStr = new Date(loan.renewedAt).toISOString().split('T')[0];
-    return renewedDateStr === todayDateStr;
+    return new Date(loan.renewedAt).toISOString().split('T')[0] === todayStr;
   });
+  const renovados      = renewedLoans.length;
+  const valorRenovados = renewedLoans.reduce(
+    (sum, loan) => sum + Number(loan.requestedAmount),
+    0,
+  );
 
-  const renewed = renewedLoans.length;
-  const valorRenovados = renewedLoans.reduce((sum, loan) => sum + Number(loan.requestedAmount), 0);
-
-  // ✅ NUEVOS (ajustado correctamente)
-  const disbStart = new Date();
-  disbStart.setHours(0, 0, 0, 0);
-
-  const disbEnd = new Date();
-  disbEnd.setHours(23, 59, 59, 999);
-
-  const todayStr = now.toISOString().split('T')[0]; // "2025-06-14"
-
-const disbursementsToday = await this.transactionRepository
-  .createQueryBuilder('tx')
-  .leftJoinAndSelect('tx.loanRequest', 'loanRequest')
-  .leftJoinAndSelect('loanRequest.agent', 'agent')
-  .where('tx.Transactiontype = :type', { type: TransactionType.DISBURSEMENT })
-  .andWhere('date(tx.date) = :today', { today: todayStr })
-  .getMany();
-
+  /* ─── 4. Nuevos (already fixed) ─── */
+  const disbursementsToday = await this.transactionRepository
+    .createQueryBuilder('tx')
+    .leftJoinAndSelect('tx.loanRequest', 'loanRequest')
+    .leftJoinAndSelect('loanRequest.agent', 'agent')
+    .where('tx.Transactiontype = :type', { type: TransactionType.DISBURSEMENT })
+    .andWhere('date(tx.date) = :today', { today: todayStr })
+    .getMany();
 
   const agentDisbursements = disbursementsToday.filter(
-    tx => tx.loanRequest?.agent?.id === agentId
+    tx => tx.loanRequest?.agent?.id === agentId,
   );
 
-  // 🔍 Logs para depuración
-  console.log('[Nuevos] disbStart:', disbStart.toLocaleString());
-  console.log('[Nuevos] disbEnd  :', disbEnd.toLocaleString());
-  console.log('[Nuevos] agentId  :', agentId);
-  console.log('[Nuevos] transacciones totales del día:', disbursementsToday.length);
-  console.log('[Nuevos] transacciones del agente:', agentDisbursements.length);
-
-  const nuevos = agentDisbursements.length;
+  const nuevos      = agentDisbursements.length;
   const valorNuevos = agentDisbursements.reduce(
     (sum, tx) => sum + Number(tx.loanRequest?.requestedAmount ?? tx.amount),
-    0
+    0,
   );
 
-  console.log('[Nuevos] total amount:', valorNuevos);
-
+  /* ─── 5. Return summary ─── */
   return {
     cartera,
     cobrado,
     clientes: fundedLoans.length,
-    renovados: renewed,
+    renovados,
     valorRenovados,
     nuevos,
     valorNuevos,
   };
 }
 
-  
-  
-  
-  
+
+
 }

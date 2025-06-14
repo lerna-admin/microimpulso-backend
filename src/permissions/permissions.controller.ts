@@ -17,7 +17,7 @@ export class PermissionController {
     }
     
     
-    @Post('assign/:userId/:permissionId')
+    @Post('assign/:userId')
     async assignPermission(
         @Param('userId') userId: number,
         @Body('changes') changes: {
@@ -26,6 +26,7 @@ export class PermissionController {
         }[],    ) {
             return this.permissionService.assignPermissionToUser(userId, changes);
         }
+
         @Post('assign-by-name/:userId/:permissionName')
         async assignPermissionByName(
             @Param('userId') userId: number,

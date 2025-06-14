@@ -58,14 +58,7 @@ export class CashService {
             throw new BadRequestException('category must be a non-empty string');
         }
         
-        // Validate admin and branch IDs
-        if (!adminId || typeof adminId !== 'number') {
-            throw new BadRequestException('adminId must be a valid number');
-        }
         
-        if (!branchId || typeof branchId !== 'number') {
-            throw new BadRequestException('branchId must be a valid number');
-        }
         
         // Construct the cash movement entity
         const partialMovement: Partial<CashMovement> = {

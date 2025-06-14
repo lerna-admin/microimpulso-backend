@@ -72,20 +72,20 @@ export class TransactionsService {
     const saved = await this.transactionRepo.save(transaction);
     
     // Register cash movement based on transaction type
-    const tz = 'America/Bogota';
-    const nowBogota   = toZonedTime(new Date(), tz);     
-    const utcInstant  = fromZonedTime(nowBogota, tz);    
-    const movement = this.cashMovementRepo.create({
-      type: transactionType === TransactionType.REPAYMENT ? CashMovementType.ENTRADA : CashMovementType.SALIDA,
-      category: transactionType === TransactionType.REPAYMENT ? CashMovementCategory.COBRO_CLIENTE : CashMovementCategory.PRESTAMO,
+    const movement = this.cashMovementRepo.save({
+      type: transactionType === TransactionType.REPAYMENT
+      ? CashMovementType.ENTRADA
+      : CashMovementType.SALIDA,
+      category: transactionType === TransactionType.REPAYMENT
+      ? CashMovementCategory.COBRO_CLIENTE
+      : CashMovementCategory.PRESTAMO,
       amount,
       reference,
       transaction: { id: saved.id },
-      adminId,                   // 🔑 tomado del branch.admin
-      branchId,                  // 🔑 tomado del agente
+      adminId,
+      branchId,
+      date: new Date(), // Usa hora local del servidor directamente
     });
-    
-    await this.cashMovementRepo.save(movement);
     
     if (transactionType === TransactionType.DISBURSEMENT) {
       loanRequest.status = LoanRequestStatus.FUNDED;

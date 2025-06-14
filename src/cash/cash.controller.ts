@@ -57,7 +57,7 @@ export class CashController {
             amount,
             category,
             reference: description,
-            userId,
+            adminId:userId,
             branchId
         });
     }

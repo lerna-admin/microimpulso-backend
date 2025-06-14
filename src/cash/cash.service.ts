@@ -66,8 +66,8 @@ export class CashService {
             amount,
             category: category as CashMovementCategory,
             reference,
-            admin: { id: adminId } as any,
-            branch: { id: branchId } as any,
+            adminId,
+            branchId,
             transaction: transactionId ? ({ id: transactionId } as any) : undefined,
         };
         

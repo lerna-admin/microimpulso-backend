@@ -28,10 +28,14 @@ export class CashMovement {
   @ManyToOne(() => Branch)
   @JoinColumn({ name: 'branchId' })
   branch: Branch;
+  @Column()                 // ← FK explícita
+  branchId: number;
 
   @ManyToOne(() => User)
   @JoinColumn({ name: 'adminId' })
   admin: User;
+  @Column()                 // ← FK explícita
+  adminId: number;
 
   @ManyToOne(() => LoanTransaction, { nullable: true })
   @JoinColumn({ name: 'transactionId' })

@@ -386,29 +386,29 @@ export class LoanRequestService {
     const renewed = renewedLoans.length;
     const valorRenovados = renewedLoans.reduce((sum, loan) => sum + Number(loan.requestedAmount), 0);
     
-    
-    /* ─── 1. Today’s disbursements ─── */
+    /* ─── Today’s disbursements for this agent ─── */
     const disbursementsToday = await this.transactionRepository.find({
       where: {
         Transactiontype: TransactionType.DISBURSEMENT,
-        date: Between(startOfDay, endOfDay),
+        date: Between(startOfDay, endOfDay),  // today, server-local
       },
       relations: ['loanRequest', 'loanRequest.agent'],
     });
     
-    /* ─── 2. Keep only the ones for this agent ─── */
+    /* keep only rows for the current agent */
     const filtered = disbursementsToday.filter(
       tx => tx.loanRequest?.agent?.id === agentId,
     );
     
-    /* ─── 3. Direct totals for *today* (no look-back) ─── */
-    const nuevos      = filtered.length;
-    const valorNuevos = filtered.reduce(
+    /* KPIs */
+    const nuevos      = filtered.length;                              // 2
+    const valorNuevos = filtered.reduce(                              // 800 000
       (sum, tx) => sum + Number(tx.loanRequest?.requestedAmount ?? tx.amount),
       0,
     );
     
-    /* assign or return as needed */
+    /* ...leave the rest of the method unchanged ... */
+    
     
     
     return {

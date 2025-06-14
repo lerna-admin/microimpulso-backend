@@ -78,9 +78,6 @@ export class CashService {
     }
     
     
-    
-    
-    
     /** Paginated and filtered list of movements */
     async getMovements(
         branchId: number,
@@ -89,7 +86,6 @@ export class CashService {
         search?: string,
         date?: string,
     ) {
-        
         const query = this.cashRepo
         .createQueryBuilder('movement')
         .where('movement.branchId = :branchId', { branchId });
@@ -101,15 +97,13 @@ export class CashService {
         }
         
         if (date) {
-            const startOfDay = new Date(date);
-            startOfDay.setHours(0, 0, 0, 0);
-            
-            const endOfDay = new Date(date);
-            endOfDay.setHours(23, 59, 59, 999);
+            const parsedDate = typeof date === 'string' ? parseISO(date) : date;
+            const start = startOfDay(parsedDate);
+            const end = endOfDay(parsedDate);
             
             query.andWhere('movement.createdAt BETWEEN :start AND :end', {
-                start: startOfDay.toISOString(),
-                end: endOfDay.toISOString(),
+                start,
+                end,
             });
         }
         
@@ -133,6 +127,7 @@ export class CashService {
             limit,
         };
     }
+    
     
     
     /**

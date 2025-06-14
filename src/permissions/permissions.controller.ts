@@ -20,25 +20,28 @@ export class PermissionController {
     @Post('assign/:userId/:permissionId')
     async assignPermission(
         @Param('userId') userId: number,
-        @Param('permissionId') permissionId: number,
-    ) {
-        return this.permissionService.assignPermissionToUser(userId, permissionId);
-    }
-    @Post('assign-by-name/:userId/:permissionName')
-    async assignPermissionByName(
-        @Param('userId') userId: number,
-        @Param('permissionName') permissionName: string,
-    ) {
-        return this.permissionService.assignPermissionByName(userId, permissionName);
+        @Body('changes') changes: {
+            id?: number;      // ①  you can send id …
+            granted: boolean; // ③  true = add, false = remove
+        }[],    ) {
+            return this.permissionService.assignPermissionToUser(userId, changes);
+        }
+        @Post('assign-by-name/:userId/:permissionName')
+        async assignPermissionByName(
+            @Param('userId') userId: number,
+            @Param('permissionName') permissionName: string,
+        ) {
+            return this.permissionService.assignPermissionByName(userId, permissionName);
+        }
+        
+        @Get('user/:userId')
+        async getUserPermissions(@Param('userId') userId: number) {
+            return this.permissionService.getUserPermissions(userId);
+        }
+        @Get('/')
+        async getPermissions() {
+            return this.permissionService.getPermissions();
+        }
+        
     }
     
-    @Get('user/:userId')
-    async getUserPermissions(@Param('userId') userId: number) {
-        return this.permissionService.getUserPermissions(userId);
-    }
-    @Get('/')
-    async getPermissions() {
-        return this.permissionService.getPermissions();
-    }
-    
-}

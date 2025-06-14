@@ -387,44 +387,30 @@ export class LoanRequestService {
     const valorRenovados = renewedLoans.reduce((sum, loan) => sum + Number(loan.requestedAmount), 0);
     
     
-    /* ─── 1. Build today’s [start, end] in server-local time ─── */
-   
-    
-    const agentIdNum = Number(agentId);
-    
-    console.log('[Nuevos] startOfDay:', startOfDay.toISOString());
-    console.log('[Nuevos] endOfDay  :', endOfDay.toISOString());
-    console.log('[Nuevos] agentId   :', agentIdNum);
-    
-    /* ─── 2. Query: today’s DISBURSEMENTS for this agent ─── */
-    const disbursementsToday = await this.transactionRepository.find({
-      where: {
-        Transactiontype: TransactionType.DISBURSEMENT,
-        date: Between(startOfDay, endOfDay),
-        loanRequest: { agent: { id: agentIdNum } },
-      },
-      relations: ['loanRequest', 'loanRequest.agent'],
-    });
-    
-    console.log('[Nuevos] rows fetched:', disbursementsToday.length);
-    disbursementsToday.forEach(tx =>
-      console.log(
-        `[Nuevos] txId=${tx.id}  date=${tx.date}  requested=${tx.loanRequest?.requestedAmount}  amount=${tx.amount}`,
-      ),
-    );
-    
-    /* ─── 3. KPIs ─── */
-    const nuevos = disbursementsToday.length;
-    const valorNuevos = disbursementsToday.reduce(
-      (sum, tx) => sum + Number(tx.loanRequest?.requestedAmount ?? tx.amount),
-      0,
-    );
-    
-    console.log('[Nuevos] count        :', nuevos);
-    console.log('[Nuevos] total amount :', valorNuevos);
-    
-    /* assign / return as needed */
-    
+    const todayStart = new Date();
+todayStart.setHours(0, 0, 0, 0);
+
+const todayEnd = new Date();
+todayEnd.setHours(23, 59, 59, 999);
+
+const disbursementsToday = await this.transactionRepository.find({
+  where: {
+    Transactiontype: TransactionType.DISBURSEMENT,
+    date: Between(todayStart, todayEnd),
+  },
+  relations: ['loanRequest', 'loanRequest.agent'],
+});
+
+const agentDisbursements = disbursementsToday.filter(
+  tx => tx.loanRequest?.agent?.id === agentId
+);
+
+const nuevos = agentDisbursements.length;
+const valorNuevos = agentDisbursements.reduce(
+  (sum, tx) => sum + Number(tx.loanRequest?.requestedAmount ?? tx.amount),
+  0
+);
+
     
     return {
       cartera,

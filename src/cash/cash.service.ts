@@ -204,14 +204,18 @@ export class CashService {
             relations: { loanRequest: { client: true, agent: { branch: true } } },
         });
         
-        const penalties = await this.loanTransactionRepo.find({
-            where: {
-                Transactiontype: TransactionType.PENALTY,
-                date: Between(start, end),
-                loanRequest: { agent: { branch: { id: branchId } } },
-            },
-            relations: { loanRequest: { client: true, agent: { branch: true } } },
-        });
+        const { start: penaltyStart, end: penaltyEnd } = getLocalDayRange(rawDate);
+
+
+
+const penalties = await this.loanTransactionRepo.find({
+    where: {
+        Transactiontype: TransactionType.PENALTY,
+        date: Between(penaltyStart, penaltyEnd),
+        loanRequest: { agent: { branch: { id: branchId } } },
+    },
+    relations: { loanRequest: { client: true, agent: { branch: true } } },
+});
         
         /* Build unique renewed requests for today */
         const renewedByRequest = new Map<number, LoanRequest>();
@@ -226,6 +230,9 @@ export class CashService {
             (sum, req) => sum + +(req.requestedAmount ?? req.amount ?? 0),
             0,
         );
+
+
+
         const countRenovados = renewedByRequest.size;
         
         const nuevosHoy = movements.filter(

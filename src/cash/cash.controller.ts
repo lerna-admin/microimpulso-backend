@@ -15,7 +15,7 @@ export class CashController {
     /** Register a manual movement */
     @Post()
     async registerMovement(@Body() body: any) {
-        const { typeMovement, amount, category, description } = body;
+        const { typeMovement, amount, category, description, branchId, userId } = body;
         console.log('BODY RECIBIDO:', body);
         console.log("SI ES")
 
@@ -50,16 +50,15 @@ export class CashController {
             throw new BadRequestException('category cannot be empty');
         }
 
-        const mockAdminId = 1;
-        const mockBranchId = 1;
+        
 
         return this.cashService.registerMovement({
             typeMovement: typeMovement,
             amount,
             category,
             reference: description,
-            adminId: mockAdminId,
-            branchId: mockBranchId,
+            userId,
+            branchId
         });
     }
 

@@ -12,13 +12,13 @@ import { LoanTransaction, TransactionType } from 'src/entities/transaction.entit
 
 function getLocalDayRange(rawDate: string | Date): { start: Date; end: Date } {
     const date = typeof rawDate === 'string' ? new Date(rawDate) : rawDate;
-
+    
     const start = new Date(date);
     start.setHours(0, 0, 0, 0);
-
+    
     const end = new Date(date);
     end.setHours(23, 59, 59, 999);
-
+    
     return { start, end };
 }
 
@@ -114,7 +114,7 @@ export class CashService {
             
             const parsedDate = typeof date === 'string' ? parseISO(date) : date;
             const { start, end } = getLocalDayRange(date);
-
+            
             
             query.andWhere('movement.createdAt BETWEEN :start AND :end', {
                 start,
@@ -154,7 +154,7 @@ export class CashService {
         // ───── 1. Build [start, end] using server time ─────
         const asDate = typeof rawDate === 'string' ? parseISO(rawDate) : rawDate;
         const { start, end } = getLocalDayRange(rawDate);
-
+        
         
         // ───── 2. Movements (cash) ─────
         const [movements, previousMovements] = await Promise.all([
@@ -204,19 +204,30 @@ export class CashService {
             relations: { loanRequest: { client: true, agent: { branch: true } } },
         });
         
-        const { start: penaltyStart, end: penaltyEnd } = getLocalDayRange(rawDate);
-
-
-
-const penalties = await this.loanTransactionRepo.find({
-    where: {
-        Transactiontype: TransactionType.PENALTY,
-        date: Between(start, end),
-        loanRequest: { agent: { branch: { id: branchId } } },
-    },
-    relations: { loanRequest: { client: true, agent: { branch: true } } },
-});
-
+        
+        const penalties = await this.loanTransactionRepo.find({
+            where: {
+                Transactiontype: TransactionType.PENALTY,
+                date: Between(start, end),
+                loanRequest: {
+                    agent: {
+                        branch: {
+                            id: branchId,
+                        },
+                    },
+                },
+            },
+            relations: {
+                loanRequest: {
+                    client: true,
+                    agent: {
+                        branch: true,
+                    },
+                },
+            },
+        });
+        
+        
         
         /* Build unique renewed requests for today */
         const renewedByRequest = new Map<number, LoanRequest>();
@@ -231,15 +242,15 @@ const penalties = await this.loanTransactionRepo.find({
             (sum, req) => sum + +(req.requestedAmount ?? req.amount ?? 0),
             0,
         );
-
-
-
+        
+        
+        
         const countRenovados = renewedByRequest.size;
         
         const nuevosHoy = movements.filter(
             (m) => m.type === 'SALIDA' && m.category === 'PRESTAMO'
         );
-
+        
         const totalNuevos = nuevosHoy.reduce((sum, m) => sum + +m.amount, 0);
         const countNuevos = nuevosHoy.length;
         

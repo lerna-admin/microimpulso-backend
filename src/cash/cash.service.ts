@@ -10,6 +10,18 @@ import { AgentClosing } from 'src/entities/agent-closing.entity';
 import { LoanRequest } from 'src/entities/loan-request.entity';
 import { LoanTransaction, TransactionType } from 'src/entities/transaction.entity';
 
+function getLocalDayRange(rawDate: string | Date): { start: Date; end: Date } {
+    const date = typeof rawDate === 'string' ? new Date(rawDate) : rawDate;
+
+    const start = new Date(date);
+    start.setHours(0, 0, 0, 0);
+
+    const end = new Date(date);
+    end.setHours(23, 59, 59, 999);
+
+    return { start, end };
+}
+
 @Injectable()
 export class CashService {
     constructor(
@@ -21,6 +33,7 @@ export class CashService {
         private readonly loanTransactionRepo: Repository<LoanTransaction>,
         
     ) { }
+    
     
     /** Register one manual movement */
     async registerMovement(data: any): Promise<CashMovement> {
@@ -78,6 +91,7 @@ export class CashService {
     }
     
     
+    
     /** Paginated and filtered list of movements */
     async getMovements(
         branchId: number,
@@ -97,9 +111,10 @@ export class CashService {
         }
         
         if (date) {
+            
             const parsedDate = typeof date === 'string' ? parseISO(date) : date;
-            const start = startOfDay(parsedDate);
-            const end = endOfDay(parsedDate);
+            const { start, end } = getLocalDayRange(date);
+
             
             query.andWhere('movement.createdAt BETWEEN :start AND :end', {
                 start,
@@ -138,8 +153,8 @@ export class CashService {
     async getDailyTotals(branchId: number, rawDate: Date | string) {
         // ───── 1. Build [start, end] using server time ─────
         const asDate = typeof rawDate === 'string' ? parseISO(rawDate) : rawDate;
-        const start = startOfDay(asDate);
-        const end = endOfDay(asDate);
+        const { start, end } = getLocalDayRange(rawDate);
+
         
         // ───── 2. Movements (cash) ─────
         const [movements, previousMovements] = await Promise.all([

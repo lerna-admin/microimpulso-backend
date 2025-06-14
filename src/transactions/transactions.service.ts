@@ -54,7 +54,7 @@ export class TransactionsService {
       throw new NotFoundException('Loan request not found');
     }
     const branchId = loanRequest.agent?.branch?.id;
-    const adminId  = loanRequest.agent?.branch?.admin?.id;
+    const adminId  = loanRequest.agent?.branch?.administrator?.id;
     
     if (!branchId || !adminId) {
       throw new BadRequestException(

@@ -211,11 +211,12 @@ export class CashService {
 const penalties = await this.loanTransactionRepo.find({
     where: {
         Transactiontype: TransactionType.PENALTY,
-        date: Between(penaltyStart, penaltyEnd),
+        date: Between(start, end),
         loanRequest: { agent: { branch: { id: branchId } } },
     },
     relations: { loanRequest: { client: true, agent: { branch: true } } },
 });
+
         
         /* Build unique renewed requests for today */
         const renewedByRequest = new Map<number, LoanRequest>();

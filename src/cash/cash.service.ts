@@ -228,16 +228,13 @@ export class CashService {
         );
         const countRenovados = renewedByRequest.size;
         
-        let totalNuevos = 0;
-        let countNuevos = 0;
+        const nuevosHoy = movements.filter(
+            (m) => m.type === 'SALIDA' && m.category === 'PRESTAMO'
+        );
 
-        for (const tx of disbursements) {
-            const req = tx.loanRequest as LoanRequest;
-            const amt = +(req.requestedAmount ?? req.amount);
-            totalNuevos += amt;
-            countNuevos += 1;
-        }
-                
+        const totalNuevos = nuevosHoy.reduce((sum, m) => sum + +m.amount, 0);
+        const countNuevos = nuevosHoy.length;
+        
         
         
         /* ───── 7. Final dashboard ───── */

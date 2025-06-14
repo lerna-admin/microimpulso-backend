@@ -44,6 +44,8 @@ export class LoanRequestController {
     @Query('updatedAt') updatedAt?: string,
     @Query('clientId') clientId?: string,
     @Query('agentId') agentId?: string,
+    @Query('branchId') branchId?: string,
+    
   ): Promise<{
     data: LoanRequest[];
     totalItems: number;
@@ -65,6 +67,8 @@ export class LoanRequestController {
     if (updatedAt) filters.updatedAt = new Date(updatedAt);
     if (clientId) filters.clientId = parseInt(clientId, 10);
     if (agentId) filters.agentId = parseInt(agentId, 10);
+    if (branchId) filters.agentId = parseInt(branchId, 10);
+    
 
     return this.loanRequestService.findAll(limit, page, filters);
   }

@@ -20,7 +20,7 @@ export class PermissionController {
     @Post('assign/:userId')
     async assignPermission(
         @Param('userId') userId: number,
-        @Body('changes') changes: {
+        @Body() changes: {
             id?: number;      // ①  you can send id …
             granted: boolean; // ③  true = add, false = remove
         }[],    ) {

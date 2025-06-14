@@ -46,6 +46,7 @@ export class PermissionService {
         changes: { id?: number; granted: boolean }[],
     ) {
         /* ── 1️⃣  Load user with current permissions ── */
+        console.log(userId)
         const user = await this.userRepository.findOne({
             where: { id: userId },
             relations: ['permissions'],

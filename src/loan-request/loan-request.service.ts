@@ -376,9 +376,8 @@ export class LoanRequestService {
     });
     
     const renewed = renewedLoans.length;
-    const valorRenovados = renewedLoans.reduce((sum, loan) => sum + Number(loan.amount), 0);
+    const valorRenovados = renewedLoans.reduce((sum, loan) => sum + Number(loan.requestedAmount), 0);
     
-    // Nuevas solicitudes del día
     const newLoanRequests = await this.loanRequestRepository.find({
       where: {
         agent: { id: agentId },

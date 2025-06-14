@@ -4,13 +4,23 @@ import { CashMovement, CashMovementType } from 'src/entities/cash-movement.entit
 import { CashMovementCategory } from 'src/entities/cash-movement-category.enum';
 import { Between, ILike, Repository } from 'typeorm';
 import { LessThan } from 'typeorm';
+import { startOfDay, endOfDay, parseISO } from 'date-fns';
+import { toZonedTime, fromZonedTime } from 'date-fns-tz';
+import { AgentClosing } from 'src/entities/agent-closing.entity';
+import { LoanRequest } from 'src/entities/loan-request.entity';
+import { LoanTransaction, TransactionType } from 'src/entities/transaction.entity';
 
 @Injectable()
 export class CashService {
     constructor(
         @InjectRepository(CashMovement)
         private readonly cashRepo: Repository<CashMovement>,
-    ) {}
+        @InjectRepository(AgentClosing)
+        private readonly closingRepo: Repository<AgentClosing>,
+        @InjectRepository(LoanTransaction)
+        private readonly loanTransactionRepo: Repository<LoanTransaction>,
+        
+    ) { }
     
     /** Register one manual movement */
     async registerMovement(data: any): Promise<CashMovement> {
@@ -84,7 +94,9 @@ export class CashService {
         limit: number,
         page: number,
         search?: string,
+        date?: string,
     ) {
+        
         const query = this.cashRepo
         .createQueryBuilder('movement')
         .where('movement.branchId = :branchId', { branchId });
@@ -92,6 +104,19 @@ export class CashService {
         if (search && typeof search === 'string') {
             query.andWhere('LOWER(movement.reference) LIKE :search', {
                 search: `%${search.toLowerCase()}%`,
+            });
+        }
+        
+        if (date) {
+            const startOfDay = new Date(date);
+            startOfDay.setHours(0, 0, 0, 0);
+            
+            const endOfDay = new Date(date);
+            endOfDay.setHours(23, 59, 59, 999);
+            
+            query.andWhere('movement.createdAt BETWEEN :start AND :end', {
+                start: startOfDay.toISOString(),
+                end: endOfDay.toISOString(),
             });
         }
         
@@ -117,64 +142,144 @@ export class CashService {
     }
     
     
-    /** Get totals for a specific day */
-    
-    
-    async getDailyTotals(branchId: number, date: Date) {
-        const start = new Date(date);
-        start.setHours(0, 0, 0, 0);
+    /**
+    * Returns the cash/KPI dashboard for a branch on a given date.
+    * “Renovados” and “Nuevos” are computed on-the-fly from DISBURSEMENT
+    * transactions, using requestedAmount for value KPIs plus a count KPI.
+    */
+    async getDailyTotals(branchId: number, rawDate: Date | string) {
+        /* ───── 1. Build [start, end] in America/Bogota ───── */
+        const tz = 'America/Bogota';
+        const asDate     = typeof rawDate === 'string' ? parseISO(rawDate) : rawDate;
+        const zoned      = toZonedTime(asDate, tz);
+        const zonedStart = startOfDay(zoned);
+        const zonedEnd   = endOfDay(zoned);
+        const start = fromZonedTime(zonedStart, tz);
+        const end   = fromZonedTime(zonedEnd,   tz);
         
-        const end = new Date(date);
-        end.setHours(23, 59, 59, 999);
+        /* ───── 2. Movements (cash) ───── */
+        const [movements, previousMovements] = await Promise.all([
+            this.cashRepo.find({
+                where: { branch: { id: branchId }, createdAt: Between(start, end) },
+            }),
+            this.cashRepo.find({
+                where: { branch: { id: branchId }, createdAt: LessThan(start) },
+            }),
+        ]);
         
-        const movements = await this.cashRepo.find({
-            where: {
-                branch: { id: branchId },
-                createdAt: Between(start, end),
-            },
-        });
-        
-        const previousMovements = await this.cashRepo.find({
-            where: {
-                branch: { id: branchId },
-                createdAt: LessThan(start),
-            },
-        });
-        
-        const cajaAnterior = previousMovements.reduce((total, m) => {
-            const amount = Number(m.amount);
-            return m.type === 'ENTRADA' ? total + amount : total - amount;
+        /* ───── 3. Opening cash ───── */
+        const cajaAnterior = previousMovements.reduce((tot, m) => {
+            const amt = +m.amount;
+            return m.type === 'ENTRADA' ? tot + amt : tot - amt;
         }, 0);
         
-        const entraCaja = movements
-        .filter((m) => m.category === 'ENTRADA_GERENCIA')
-        .reduce((sum, m) => sum + Number(m.amount), 0);
+        /* ───── 4. Net for the day ───── */
+        const totalEntradas = movements
+        .filter((m) => m.type === 'ENTRADA')
+        .reduce((s, m) => s + +m.amount, 0);
         
-        const totalCobros = movements
-        .filter((m) => m.category === 'COBRO_CLIENTE')
-        .reduce((sum, m) => sum + Number(m.amount), 0);
+        const totalSalidas = movements
+        .filter((m) => m.type === 'SALIDA')
+        .reduce((s, m) => s + +m.amount, 0);
         
-        const totalDesembolsos = movements
-        .filter((m) => m.category === 'PRESTAMO')
-        .reduce((sum, m) => sum + Number(m.amount), 0);
+        const cajaReal = cajaAnterior + totalEntradas - totalSalidas;
         
-        const totalGastos = movements
-        .filter((m) => m.category === 'GASTO_PROVEEDOR')
-        .reduce((sum, m) => sum + Number(m.amount), 0);
+        /* ───── 5. Category breakdown ───── */
+        const byCategory = (cat: string) =>
+            movements
+        .filter((m) => m.category === cat)
+        .reduce((s, m) => s + +m.amount, 0);
         
-        const cajaReal = cajaAnterior + entraCaja + totalCobros - totalDesembolsos - totalGastos;
+        const entraCaja        = byCategory('ENTRADA_GERENCIA');
+        const totalCobros      = byCategory('COBRO_CLIENTE');
+        const totalDesembolsos = byCategory('PRESTAMO');
+        const totalGastos      = byCategory('GASTO_PROVEEDOR');
         
-        const assets = [
-            { label: "Caja anterior", value: cajaAnterior, trend: "" },
-            { label: "Entra caja", value: entraCaja, trend: "increase" },
-            { label: "Cobro", value: totalCobros, trend: "increase" },
-            { label: "Prestamos", value: totalDesembolsos, trend: "decrease" },
-            { label: "Gastos", value: totalGastos, trend: "decrease" },
-            { label: "Caja real", value: cajaReal, trend: "" },
+        /* ───── 6. KPIs ───── */
+        const disbursements = await this.loanTransactionRepo.find({
+            where: {
+                Transactiontype: TransactionType.DISBURSEMENT,
+                date: Between(start, end),
+                loanRequest: { agent: { branch: { id: branchId } } },
+            },
+            relations: { loanRequest: { client: true, agent: { branch: true } } },
+        });
+        
+        const penalties = await this.loanTransactionRepo.find({
+            where: {
+                Transactiontype: TransactionType.PENALTY,
+                date: Between(start, end),
+                loanRequest: { agent: { branch: { id: branchId } } },
+            },
+            relations: { loanRequest: { client: true, agent: { branch: true } } },
+        });
+        
+        /* Build unique renewed requests for today */
+        const renewedByRequest = new Map<number, LoanRequest>();
+        for (const pen of penalties) {
+            const req = pen.loanRequest as LoanRequest;
+            if (!renewedByRequest.has(req.id)) {
+                renewedByRequest.set(req.id, req);
+            }
+        }
+        
+        const totalRenovados = [...renewedByRequest.values()].reduce(
+            (sum, req) => sum + +(req.requestedAmount ?? req.amount ?? 0),
+            0,
+        );
+        const countRenovados = renewedByRequest.size;
+        
+        /* For "Nuevos", use set of renewed requests */
+        const clientIds = disbursements.map((tx) => tx.loanRequest.client.id);
+        const prevClientIds = clientIds.length
+        ? await this.loanTransactionRepo
+        .createQueryBuilder('tx')
+        .select('loan.clientId', 'clientId')
+        .innerJoin('tx.loanRequest', 'loan')
+        .innerJoin('loan.agent', 'agent')
+        .where('agent.branchId = :branchId', { branchId })
+        .andWhere('tx.Transactiontype = :type', { type: TransactionType.DISBURSEMENT })
+        .andWhere('tx.date < :start', { start })
+        .andWhere('loan.clientId IN (:...ids)', { ids: clientIds })
+        .distinct(true)
+        .getRawMany()
+        .then((rows) => rows.map((r) => +r.clientId))
+        : [];
+        
+        const renewedToday = new Set([...renewedByRequest.keys()]);
+        const previousSet  = new Set(prevClientIds);
+        
+        let totalNuevos  = 0;
+        let countNuevos  = 0;
+        
+        for (const tx of disbursements) {
+            const req = tx.loanRequest as LoanRequest;
+            const amt = +(req.requestedAmount ?? req.amount);
+            const clientId = req.client.id;
+            
+            /** A “nuevo” is a client
+            *  ▸ without past DISBURSEMENT
+            *  ▸ and who did not renew today (no PENALTY today)                 */
+            if (!previousSet.has(clientId) && !renewedToday.has(req.id)) {
+                totalNuevos += amt;
+                countNuevos += 1;
+            }
+        }
+        
+        
+        
+        /* ───── 7. Final dashboard ───── */
+        return [
+            { label: 'Caja anterior', value: cajaAnterior,   trend: '' },
+            { label: 'Entra caja',    value: entraCaja,      trend: 'increase' },
+            { label: 'Cobro',         value: totalCobros,    trend: 'increase' },
+            { label: 'Préstamos',     value: totalDesembolsos, trend: 'decrease' },
+            { label: 'Gastos',        value: totalGastos,    trend: 'decrease' },
+            { label: 'Caja real',     value: cajaReal,       trend: '' },
+            
+            { label: 'Renovados', value: totalRenovados, trend: 'increase', amount:countRenovados },
+            
+            { label: 'Nuevos', value: totalNuevos,    trend: 'increase', amount: countNuevos },
         ];
-        
-        return assets;
     }
-    
-    
 }

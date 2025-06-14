@@ -1,9 +1,10 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, Repository } from 'typeorm';
 import { AgentClosing } from 'src/entities/agent-closing.entity';
 import { User } from '../entities/user.entity';
 import { LoanRequestService } from '../loan-request/loan-request.service';
+import { startOfDay, endOfDay } from 'date-fns';
 
 @Injectable()
 export class ClosingService {
@@ -64,23 +65,45 @@ export class ClosingService {
       select: ['id'], // fetch only the PK – faster
     }));
   }
-
-async hasClosedToday(agentId: number): Promise<boolean> {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  const tomorrow = new Date(today);
-  tomorrow.setDate(today.getDate() + 1);
-
-  const record = await this.closingRepo.findOne({
-    where: {
-      agent: { id: agentId },
-      closedAt: Between(today, tomorrow),
-    },
-  });
-
-  return !!record;
-}
-
+  
+  async hasClosedToday(agentId: number): Promise<boolean> {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+    
+    const record = await this.closingRepo.findOne({
+      where: {
+        agent: { id: agentId },
+        closedAt: Between(today, tomorrow),
+      },
+    });
+    
+    return !!record;
+  }
+  /* ---------------------------------------------------------------
+  * Removes today’s closing for the given agent.
+  * ------------------------------------------------------------- */
+  async reopenDay(agent: User): Promise<AgentClosing> {
+    const todayStart = startOfDay(new Date());
+    const todayEnd   = endOfDay(new Date());
+    
+    const closing = await this.closingRepo.findOne({
+      where: {
+        agent: { id: agent.id },
+        closedAt: Between(todayStart, todayEnd),
+      },
+    });
+    
+    if (!closing) {
+      throw new NotFoundException('No closing found for today');
+    }
+    
+    await this.closingRepo.remove(closing);
+    return closing; // returned for confirmation/logging
+  }
+  
+  
   
 }

@@ -10,17 +10,21 @@ import { LoanTransaction } from './transaction.entity';
 import { User } from './user.entity';
 import { Branch } from './branch.entity';
 import { CashMovementCategory } from './cash-movement-category.enum';
+import { toZonedTime } from 'date-fns-tz';
+
 
 export enum CashMovementType {
   ENTRADA = 'ENTRADA',
   SALIDA = 'SALIDA',
 }
 
+
 @Entity()
 export class CashMovement {
   @PrimaryGeneratedColumn()
   id: number;
 
+  /* ────────────────────────────── Relations ───────────────────────────── */
   @ManyToOne(() => Branch)
   @JoinColumn({ name: 'branchId' })
   branch: Branch;
@@ -29,10 +33,15 @@ export class CashMovement {
   @JoinColumn({ name: 'adminId' })
   admin: User;
 
-  @Column({ type: 'text' }) // cambio aquí
+  @ManyToOne(() => LoanTransaction, { nullable: true })
+  @JoinColumn({ name: 'transactionId' })
+  transaction?: LoanTransaction;
+
+  /* ─────────────────────────────── Fields ─────────────────────────────── */
+  @Column({ type: 'text' })
   type: CashMovementType;
 
-  @Column({ type: 'text' }) // cambio aquí
+  @Column({ type: 'text' })
   category: CashMovementCategory;
 
   @Column({ type: 'decimal', precision: 10, scale: 2 })
@@ -41,11 +50,22 @@ export class CashMovement {
   @Column({ type: 'text', nullable: true })
   reference?: string;
 
-  @ManyToOne(() => LoanTransaction, { nullable: true })
-  @JoinColumn({ name: 'transactionId' })
-  transaction?: LoanTransaction;
-
-  @CreateDateColumn()
+  /* ───────────────────────────── Timestamp ──────────────────────────────
+   * - SQLite: store local Bogotá time with DATETIME('now','localtime').
+   * - Other engines: rely on CURRENT_TIMESTAMP and server TZ (typically UTC).
+   * - Transformer always returns the value in America/Bogota.
+   * --------------------------------------------------------------------- */
+  @CreateDateColumn({
+    type: true ? 'datetime' : undefined,
+    default: () =>
+      true ? "DATETIME('now','localtime')" : 'CURRENT_TIMESTAMP',
+    transformer: {
+      to: (value: Date) => value,
+      from: (value: Date | string) => {
+        const dateObj = typeof value === 'string' ? new Date(value) : value;
+        return toZonedTime(dateObj, 'America/Bogota');
+      },
+    },
+  })
   createdAt: Date;
 }
-

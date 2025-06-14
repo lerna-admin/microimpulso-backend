@@ -10,6 +10,7 @@ import { Buffer } from 'buffer';
 import { Readable } from 'stream';
 import * as sharp from 'sharp';
 import { CashMovementCategory } from 'src/entities/cash-movement-category.enum';
+import { toZonedTime, format, fromZonedTime } from 'date-fns-tz';
 
 function formatCOP(value: number | string | null | undefined): string {
   if (!value) return 'N/A';
@@ -34,7 +35,7 @@ export class TransactionsService {
     private readonly cashMovementRepo: Repository<CashMovement>,
 
     private readonly chatService: ChatService,
-  ) {}
+  ) { }
 
   async create(data: any): Promise<LoanTransaction> {
     const { loanRequestId, transactionType, amount, reference } = data;
@@ -58,14 +59,17 @@ export class TransactionsService {
     const saved = await this.transactionRepo.save(transaction);
 
     // Register cash movement based on transaction type
+    const tz = 'America/Bogota';
+    const nowBogota   = toZonedTime(new Date(), tz);     
+    const utcInstant  = fromZonedTime(nowBogota, tz);    
     const movement = this.cashMovementRepo.create({
-      type: transactionType === TransactionType.REPAYMENT ? CashMovementType.ENTRADA: CashMovementType.SALIDA,
-      category: transactionType === TransactionType.REPAYMENT ? CashMovementCategory.PRESTAMO : CashMovementCategory.COBRO_CLIENTE,
+      type: transactionType === TransactionType.REPAYMENT ? CashMovementType.ENTRADA : CashMovementType.SALIDA,
+      category: transactionType === TransactionType.REPAYMENT ? CashMovementCategory.COBRO_CLIENTE : CashMovementCategory.PRESTAMO,
       amount,
       reference,
       transaction: { id: saved.id },
       admin: { id: 1 } as any,
-      branch: { id: 1 } as any,
+      branch: { id: 1 } as any
     });
 
     await this.cashMovementRepo.save(movement);

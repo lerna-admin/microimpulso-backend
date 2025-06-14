@@ -331,6 +331,8 @@ export class LoanRequestService {
     const updated = Object.assign(loanRequest, updateLoanRequestDto);
     return await this.loanRequestRepository.save(updated);
   }
+  
+  
   async getClosingSummary(agentId: number) {
     const now = new Date();
     
@@ -390,16 +392,17 @@ export class LoanRequestService {
       where: {
         Transactiontype: TransactionType.DISBURSEMENT,
         date: Between(startOfDay, endOfDay),
-        loanRequest: {
-          agent: { id: agentId },
-        },
       },
-      relations: ['loanRequest'],
+      relations: ['loanRequest', 'loanRequest.agent'],
     });
     
-    const nuevos = disbursementsToday.length;
-    const valorNuevos = disbursementsToday.reduce(
-      (sum, tx) => sum + Number(tx.loanRequest?.requestedAmount ?? tx.loanRequest?.amount ?? tx.amount),
+    const filtered = disbursementsToday.filter(
+      tx => tx.loanRequest?.agent?.id === agentId
+    );
+    
+    const nuevos = filtered.length;
+    const valorNuevos = filtered.reduce(
+      (sum, tx) => sum + Number(tx.loanRequest?.requestedAmount ?? tx.amount),
       0
     );
     

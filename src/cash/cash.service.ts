@@ -121,7 +121,7 @@ export class CashService {
             // — SQLite
             // DATE(col) descarta la parte de la hora y mantiene AAAA-MM-DD
             query.andWhere('DATE(movement.createdAt) = :day', { day });
-   
+            
         }
         
         
@@ -154,18 +154,35 @@ export class CashService {
     * transactions, using requestedAmount for value KPIs plus a count KPI.
     */
     async getDailyTotals(branchId: number, rawDate: Date | string) {
-        // ───── 1. Build [start, end] using server time ─────
-        const asDate = typeof rawDate === 'string' ? parseISO(rawDate) : rawDate;
-        const { start, end } = getLocalDayRange(rawDate);
+        /* ───── 1. Build [start, end] as local dates ───── */
+        let start: Date;
+        if (typeof rawDate === 'string') {
+            // rawDate format: 'YYYY-MM-DD'
+            const [y, m, d] = rawDate.split('-').map(Number);
+            start = new Date(y, m - 1, d, 0, 0, 0, 0);           // 00:00 local
+        } else {
+            // Already a Date ⇒ clamp to 00:00
+            start = new Date(rawDate);
+            start.setHours(0, 0, 0, 0);
+        }
         
+        // End of the same local day
+        const end = new Date(start);
+        end.setHours(23, 59, 59, 999);
         
-        // ───── 2. Movements (cash) ─────
+        /* ───── 2. Movements (cash) ───── */
         const [movements, previousMovements] = await Promise.all([
             this.cashRepo.find({
-                where: { branch: { id: branchId }, createdAt: Between(start, end) },
+                where: {
+                    branch: { id: branchId },
+                    createdAt: Between(start, end),     // movements for the day
+                },
             }),
             this.cashRepo.find({
-                where: { branch: { id: branchId }, createdAt: LessThan(start) },
+                where: {
+                    branch: { id: branchId },
+                    createdAt: LessThan(start),         // history before the day
+                },
             }),
         ]);
         

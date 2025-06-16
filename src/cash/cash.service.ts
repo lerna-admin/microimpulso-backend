@@ -9,6 +9,7 @@ import { toZonedTime, fromZonedTime } from 'date-fns-tz';
 import { AgentClosing } from 'src/entities/agent-closing.entity';
 import { LoanRequest } from 'src/entities/loan-request.entity';
 import { LoanTransaction, TransactionType } from 'src/entities/transaction.entity';
+import { format } from 'date-fns';
 
 function getLocalDayRange(rawDate: string | Date): { start: Date; end: Date } {
     const date = typeof rawDate === 'string' ? new Date(rawDate) : rawDate;
@@ -110,17 +111,19 @@ export class CashService {
             });
         }
         
+        /* ───── Date filter (optional) ───── */
         if (date) {
+            const day =
+            typeof date === 'string'
+            ? date                   // ‘2025-06-14’
+            : format(date, 'yyyy-MM-dd');
             
-            const parsedDate = typeof date === 'string' ? parseISO(date) : date;
-            const { start, end } = getLocalDayRange(date);
-            
-            
-            query.andWhere('movement.createdAt BETWEEN :start AND :end', {
-                start,
-                end,
-            });
+            // — SQLite
+            // DATE(col) descarta la parte de la hora y mantiene AAAA-MM-DD
+            query.andWhere('DATE(movement.createdAt) = :day', { day });
+   
         }
+        
         
         query
         .orderBy('movement.createdAt', 'DESC')

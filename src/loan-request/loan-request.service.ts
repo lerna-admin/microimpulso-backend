@@ -86,7 +86,7 @@ export class LoanRequestService {
     .leftJoinAndSelect('loan.client', 'client')
     .leftJoinAndSelect('loan.agent',  'agent')
     /* Join the branch table; we do not need to select its columns */
-    .leftJoin('agent.branch', 'branch')
+    .leftJoinAndSelect('agent.branch', 'branch')
     .select([
       'loan',
       'client',

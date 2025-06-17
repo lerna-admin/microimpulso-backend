@@ -88,13 +88,11 @@ export class LoanRequestService {
     /* Join the branch table; we do not need to select its columns */
     .leftJoinAndSelect('agent.branch', 'branch')
     .select([
-      'loan',
-      'client',
-      'agent.id',
-      'agent.name',
-      'agent.email',
-      'agent.role',
-    ]);
+  'loan',
+  'client',
+  'agent',
+  'branch'
+])
     
     /* ───── Dynamic filters ───── */
     if (filters?.id !== undefined)               qb.andWhere('loan.id = :id', { id: filters.id });

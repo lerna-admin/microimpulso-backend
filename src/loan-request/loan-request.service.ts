@@ -72,8 +72,7 @@ export class LoanRequestService {
       clientId?: number;
       agentId?: number;
       branchId?: number;
-      
-    }
+    },
   ): Promise<{
     data: LoanRequest[];
     totalItems: number;
@@ -81,10 +80,13 @@ export class LoanRequestService {
     page: number;
     limit: number;
   }> {
+    /* ───── Base query ───── */
     const qb = this.loanRequestRepository
     .createQueryBuilder('loan')
     .leftJoinAndSelect('loan.client', 'client')
-    .leftJoinAndSelect('loan.agent', 'agent')
+    .leftJoinAndSelect('loan.agent',  'agent')
+    /* Join the branch table; we do not need to select its columns */
+    .leftJoin('agent.branch', 'branch')
     .select([
       'loan',
       'client',
@@ -94,68 +96,35 @@ export class LoanRequestService {
       'agent.role',
     ]);
     
-    if (filters?.id !== undefined) {
-      qb.andWhere('loan.id = :id', { id: filters.id });
-    }
-    if (filters?.amount !== undefined) {
-      qb.andWhere('loan.amount = :amount', { amount: filters.amount });
-    }
-    if (filters?.requestedAmount !== undefined) {
-      qb.andWhere('loan.requestedAmount = :reqAmt', {
-        reqAmt: filters.requestedAmount,
-      });
-    }
-    if (filters?.status) {
-      qb.andWhere('loan.status = :status', { status: filters.status });
-    }
-    if (filters?.type) {
-      qb.andWhere('loan.type = :type', { type: filters.type });
-    }
-    if (filters?.mode) {
-      qb.andWhere('loan.mode = :mode', { mode: filters.mode });
-    }
-    if (filters?.mora !== undefined) {
-      qb.andWhere('loan.mora = :mora', { mora: filters.mora });
-    }
-    if (filters?.endDateAt) {
-      qb.andWhere('loan.endDateAt = :endDate', { endDate: filters.endDateAt });
-    }
-    if (filters?.paymentDay) {
-      qb.andWhere('loan.paymentDay = :paymentDay', {
-        paymentDay: filters.paymentDay,
-      });
-    }
-    if (filters?.createdAt) {
-      qb.andWhere('loan.createdAt = :createdAt', {
-        createdAt: filters.createdAt,
-      });
-    }
-    if (filters?.updatedAt) {
-      qb.andWhere('loan.updatedAt = :updatedAt', {
-        updatedAt: filters.updatedAt,
-      });
-    }
-    if (filters?.clientId !== undefined) {
-      qb.andWhere('loan.clientId = :clientId', { clientId: filters.clientId });
-    }
-    if (filters?.agentId !== undefined) {
-      qb.andWhere('loan.agentId = :agentId', { agentId: filters.agentId });
-    }
-    if (filters?.branchId !== undefined) {
-      qb.andWhere('agent.branchId = :branchId', { branchId: filters.branchId });
-    }    
+    /* ───── Dynamic filters ───── */
+    if (filters?.id !== undefined)               qb.andWhere('loan.id = :id', { id: filters.id });
+    if (filters?.amount !== undefined)           qb.andWhere('loan.amount = :amount', { amount: filters.amount });
+    if (filters?.requestedAmount !== undefined)  qb.andWhere('loan.requestedAmount = :reqAmt', { reqAmt: filters.requestedAmount });
+    if (filters?.status)                         qb.andWhere('loan.status = :status', { status: filters.status });
+    if (filters?.type)                           qb.andWhere('loan.type   = :type',   { type:   filters.type });
+    if (filters?.mode)                           qb.andWhere('loan.mode   = :mode',   { mode:   filters.mode });
+    if (filters?.mora !== undefined)             qb.andWhere('loan.mora   = :mora',   { mora:   filters.mora });
+    if (filters?.endDateAt)                      qb.andWhere('loan.endDateAt = :endDate', { endDate: filters.endDateAt });
+    if (filters?.paymentDay)                     qb.andWhere('loan.paymentDay = :paymentDay', { paymentDay: filters.paymentDay });
+    if (filters?.createdAt)                      qb.andWhere('loan.createdAt = :createdAt', { createdAt: filters.createdAt });
+    if (filters?.updatedAt)                      qb.andWhere('loan.updatedAt = :updatedAt', { updatedAt: filters.updatedAt });
+    if (filters?.clientId !== undefined)         qb.andWhere('loan.clientId = :clientId', { clientId: filters.clientId });
+    if (filters?.agentId !== undefined)          qb.andWhere('loan.agentId  = :agentId',  { agentId:  filters.agentId });
+    if (filters?.branchId !== undefined)         qb.andWhere('branch.id     = :branchId', { branchId: filters.branchId });
     
+    /* ───── Sort & pagination ───── */
+    qb.orderBy('loan.createdAt', 'DESC');
     
-    qb.orderBy('loan.createdAt', 'DESC')
-    .skip((page - 1) * limit)
-    .take(limit);
+    if (limit > 0 && page > 0) {
+      qb.skip((page - 1) * limit).take(limit);
+    }
     
     const [data, totalItems] = await qb.getManyAndCount();
     
     return {
       data,
       totalItems,
-      totalPages: Math.ceil(totalItems / limit),
+      totalPages: limit > 0 ? Math.ceil(totalItems / limit) : 1,
       page,
       limit,
     };

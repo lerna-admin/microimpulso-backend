@@ -11,6 +11,8 @@ import { AnalyticsModule } from './analytics/analytics.module';
 import { ClosingModule } from './agent-closing/agent-closing.module';
 import { CashModule } from './cash/cash.module';
 import { PermissionModule } from './permissions/permissions.module';
+import { CampaignModule } from './campaign/campaign.module';
+import { BranchModule } from './branch/branch.module';
 @Module({
   imports: [
     TypeOrmModule.forRoot({
@@ -29,7 +31,9 @@ import { PermissionModule } from './permissions/permissions.module';
     AnalyticsModule,
     ClosingModule,
     CashModule,
-    PermissionModule
+    PermissionModule,
+    CampaignModule,
+    BranchModule
   ],
 })
 export class AppModule {}

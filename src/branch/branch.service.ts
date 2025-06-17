@@ -26,11 +26,12 @@ export class BranchService {
             where.administrator = { id: filters.administratorId };
         }
         
-        return this.branchRepository.find({
-            where,
-            relations: ['administrator', 'agents'],
-            order: { createdAt: 'DESC' },
-        });
+        return this.branchRepository
+        .createQueryBuilder('branch')
+        .select(['branch.id', 'branch.name'])
+        .orderBy('branch.createdAt', 'DESC')
+        .getMany();
+        
     }
     
     findOne(id: number) {

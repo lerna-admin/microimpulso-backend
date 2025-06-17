@@ -142,8 +142,8 @@ export class LoanRequestService {
       qb.andWhere('loan.agentId = :agentId', { agentId: filters.agentId });
     }
     if (filters?.branchId !== undefined) {
-      qb.andWhere('loan.agent.branchId = :branchId', { branchId: filters.branchId });
-    }
+      qb.andWhere('agent.branchId = :branchId', { branchId: filters.branchId });
+    }    
     
     
     qb.orderBy('loan.createdAt', 'DESC')

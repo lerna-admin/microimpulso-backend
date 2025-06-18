@@ -5,23 +5,8 @@ import { Client } from 'src/entities/client.entity';
 @Controller('clients')
 export class ClientsController {
   constructor(private readonly clientsService: ClientsService) {}
+
   
-  @Get('basic')
-  async listBasicClients(
-    @Query('limit')    limitRaw?: string,
-    @Query('page')     pageRaw?: string,
-    @Query('document') document?: string,
-    @Query('name')     name?: string,
-  ) {
-    const limit = Math.max(parseInt(limitRaw ?? '10', 10), 1);
-    const page  = Math.max(parseInt(pageRaw  ?? '1', 10), 1);
-
-    const filters: { document?: string; name?: string } = {};
-    if (document) filters.document = document;
-    if (name)     filters.name     = name;
-
-    return this.clientsService.listClients(limit, page, filters);
-  }
   
   @Get()
   findAll(
@@ -82,6 +67,23 @@ export class ClientsController {
   @Get(':id')
   findOne(@Param('id') id: number) {
     return this.clientsService.findOne(id);
+  }
+  
+  @Get('basic')
+  async listBasicClients(
+    @Query('limit')    limitRaw?: string,
+    @Query('page')     pageRaw?: string,
+    @Query('document') document?: string,
+    @Query('name')     name?: string,
+  ) {
+    const limit = Math.max(parseInt(limitRaw ?? '10', 10), 1);
+    const page  = Math.max(parseInt(pageRaw  ?? '1', 10), 1);
+
+    const filters: { document?: string; name?: string } = {};
+    if (document) filters.document = document;
+    if (name)     filters.name     = name;
+
+    return this.clientsService.listClients(limit, page, filters);
   }
   
   // POST /clients → create a new client

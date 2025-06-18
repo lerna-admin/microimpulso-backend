@@ -16,7 +16,7 @@ export class ClientsController {
     @Query('document') document?: string,
     @Query('name') name?: string,
     @Query('type') type?: string,
-    @Query('mode') loanMode?: string,
+    @Query('mode') mode?: string,
     @Query('paymentDay') paymentDay?: string,
     
     

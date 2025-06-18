@@ -33,6 +33,58 @@ export class ClientsService {
     @InjectRepository(LoanRequest)
     private readonly loanRequestRepository: Repository<LoanRequest>,
   ) { }
+
+
+  /**
+ * Paginated list of all clients.
+ * – No joins to loans, agents, or branches.
+ * – Filters: document, name (case-insensitive).
+ */
+async listClients(
+  limit: number = 10,
+  page:  number = 1,
+  filters?: {
+    document?: string;
+    name?:     string;
+  },
+): Promise<{
+  page:       number;
+  limit:      number;
+  totalItems: number;
+  totalPages: number;
+  data:       Client[];
+}> {
+  const qb = this.clientRepository.createQueryBuilder('client');
+
+  /* ───── optional filters ───── */
+  if (filters?.document) {
+    qb.andWhere('client.document LIKE :document', {
+      document: `%${filters.document}%`,
+    });
+  }
+
+  if (filters?.name) {
+    qb.andWhere('LOWER(client.name) LIKE :name', {
+      name: `%${filters.name.toLowerCase()}%`,
+    });
+  }
+
+  /* ───── ordering + pagination ───── */
+  qb.orderBy('client.createdAt', 'DESC')
+    .skip((page - 1) * limit)
+    .take(limit);
+
+  const [clients, total] = await qb.getManyAndCount();
+
+  return {
+    page,
+    limit,
+    totalItems:  total,
+    totalPages:  Math.ceil(total / limit),
+    data:        clients,
+  };
+}
+
   
   // TODO HACER LOS MISMOS CAMBIOS DEL AGENT BY ID ACA PARA LOS DEMAS ROLES
   async findAll(

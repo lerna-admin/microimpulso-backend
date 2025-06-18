@@ -70,7 +70,7 @@ export class ClientsService {
     /* 3. Ensure every client appears in the map (prospects)              */
     /* ------------------------------------------------------------------ */
     const allClients = await this.clientRepository.find({
-      select: ['id', 'name', 'document'],
+      select: ['id', 'name', 'phone','document'],
     });
     
     for (const c of allClients) {

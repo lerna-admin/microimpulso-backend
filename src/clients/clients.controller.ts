@@ -5,35 +5,37 @@ import { Client } from 'src/entities/client.entity';
 @Controller('clients')
 export class ClientsController {
   constructor(private readonly clientsService: ClientsService) {}
-
-  
   
   @Get()
   findAll(
-    @Query('limit') limit = 10,
-    @Query('page') page = 1,
-    @Query('status') status?: string,
-    @Query('document') document?: string,
-    @Query('name') name?: string,
-    @Query('type') type?: string,
-    @Query('mode') loanMode?: string,
-    @Query('paymentDay') paymentDay?: string,
-    
-    
+    @Query('limit')       limit  = 10,
+    @Query('page')        page   = 1,
+    @Query('status')      status?: string,
+    @Query('document')    document?: string,
+    @Query('name')        name?: string,
+    @Query('type')        type?: string,
+    @Query('mode')        mode?: string,
+    @Query('paymentDay')  paymentDay?: string,
   ): Promise<any> {
     return this.clientsService.findAll(
       Number(limit),
       Number(page),
       {
-        status: status?.toLowerCase() as 'active' | 'inactive' | 'rejected',
+        status: status?.toLowerCase() as
+        | 'active'
+        | 'inactive'
+        | 'rejected'
+        | 'prospect',   // ← new status
         document,
         name,
         type,
-        loanMode,
-        paymentDay
+        mode,            // ← corrected parameter
+        paymentDay,
       },
     );
   }
+  
+  
   
   @Get('agent/:agentId')
   findAllByAgent(
@@ -43,10 +45,10 @@ export class ClientsController {
     @Query('status') status?: string,
     @Query('document') document?: string,
     @Query('name') name?: string,
-       @Query('type') type?: string,
+    @Query('type') type?: string,
     @Query('mode') mode?: string,
     @Query('paymentDay') paymentDay?: string,
-
+    
   ): Promise<any> {
     return this.clientsService.findAllByAgent(
       agentId,

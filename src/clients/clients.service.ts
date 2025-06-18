@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Client } from '../entities/client.entity';
@@ -403,13 +403,29 @@ export class ClientsService {
       };
     }
     
-    // Create a new client record
     async create(data: Partial<Client>): Promise<Client> {
+      if (data.document || data.email) {
+        const dup = await this.clientRepository.findOne({
+          where: [
+            data.document ? { document: data.document } : {},
+            data.email    ? { email:    data.email    } : {},
+          ],
+        });
+        
+        if (dup) {
+          throw new ConflictException(
+            'A client with the same document or email already exists',
+          );
+        }
+      }
+      
+      /* 2. Persist the new client ──────────────────────────────────── */
       const client = this.clientRepository.create({
         ...data,
         createdAt: new Date(),
         updatedAt: new Date(),
       });
+      
       return this.clientRepository.save(client);
     }
   }

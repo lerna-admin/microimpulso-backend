@@ -36,84 +36,75 @@ export class ClientsService {
 
 
   
-  // TODO HACER LOS MISMOS CAMBIOS DEL AGENT BY ID ACA PARA LOS DEMAS ROLES
- /**
- * Return a paginated list of clients, grouped by “representative” loan.
- * Adds a new status:  **prospect**  (client with zero loan requests).
+/**
+ * List clients with their representative loan request (if any).
+ * Adds status "prospect" for clients without loan requests.
+ * All comments are strictly in English.
  */
 async findAll(
   limit: number = 10,
   page:  number = 1,
   filters?: {
-    status?: 'active' | 'inactive' | 'rejected' | 'prospect';
-    document?:   string;
-    name?:       string;
-    mode?:       string;
-    type?:       string;
-    paymentDay?: string;
+    status?:      'active' | 'inactive' | 'rejected' | 'prospect';
+    document?:    string;
+    name?:        string;
+    loanMode?:        string;
+    type?:        string;
+    paymentDay?:  string;
   },
 ): Promise<any> {
-  /* ──────────────── 1. Load data ──────────────── */
+  /* 1️⃣ Load data ----------------------------------------------------------- */
   const loans = await this.loanRequestRepository.find({
-    where:     {},                               // no extra conditions
     relations: { client: true, transactions: true },
     order:     { createdAt: 'DESC' },
   });
 
-  // every client row – light-weight, no joins
   const allClients = await this.clientRepository.find({
     select: ['id', 'name', 'document', 'createdAt'],
   });
 
-  /* ──────────────── 2. Map loans by client ──────────────── */
-  const clientMap = new Map<number, any[]>();    // clientId → LoanRequest[]
+  /* 2️⃣ Map loans by clientId ---------------------------------------------- */
+  const loanMap = new Map<number, typeof loans>();          // clientId → LoanRequest[]
   for (const loan of loans) {
     const id = loan.client.id;
-    if (!clientMap.has(id)) clientMap.set(id, []);
-    clientMap.get(id)!.push(loan);
+    if (!loanMap.has(id)) loanMap.set(id, []);
+    loanMap.get(id)!.push(loan);
   }
 
-  // add prospects (no loans)
-  for (const client of allClients) {
-    if (!clientMap.has(client.id)) clientMap.set(client.id, []); // empty array
-  }
-
-  /* ──────────────── 3. Accumulators ──────────────── */
-  const allResults: any[] = [];
+  /* 3️⃣ Aggregators --------------------------------------------------------- */
+  const results: any[] = [];
   let totalActiveAmountBorrowed = 0;
   let totalActiveRepayment      = 0;
   let activeClientsCount        = 0;
   let mora15 = 0, critical20 = 0, noPayment30 = 0;
 
-  /* ──────────────── 4. Iterate per-client ──────────────── */
-  for (const [ , clientLoans ] of clientMap) {
-    const client = clientLoans.length ? clientLoans[0].client
-                                      : allClients.find(c => !clientLoans.length && c.id);
+  /* 4️⃣ Iterate once per client -------------------------------------------- */
+  for (const client of allClients) {
+    const clientLoans = loanMap.get(client.id) ?? [];
 
-    /* ---- determine status ---- */
+    /* Determine status */
     const hasFunded    = clientLoans.some(l => l.status === 'funded');
     const allCompleted = clientLoans.length > 0 && clientLoans.every(l => l.status === 'completed');
     const hasRejected  = clientLoans.some(l => l.status === 'rejected');
 
     let status: 'active' | 'inactive' | 'rejected' | 'prospect';
-    if (clientLoans.length === 0)  status = 'prospect';
-    else if (hasFunded)           status = 'active';
-    else if (allCompleted)        status = 'inactive';
-    else if (hasRejected)         status = 'rejected';
-    else                          status = 'inactive';
+    if (clientLoans.length === 0)       status = 'prospect';
+    else if (hasFunded)                 status = 'active';
+    else if (allCompleted)              status = 'inactive';
+    else if (hasRejected)               status = 'rejected';
+    else                                status = 'inactive';
 
-    /* ---- filters that apply to *all* statuses ---- */
-    if (filters?.status   && filters.status !== status)                   continue;
-    if (filters?.document && !client.document?.includes(filters.document))continue;
+    /* Common filters */
+    if (filters?.status   && filters.status !== status)                        continue;
+    if (filters?.document && !client.document?.includes(filters.document))     continue;
     if (filters?.name     && !client.name.toLowerCase()
-                                     .includes(filters.name.toLowerCase()))continue;
+                                        .includes(filters.name.toLowerCase())) continue;
 
-    /* ---- prospect rows: lightweight response ---- */
+    /* Prospect: light response, skip loan-specific filters */
     if (status === 'prospect') {
-      // if user requested loan-related filters, skip prospects
-      if (filters?.mode || filters?.type || filters?.paymentDay) continue;
+      if (filters?.loanMode || filters?.type || filters?.paymentDay) continue;
 
-      allResults.push({
+      results.push({
         client,
         loanRequest:       null,
         totalRepayment:    0,
@@ -125,19 +116,18 @@ async findAll(
       continue;
     }
 
-    /* ---- select representative loan for non-prospects ---- */
+    /* Pick representative loan */
     const sel = clientLoans.find(l =>
       status === 'active'   ? l.status === 'funded'    :
       status === 'inactive' ? l.status === 'completed' :
                               l.status === 'rejected'
     )!;
 
-    /* ---- loan-related filters ---- */
-    if (filters?.mode       && sel.mode       !== filters.mode)       continue;
+    /* Loan-specific filters */
     if (filters?.type       && sel.type       !== filters.type)       continue;
     if (filters?.paymentDay && sel.paymentDay !== filters.paymentDay) continue;
 
-    /* ---- monetary calculations ---- */
+    /* Monetary calculations */
     const totalRepayment = sel.transactions
       .filter(t => t.Transactiontype === 'repayment')
       .reduce((s, t) => s + +t.amount, 0);
@@ -148,11 +138,11 @@ async findAll(
 
     const remainingAmount = amountBorrowed - totalRepayment;
 
-    /* ---- lateness & aggregates ---- */
+    /* Days late & aggregate metrics */
     const now      = new Date();
     const endDate  = sel.endDateAt ? new Date(sel.endDateAt) : null;
     const daysLate = endDate && now > endDate
-      ? Math.floor((now.getTime() - endDate.getTime()) / 86_400_000)
+      ? Math.floor((+now - +endDate) / 86_400_000)
       : 0;
 
     if (status === 'active') {
@@ -165,8 +155,8 @@ async findAll(
       activeClientsCount++;
     }
 
-    /* ---- push result ---- */
-    allResults.push({
+    /* Push final record */
+    results.push({
       client,
       loanRequest: {
         id: sel.id,
@@ -190,10 +180,10 @@ async findAll(
     });
   }
 
-  /* ──────────────── 5. Pagination & return ──────────────── */
-  const totalItems = allResults.length;
-  const startIndex = (page - 1) * limit;
-  const data       = allResults.slice(startIndex, startIndex + limit);
+  /* 5️⃣ Pagination & response ---------------------------------------------- */
+  const totalItems = results.length;
+  const start      = (page - 1) * limit;
+  const data       = results.slice(start, start + limit);
 
   return {
     page,
@@ -209,6 +199,7 @@ async findAll(
     data,
   };
 }
+
 
     
     

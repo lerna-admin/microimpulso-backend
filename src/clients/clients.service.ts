@@ -60,7 +60,7 @@ async findAll(
   });
 
   const allClients = await this.clientRepository.find({
-    select: ['id', 'name', 'document', 'createdAt'],
+    select: ['id', 'name', 'document','phone','createdAt'],
   });
 
   /* 2️⃣ Map loans by clientId ---------------------------------------------- */

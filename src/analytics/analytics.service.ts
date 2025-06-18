@@ -4,7 +4,8 @@ import { Between, Repository } from 'typeorm';
 import { LoanRequest, LoanRequestStatus } from 'src/entities/loan-request.entity';
 import { Branch } from 'src/entities/branch.entity';
 import { AnalyticsReport, AnalyticsMonthlyReport, AnalyticsYearlyReport } from './analytics.model';
-import { TransactionType } from 'src/entities/transaction.entity';
+import { LoanTransaction, TransactionType } from 'src/entities/transaction.entity';
+import { User } from 'src/entities/user.entity';
 export interface FundedByBranchComparison {
   branchId: number;
   branchName: string;
@@ -26,6 +27,11 @@ export class AnalyticsService {
   constructor(
     @InjectRepository(LoanRequest)
     private readonly loanRequestRepo: Repository<LoanRequest>,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,  
+    @InjectRepository(LoanTransaction)
+    private readonly loanTransactionRepository: Repository<LoanTransaction>,
+    
   ) {}
   
   // Return the first and last day of the given month
@@ -241,47 +247,47 @@ export class AnalyticsService {
     
     return result;
   }
-
+  
   /**
-   * Returns a summary of delinquent clients:
-   * - Not paid loans (still active)
-   * - Loans with 15+ days of delay
-   * - Loans with 30+ days of delay (critical)
-   */
+  * Returns a summary of delinquent clients:
+  * - Not paid loans (still active)
+  * - Loans with 15+ days of delay
+  * - Loans with 30+ days of delay (critical)
+  */
   async getClientDelinquencyStats(): Promise<any> {
     const now = new Date();
-
+    
     // Load all loan requests with transactions and clients
     const allLoans = await this.loanRequestRepo.find({
       where: {},
       relations: ['transactions'],
     });
-
+    
     let notPaid = 0;
     let lateOver15 = 0;
     let critical = 0;
-
+    
     for (const loan of allLoans) {
       // Skip completed loans
       if (loan.status === 'completed' || loan.status === 'rejected') {
         continue;
       }
-
+      
       // Find latest repayment transaction
       const lastRepayment = loan.transactions
-        .filter(t => t.Transactiontype === TransactionType.REPAYMENT)
-        .sort((a, b) => +new Date(b.date) - +new Date(a.date))[0];
-
+      .filter(t => t.Transactiontype === TransactionType.REPAYMENT)
+      .sort((a, b) => +new Date(b.date) - +new Date(a.date))[0];
+      
       // Calculate how many days since last payment (or from loan creation)
       const referenceDate = lastRepayment ? new Date(lastRepayment.date) : new Date(loan.createdAt);
       const daysLate = Math.floor((+now - +referenceDate) / (1000 * 60 * 60 * 24));
-
+      
       notPaid++;
-
+      
       if (daysLate > 15) lateOver15++;
       if (daysLate > 30) critical++;
     }
-
+    
     // TODO: Replace mock variations with historical comparison if available
     return {
       notPaid: {
@@ -306,8 +312,69 @@ export class AnalyticsService {
         },
       },
     };
+  }// 1) Fetch the most recent loan requests
+  async getLatestRequests(limit: number): Promise<LoanRequest[]> {
+    return this.loanRequestRepo.find({
+      order: { createdAt: 'DESC' },
+      take: limit,
+      relations: ['client', 'agent'],
+    });
   }
-
-
   
+  // 2) Get agents with the highest count of requests not approved and not rejected
+  async getTopAgentsByUndisbursed(
+    limit: number,
+  ): Promise<{ agentId: number; agentName: string; undisbursedCount: number }[]> {
+    const rows = await this.loanRequestRepo
+    .createQueryBuilder('lr')
+    .select('lr.agentId', 'agentId')
+    .addSelect('COUNT(*)', 'undisbursedCount')
+    .where('lr.status NOT IN (:...statuses)', { statuses: [LoanRequestStatus.APPROVED, LoanRequestStatus.REJECTED] })
+    .groupBy('lr.agentId')
+    .orderBy('undisbursedCount', 'DESC')
+    .limit(limit)
+    .getRawMany<{ agentId: number; undisbursedCount: string }>();
+    
+    const agentIds = rows.map(r => r.agentId);
+    const agents = await this.userRepository.findByIds(agentIds);
+    
+    return rows.map(r => ({
+      agentId: r.agentId,
+      agentName: agents.find(a => a.id === r.agentId)?.name ?? 'Unknown',
+      undisbursedCount: +r.undisbursedCount,
+    }));
+  }
+  
+  // 3) Retrieve the latest repayment transactions
+  async getRecentPayments(
+    limit: number,
+  ): Promise<
+  {
+    transactionId: number;
+    loanRequestId: number;
+    amount: number;
+    date: Date;
+    clientName: string;
+    agentName: string;
+  }[]
+  > {
+    const txns = await this.loanTransactionRepository
+    .createQueryBuilder('tx')
+    .leftJoinAndSelect('tx.loanRequest', 'lr')
+    .leftJoinAndSelect('lr.client', 'client')
+    .leftJoinAndSelect('lr.agent', 'agent')
+    .where('tx.transactionType = :type', { type: 'repayment' })
+    .orderBy('tx.date', 'DESC')
+    .limit(limit)
+    .getMany();
+    
+    return txns.map(tx => ({
+      transactionId: tx.id,
+      loanRequestId: tx.loanRequest.id,
+      amount: tx.amount,
+      date: tx.date,
+      clientName: tx.loanRequest.client.name,
+      agentName: tx.loanRequest.agent.name,
+    }));
+  }
 }

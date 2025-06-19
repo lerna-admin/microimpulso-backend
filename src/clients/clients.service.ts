@@ -122,10 +122,7 @@ async findAll(
       continue;
     }
     if (filters?.document && !client.document?.includes(filters.document)) continue;
-    if (filters?.name &&
-        !`${client.firstName || ''} ${client.lastName || ''}`
-          .toLowerCase()
-          .includes(filters.name.toLowerCase())) continue;
+    if (filters?.name && !client.name.toLowerCase().includes(filters.name.toLowerCase())) continue;
     if (filters?.mode       && sel.mode       !== filters.mode)       continue;
     if (filters?.type       && sel.type       !== filters.type)       continue;
     if (filters?.paymentDay && sel.paymentDay !== filters.paymentDay) continue;

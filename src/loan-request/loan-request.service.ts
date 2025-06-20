@@ -5,6 +5,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Between, In, Not, Repository } from 'typeorm';
 import { LoanRequest, LoanRequestStatus } from 'src/entities/loan-request.entity';
 import { TransactionType, LoanTransaction} from 'src/entities/transaction.entity';
+import { User } from 'src/entities/user.entity'
 
 @Injectable()
 export class LoanRequestService {
@@ -15,19 +16,39 @@ export class LoanRequestService {
     @InjectRepository(LoanRequest)
     private readonly loanRequestRepository: Repository<LoanRequest>,
     @InjectRepository(LoanTransaction)
-    private readonly transactionRepository: Repository<LoanTransaction>
-  ) {}
+    private readonly transactionRepository: Repository<LoanTransaction>,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>
+    
+    ) {}
   
   
-  async create(createLoanRequestDto: CreateLoanRequestDto): Promise<LoanRequest> {
-    const loanRequest = this.loanRequestRepository.create(createLoanRequestDto);
+  async create(data: Partial<LoanRequest>): Promise<LoanRequest> {
+    if (!data.agent) {
+      const randomAgent = await this.userRepository
+      .createQueryBuilder('user')
+      .where('user.role = :role', { role: 'AGENT' })
+      .orderBy('RANDOM()')
+      .limit(1)
+      .getOne();
+
+      if (!randomAgent) {
+        throw new Error('No available agent to assign');
+      }
+
+      data.agent = randomAgent;
+    }
+
+    const loanRequest = this.loanRequestRepository.create(data);
     return await this.loanRequestRepository.save(loanRequest);
   }
+
+  
   async renewLoanRequest(
     loanRequestId: number,
     amount: number,
     newDate: string,
-  ): Promise<LoanRequest> {
+    ): Promise<LoanRequest> {
     const loan = await this.loanRequestRepository.findOne({
       where: { id: loanRequestId },
       relations: ['transactions'],   
@@ -73,7 +94,7 @@ export class LoanRequestService {
       agentId?: number;
       branchId?: number;
     },
-  ): Promise<{
+    ): Promise<{
     data: LoanRequest[];
     totalItems: number;
     totalPages: number;
@@ -88,11 +109,11 @@ export class LoanRequestService {
     /* Join the branch table; we do not need to select its columns */
     .leftJoinAndSelect('agent.branch', 'branch')
     .select([
-  'loan',
-  'client',
-  'agent',
-  'branch'
-])
+      'loan',
+      'client',
+      'agent',
+      'branch'
+    ])
     
     /* ───── Dynamic filters ───── */
     if (filters?.id !== undefined)               qb.andWhere('loan.id = :id', { id: filters.id });
@@ -147,7 +168,7 @@ export class LoanRequestService {
       updatedAt?: Date;
       clientId?: number;
     }
-  ): Promise<{
+    ): Promise<{
     data: LoanRequest[];
     totalItems: number;
     totalPages: number;
@@ -248,8 +269,8 @@ export class LoanRequestService {
     
     if (!openRequest) {
       throw new NotFoundException(
-        `No open loan request found for client ${clientId}`,
-      );
+    `No open loan request found for client ${clientId}`,
+    );
     }
     return openRequest;
   }
@@ -265,8 +286,8 @@ export class LoanRequestService {
     
     if (!openRequest) {
       throw new NotFoundException(
-        `No open loan request found for client ${clientId}`,
-      );
+    `No open loan request found for client ${clientId}`,
+    );
     }
     return openRequest;
   }
@@ -336,18 +357,18 @@ export class LoanRequestService {
     
     const cobrado = repaymentsToday.reduce(
       (sum, tx) => sum + Number(tx.amount), 0,
-    );
+      );
     
     /* ─── 3. Renewals (same logic) ─── */
     const renewedLoans = fundedLoans.filter(
       l => l.isRenewed &&
       l.renewedAt &&
       new Date(l.renewedAt).toISOString().split('T')[0] === todayStr,
-    );
+      );
     const renovados      = renewedLoans.length;
     const valorRenovados = renewedLoans.reduce(
       (sum, l) => sum + Number(l.requestedAmount), 0,
-    );
+      );
     
     /* ─── 4. “Nuevos” (already correct) ─── */
     const disbursementsToday = await this.transactionRepository
@@ -360,12 +381,12 @@ export class LoanRequestService {
     
     const agentDisbursements = disbursementsToday.filter(
       tx => tx.loanRequest?.agent?.id === agentId,
-    );
+      );
     
     const nuevos      = agentDisbursements.length;
     const valorNuevos = agentDisbursements.reduce(
       (sum, tx) => sum + Number(tx.loanRequest?.requestedAmount ?? tx.amount), 0,
-    );
+      );
     
     /* ─── 5. Return summary ─── */
     return {

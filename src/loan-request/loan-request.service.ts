@@ -101,6 +101,7 @@ export class LoanRequestService {
     page: number;
     limit: number;
   }> {
+    console.log(filters)
     /* ───── Base query ───── */
     const qb = this.loanRequestRepository
     .createQueryBuilder('loan')

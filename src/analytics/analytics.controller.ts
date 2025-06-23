@@ -43,25 +43,38 @@ export class AnalyticsController {
   
   /**
   * GET /stats/manager-summary
-  * Query params (all opcionales):
-  *   - latestLimit: número de últimas solicitudes (default: 10)
-  *   - topAgentsLimit: número de agentes con más solicitudes sin desembolsar (default: 5)
-  *   - recentPaymentsLimit: número de últimos pagos (default: 10)
+  * Query params (all optional):
+  *   - latestLimit           ▸ latest loan-request count      (default: 5)
+  *   - topAgentsLimit        ▸ how many agents to list        (default: 5)
+  *   - upcomingPaymentsLimit ▸ how many due-soon requests     (default: 5)
   */
   @Get('manager-summary')
   async getManagerSummary(
-    @Query('latestLimit') latestLimit = '10',
-    @Query('topAgentsLimit') topAgentsLimit = '5',
-    @Query('recentPaymentsLimit') recentPaymentsLimit = '10',
-  ): Promise<{
-    latestRequests: any[];
-    topAgentsByUndisbursed: { agentId: number; agentName: string; undisbursedCount: number }[];
-    recentPayments: { transactionId: number; loanRequestId: number; amount: number; date: Date; clientName: string; agentName: string }[];
-  }> {
-    const latestRequests = await this.analyticsService.getLatestRequests(+latestLimit);
-    const topAgentsByUndisbursed = await this.analyticsService.getTopAgentsByUndisbursed(+topAgentsLimit);
-    const recentPayments = await this.analyticsService.getRecentPayments(+recentPaymentsLimit);
-    return { latestRequests, topAgentsByUndisbursed, recentPayments };
+    @Query('latestLimit')           latestLimit           = '5',
+    @Query('topAgentsLimit')        topAgentsLimit        = '5',
+    @Query('upcomingPaymentsLimit') upcomingPaymentsLimit = '5',
+    ): Promise<{
+      latestRequests: any[];
+      topAgentsByUndisbursed: {
+        agentId: number;
+        agentName: string;
+        undisbursedCount: number;
+      }[];
+      upcomingPayments: {
+        loanRequestId: number;
+        amount: number;
+        endDateAt: Date;
+        clientName: string;
+        agentName: string;
+      }[];
+    }> {
+      const latestRequests        = await this.analyticsService.getLatestRequests(+latestLimit);
+      const topAgentsByUndisbursed = await this.analyticsService.getTopAgentsByUndisbursed(+topAgentsLimit);
+      const upcomingPayments      = await this.analyticsService.getUpcomingPayments(+upcomingPaymentsLimit);
+      
+      return { latestRequests, topAgentsByUndisbursed, upcomingPayments };
+    }
+    
+    
   }
   
-}

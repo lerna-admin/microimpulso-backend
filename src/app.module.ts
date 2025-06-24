@@ -13,6 +13,8 @@ import { CashModule } from './cash/cash.module';
 import { PermissionModule } from './permissions/permissions.module';
 import { CampaignModule } from './campaign/campaign.module';
 import { BranchModule } from './branch/branch.module';
+import { PaymentAccountModule } from './payment-accounts/payment-account.module';
+import { ConfigParamModule } from './config-param/config-param.module';
 @Module({
   imports: [
     TypeOrmModule.forRoot({
@@ -33,7 +35,10 @@ import { BranchModule } from './branch/branch.module';
     CashModule,
     PermissionModule,
     CampaignModule,
-    BranchModule
+    BranchModule,
+    ConfigParamModule,
+    PaymentAccountModule
+
   ],
 })
 export class AppModule {}

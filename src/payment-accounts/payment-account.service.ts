@@ -34,7 +34,10 @@ import {
           accountNumber,
           accountType,
           currency = 'COP',
-          limit = 0,                 // ← uses the same name as in the entity
+          limit = 0,
+          isPrimary,
+          holderName,       // ← must be here
+          holderDocument,   // ← must be here                 // ← uses the same name as in the entity
         } = payload;
       
         if (!bankName || !accountNumber || !accountType) {
@@ -52,6 +55,9 @@ import {
           limit,                     // ← matches @Column('decimal') limit
           dailyReceived: 0,
           isActive: true,
+          isPrimary,
+          holderName,       // ← must be here
+          holderDocument,   // ← must be here
         });
       
         /* 3. Persist & return ---------------------------------------------- */

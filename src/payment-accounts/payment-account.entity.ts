@@ -29,4 +29,14 @@ export class PaymentAccount {
 
   @UpdateDateColumn()
   updatedAt: Date;
+
+  @Column({ default: false })
+  isPrimary: boolean;   
+  
+  /* --- holder info --- */
+  @Column()
+  holderName: string;                    // Account holder’s full name
+
+  @Column()
+  holderDocument: string;                // e.g. Colombian CC / NIT
 }

@@ -415,6 +415,8 @@ export class AnalyticsService {
                 endDateAt: lr.endDateAt,
                 clientName: lr.client.name,
                 agentName: lr.agent.name,
+                type : lr.type,
+                mode : lr.mode
             }));
     }
         

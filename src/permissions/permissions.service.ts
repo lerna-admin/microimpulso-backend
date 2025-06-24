@@ -48,46 +48,51 @@ export class PermissionService {
     async assignPermissionToUser(
         userId: number,
         changes: { id?: number; name?: string; granted: boolean }[],
-    ): Promise<User> {
-        /* ── 1️⃣  Load user with current permissions ─────────────────────── */
+      ): Promise<User> {
+        /* 1️⃣ load user ---------------------------------------------------- */
         const user = await this.userRepository.findOne({
-        where: { id: userId },
-        relations: ['permissions'],
+          where: { id: userId },
+          relations: ['permissions'],
         });
         if (!user) throw new Error('User not found');
-    
-        /* ── 2️⃣  Collect desired ids / names (arrays, ES5-safe) ─────────── */
-        const wantIdList: number[]   = [];
-        const wantNameList: string[] = [];
-    
+      
+        /* 2️⃣ collect only granted=true ----------------------------------- */
+        const wantIds:   number[] = [];
+        const wantNames: string[] = [];
         changes.forEach(c => {
-        if (!c.granted) return;          // ignore false flags
-        if (c.id   !== undefined) wantIdList.push(c.id);
-        if (c.name !== undefined) wantNameList.push(c.name);
+          if (!c.granted) return;
+          if (c.id   !== undefined) wantIds.push(c.id);
+          if (c.name !== undefined) wantNames.push(c.name);
         });
-    
-        /* ── 3️⃣  Fetch all referenced permissions in one query ──────────── */
-        const perms = await this.permissionRepository.find({
-        where: [
-            ...(wantIdList.length   ? [{ id:   In(wantIdList) }]   : []),
-            ...(wantNameList.length ? [{ name: In(wantNameList) }] : []),
-        ],
-        });
-    
-        const wantedIds = new Set(perms.map(p => p.id));   // Set ok for lookup
-    
-        /* ── 4️⃣  Re-assign: keep only wanted, then add missing ones ─────── */
-        user.permissions = user.permissions.filter(p => wantedIds.has(p.id));
-    
-        perms.forEach(p => {
-        if (!user.permissions.some(up => up.id === p.id)) {
-            user.permissions.push(p);
+      
+        /* 3️⃣ if nothing is wanted → revoke everything and save ----------- */
+        if (wantIds.length === 0 && wantNames.length === 0) {
+          user.permissions = [];
+          return this.userRepository.save(user);
         }
+      
+        /* 4️⃣ fetch only the requested permissions ------------------------ */
+        const perms = await this.permissionRepository.find({
+          where: [
+            ...(wantIds.length   ? [{ id:   In(wantIds) }]   : []),
+            ...(wantNames.length ? [{ name: In(wantNames) }] : []),
+          ],
         });
-    
-        /* ── 5️⃣  Persist & return ───────────────────────────────────────── */
+      
+        const wantedIds = new Set(perms.map(p => p.id));
+      
+        /* 5️⃣ rebuild the permission list --------------------------------- */
+        user.permissions = user.permissions.filter(p => wantedIds.has(p.id));
+        perms.forEach(p => {
+          if (!user.permissions.some(up => up.id === p.id)) {
+            user.permissions.push(p);
+          }
+        });
+      
+        /* 6️⃣ save & return ---------------------------------------------- */
         return this.userRepository.save(user);
-    }
+      }
+      
   
   
     async getUserPermissions(userId: number) {

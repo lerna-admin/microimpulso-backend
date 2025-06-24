@@ -416,6 +416,7 @@ export class AnalyticsService {
                 clientName: lr.client.name,
                 agentName: lr.agent.name,
                 type : lr.type,
+                paymentDay : lr.paymentDay,
                 mode : lr.mode
             }));
     }

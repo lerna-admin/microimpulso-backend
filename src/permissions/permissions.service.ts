@@ -41,55 +41,55 @@ export class PermissionService {
         return this.userRepository.save(user);
     }
     
+    /**
+     * Sync a user’s permissions so that ONLY the entries listed in `changes`
+     * with `granted: true` remain assigned.
+     */
     async assignPermissionToUser(
         userId: number,
-        changes: { id?: number; granted: boolean }[],
-    ) {
-        /* ── 1️⃣  Load user with current permissions ── */
-        console.log(userId)
+        changes: { id?: number; name?: string; granted: boolean }[],
+    ): Promise<User> {
+        /* ── 1️⃣  Load user with current permissions ─────────────────────── */
         const user = await this.userRepository.findOne({
-            where: { id: userId },
-            relations: ['permissions'],
+        where: { id: userId },
+        relations: ['permissions'],
         });
         if (!user) throw new Error('User not found');
-        
-        /* ── 2️⃣  Build quick-lookup sets for “has” and “wants” ── */
-        const currentIds = new Set(user.permissions.map(p => p.id));
-        
-        /* Collect all ids / names requested so we can fetch once */
-        const reqIds   = changes.filter(c => c.id).map(c => c.id);
-        
-        const perms = await this.permissionRepository.find({
-            where: [
-                ...(reqIds.length   ? [{ id:   In(reqIds) }]   : [])
-            ],
+    
+        /* ── 2️⃣  Collect desired ids / names (arrays, ES5-safe) ─────────── */
+        const wantIdList: number[]   = [];
+        const wantNameList: string[] = [];
+    
+        changes.forEach(c => {
+        if (!c.granted) return;          // ignore false flags
+        if (c.id   !== undefined) wantIdList.push(c.id);
+        if (c.name !== undefined) wantNameList.push(c.name);
         });
-        
-        /* Map for quick access */
-        const permById   = new Map(perms.map(p => [p.id, p]));
-        
-        /* ── 3️⃣  Apply each change ── */
-        for (const c of changes) {
-            const perm =
-            c.id   !== undefined ? permById.get(c.id) :
-            undefined;
-            
-            if (!perm) continue;                        // unknown permission → ignore
-            
-            if (c.granted && !currentIds.has(perm.id)) {
-                user.permissions.push(perm);             // add
-                currentIds.add(perm.id);
-            }
-            if (!c.granted && currentIds.has(perm.id)) {
-                user.permissions = user.permissions.filter(p => p.id !== perm.id); // remove
-                currentIds.delete(perm.id);
-            }
+    
+        /* ── 3️⃣  Fetch all referenced permissions in one query ──────────── */
+        const perms = await this.permissionRepository.find({
+        where: [
+            ...(wantIdList.length   ? [{ id:   In(wantIdList) }]   : []),
+            ...(wantNameList.length ? [{ name: In(wantNameList) }] : []),
+        ],
+        });
+    
+        const wantedIds = new Set(perms.map(p => p.id));   // Set ok for lookup
+    
+        /* ── 4️⃣  Re-assign: keep only wanted, then add missing ones ─────── */
+        user.permissions = user.permissions.filter(p => wantedIds.has(p.id));
+    
+        perms.forEach(p => {
+        if (!user.permissions.some(up => up.id === p.id)) {
+            user.permissions.push(p);
         }
-        
-        /* ── 4️⃣  Save & return ── */
+        });
+    
+        /* ── 5️⃣  Persist & return ───────────────────────────────────────── */
         return this.userRepository.save(user);
     }
-    
+  
+  
     async getUserPermissions(userId: number) {
         const user = await this.userRepository.findOne({
             where: { id: userId },

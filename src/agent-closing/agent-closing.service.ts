@@ -5,12 +5,22 @@ import { AgentClosing } from 'src/entities/agent-closing.entity';
 import { User } from '../entities/user.entity';
 import { LoanRequestService } from '../loan-request/loan-request.service';
 import { startOfDay, endOfDay } from 'date-fns';
+import { NotificationsService } from '../notifications/notifications.service';
+import { Branch } from 'src/entities/branch.entity';
+
 
 @Injectable()
 export class ClosingService {
   constructor(
     @InjectRepository(AgentClosing)
     private readonly closingRepo: Repository<AgentClosing>,
+    private readonly notificationsService: NotificationsService,
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
+    @InjectRepository(Branch)
+    private readonly branchRepo: Repository<Branch>,
+
+
     
     // Optional: pull KPIs for the daily summary
     private readonly loanRequestService: LoanRequestService,
@@ -21,22 +31,20 @@ export class ClosingService {
   * Throws 400 if he already closed today.
   * ------------------------------------------------------------------ */
   async closeDay(agent: User) {
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    const todayStart = startOfDay(new Date());
+    const todayEnd = endOfDay(new Date());
     
-    // Has this agent already closed today?
     const alreadyClosed = await this.closingRepo.findOne({
       where: {
         agent: { id: agent.id },
-        closedAt: Between(todayStart, new Date()),
+        closedAt: Between(todayStart, todayEnd),
       },
     });
-    if (alreadyClosed)
+    if (alreadyClosed) {
       throw new BadRequestException('Day already closed for this agent.');
+    }
     
-    // OPTIONAL – gather a KPI snapshot to store with the closing record
     const summary = await this.loanRequestService.getClosingSummary(agent.id);
-    
     const closing = this.closingRepo.create({
       agent,
       closedAt: new Date(),
@@ -46,10 +54,37 @@ export class ClosingService {
       nuevos: summary.nuevos,
       resumenJson: JSON.stringify(summary),
     });
-    
-    return this.closingRepo.save(closing);
+    const saved = await this.closingRepo.save(closing);
+
+    // Notify branch administrator
+    let branch =await  this.branchRepo.findOne({
+      where : {
+        id : agent.branch.id
+      },
+      relations: ['administrator'],
+    });
+    console.log(branch)
+    const branchAdminId = branch?.administrator?.id;
+    console.log(agent.branch)
+    if (branchAdminId) {
+      const payload = {
+        actor: { id: agent.id, name: agent.name },
+        verb: 'https://w3id.org/xapi/dod-isd/verbs/closed',
+        object: {
+          id: saved.id,
+          definition: { name: { 'en-US': 'Closed Day' } },
+          timestamp: saved.closedAt.toISOString(),
+        },
+      };
+      await this.notificationsService.create(
+        branchAdminId,
+        'closing',
+        'agent.closed_day',
+        payload,
+      );
+    }
+    return saved;
   }
-  
   /** ------------------------------------------------------------------
   * Returns true if the agent has already closed today.
   * ------------------------------------------------------------------ */

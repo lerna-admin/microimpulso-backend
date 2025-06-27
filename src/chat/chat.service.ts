@@ -14,7 +14,7 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import * as fs from 'fs';
 import * as FormData from 'form-data';
 import { Readable } from 'stream';
-
+import { Notification } from 'src/notifications/notifications.entity';
 @Injectable()
 export class ChatService {
   private readonly logger = new Logger(ChatService.name);
@@ -37,6 +37,11 @@ export class ChatService {
     
     @InjectRepository(ChatMessage)
     private chatMessageRepository: Repository<ChatMessage>,
+
+    @InjectRepository(Notification)
+    private notificationRepository: Repository<Notification>,
+    
+
   ) {}
   
   async downloadAndStoreMediaori(mediaId: string, mimeType: string): Promise<string> {
@@ -167,6 +172,18 @@ export class ChatService {
             amount: 0,
           });
           await this.loanRequestRepository.save(loanRequest);
+          
+          await this.notificationRepository.save(
+            this.notificationRepository.create({
+              recipientId:  assignedAgent.id,
+              category:     'loan',
+              type:         'loan.assigned',
+              payload:      { loanRequestId: loanRequest.id, clientId: client.id },
+            }),
+          );
+          
+
+          
         }
       }
       

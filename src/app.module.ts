@@ -15,6 +15,7 @@ import { CampaignModule } from './campaign/campaign.module';
 import { BranchModule } from './branch/branch.module';
 import { PaymentAccountModule } from './payment-accounts/payment-account.module';
 import { ConfigParamModule } from './config-param/config-param.module';
+import { NotificationsModule } from './notifications/notifications.module';
 @Module({
   imports: [
     TypeOrmModule.forRoot({
@@ -37,7 +38,8 @@ import { ConfigParamModule } from './config-param/config-param.module';
     CampaignModule,
     BranchModule,
     ConfigParamModule,
-    PaymentAccountModule
+    PaymentAccountModule,
+    NotificationsModule
 
   ],
 })

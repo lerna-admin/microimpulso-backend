@@ -7,6 +7,8 @@ import { User } from '../entities/user.entity';
 import { LoanRequest } from '../entities/loan-request.entity';
 import { ChatMessage } from '../entities/chat-message.entity';
 import { Document } from '../entities/document.entity';
+import { NotificationsService } from 'src/notifications/notifications.service';
+import { Notification } from 'src/notifications/notifications.entity';
 @Module({
   imports: [
     TypeOrmModule.forFeature([
@@ -15,6 +17,7 @@ import { Document } from '../entities/document.entity';
       LoanRequest,
       ChatMessage,
       Document,
+      Notification
     ]),
   ],
   controllers: [ChatController],

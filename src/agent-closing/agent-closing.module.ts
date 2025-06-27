@@ -5,6 +5,10 @@ import { AgentClosing } from '../entities/agent-closing.entity';
 import { ClosingService } from './agent-closing.service';
 import { ClosingController } from './agent-closing.controller';
 import { LoanRequestModule } from '../loan-request/loan-request.module';
+import { NotificationsModule } from '../notifications/notifications.module';
+import { User } from 'src/entities/user.entity';
+import { Branch } from 'src/entities/branch.entity';
+
 
 
 import { UsersModule } from '../users/users.module';   // ⬅️  provides UsersService
@@ -17,9 +21,10 @@ import { UsersModule } from '../users/users.module';   // ⬅️  provides Users
    * UsersModule to fetch the agent user object.
    * ----------------------------------------- */
   imports: [
-    TypeOrmModule.forFeature([AgentClosing]),
+    TypeOrmModule.forFeature([AgentClosing, User,Branch]),
     UsersModule,
-    LoanRequestModule
+    LoanRequestModule,
+    NotificationsModule
   ],
 
   /* REST entry-point */

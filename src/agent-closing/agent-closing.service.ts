@@ -71,7 +71,7 @@ export class ClosingService {
     console.log(agent.branch)
    
       const payload = {
-        actor: { id: agent.id, name: agent.name },
+        author: { id: agent.id, name: agent.name },
         verb: 'https://w3id.org/xapi/dod-isd/verbs/closed',
         object: {
           id: saved.id,

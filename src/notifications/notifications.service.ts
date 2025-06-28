@@ -38,7 +38,7 @@ export class NotificationsService {
   async findUnreadByUser(userId: number, since?: string): Promise<Notification[]> {
     const qb = this.repo
       .createQueryBuilder('n')
-      .where('n.userId = :userId', { userId })
+      .where('n.recipient_id = :userId', { userId })
       .andWhere('n.readAt IS NULL');
 
     if (since) {

@@ -329,7 +329,7 @@ export class LoanRequestService {
           recipientId:  updated.agent.branch.administrator.id,
           category:     'loan',
           type:         'loan.approved',
-          payload:      { loanRequestId: loanRequest.id},
+          payload:      { author :  { id: updated.agent.id, name: updated.agent.name },  loanRequestId: loanRequest.id},
           description : `El agente ${updated.agent.name} ha aprobado una nueva solicitud, revisa las solicitudes pendientes de desembolso.`
         }),
       );

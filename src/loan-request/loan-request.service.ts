@@ -6,6 +6,8 @@ import { Between, In, Not, Repository } from 'typeorm';
 import { LoanRequest, LoanRequestStatus } from 'src/entities/loan-request.entity';
 import { TransactionType, LoanTransaction} from 'src/entities/transaction.entity';
 import { User } from 'src/entities/user.entity'
+import { Notification } from 'src/notifications/notifications.entity';
+
 
 @Injectable()
 export class LoanRequestService {
@@ -18,7 +20,9 @@ export class LoanRequestService {
     @InjectRepository(LoanTransaction)
     private readonly transactionRepository: Repository<LoanTransaction>,
     @InjectRepository(User)
-    private readonly userRepository: Repository<User>
+    private readonly userRepository: Repository<User>,
+    @InjectRepository(Notification)
+    private notificationRepository: Repository<Notification>,
     
     ) {}
   
@@ -318,6 +322,17 @@ export class LoanRequestService {
     }
     
     const updated = Object.assign(loanRequest, updateLoanRequestDto);
+    if(updated.status == LoanRequestStatus.APPROVED){
+      await this.notificationRepository.save(
+        this.notificationRepository.create({
+          recipientId:  updated.agent.branch.administrator.id,
+          category:     'loan',
+          type:         'loan.approved',
+          payload:      { loanRequestId: loanRequest.id},
+          description : `El agente ${updated.agent.name} ha aprobado una nueva solicitud, revisa las solicitudes pendientes de desembolso.`
+        }),
+      );
+    }
     return await this.loanRequestRepository.save(updated);
   }
   

@@ -7,13 +7,13 @@ import { ChatModule } from '../chat/chat.module';
 import { LoanTransaction } from '../entities/transaction.entity';
 import { UsersModule } from '../users/users.module'
 import { User } from '../entities/user.entity';
-
+import { Notification } from 'src/notifications/notifications.entity';
 
 
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([LoanRequest,LoanTransaction, User]),
+    TypeOrmModule.forFeature([LoanRequest,LoanTransaction, User, Notification]),
     ChatModule,
     UsersModule
   ],

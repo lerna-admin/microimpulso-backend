@@ -75,6 +75,7 @@ export class ClosingService {
           definition: { name: { 'en-US': 'Closed Day' } },
           timestamp: saved.closedAt.toISOString(),
         },
+        description :  `El agente ${agent.name} ha realizado el cierre del día.`
       };
       await this.notificationsService.create(
         branchAdminId,

@@ -24,4 +24,8 @@ export class Notification {
 
   @CreateDateColumn({ name: 'created_at', type: 'date' })
   createdAt: Date;
+
+  @Column({ length: 500, nullable: true })
+  description: string;
+
 }

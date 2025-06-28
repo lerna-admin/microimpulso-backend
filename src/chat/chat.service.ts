@@ -179,7 +179,7 @@ export class ChatService {
               category:     'loan',
               type:         'loan.assigned',
               payload:      { loanRequestId: loanRequest.id, clientId: client.id },
-              description : `Se te ha asignado una nueva solicitud, por favor comunicate con tu cliente ${client.name}`
+              description : `Se te ha asignado una nueva solicitud, por favor comunicate con tu cliente ${client.name} al numero ${client.phone}`
             }),
           );
           

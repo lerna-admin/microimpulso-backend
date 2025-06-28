@@ -8,6 +8,7 @@ import { LoanRequestModule } from '../loan-request/loan-request.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { User } from 'src/entities/user.entity';
 import { Branch } from 'src/entities/branch.entity';
+import { Notification } from 'src/notifications/notifications.entity';
 
 
 
@@ -21,7 +22,7 @@ import { UsersModule } from '../users/users.module';   // ⬅️  provides Users
    * UsersModule to fetch the agent user object.
    * ----------------------------------------- */
   imports: [
-    TypeOrmModule.forFeature([AgentClosing, User,Branch]),
+    TypeOrmModule.forFeature([AgentClosing, User,Branch, Notification]),
     UsersModule,
     LoanRequestModule,
     NotificationsModule

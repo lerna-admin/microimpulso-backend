@@ -7,6 +7,7 @@ import { LoanRequestService } from '../loan-request/loan-request.service';
 import { startOfDay, endOfDay } from 'date-fns';
 import { NotificationsService } from '../notifications/notifications.service';
 import { Branch } from 'src/entities/branch.entity';
+import { Notification } from 'src/notifications/notifications.entity';
 
 
 @Injectable()
@@ -19,6 +20,8 @@ export class ClosingService {
     private readonly userRepo: Repository<User>,
     @InjectRepository(Branch)
     private readonly branchRepo: Repository<Branch>,
+    @InjectRepository(Notification)
+    private notificationRepository: Repository<Notification>,
 
 
     
@@ -75,13 +78,19 @@ export class ClosingService {
           definition: { name: { 'en-US': 'Closed Day' } },
           timestamp: saved.closedAt.toISOString(),
         },
-        description :  `El agente ${agent.name} ha realizado el cierre del día.`
+        
       };
-      await this.notificationsService.create(
-        branchAdminId,
-        'closing',
-        'agent.closed_day',
-        payload,
+     const description =  `El agente ${agent.name} ha realizado el cierre del día.`
+     
+
+      await this.notificationRepository.save(
+        this.notificationRepository.create({
+          recipientId:  branchAdminId,
+          category:      'closing',
+          type:         'agent.closed_day',
+          payload:      payload,
+          description : description
+        }),
       );
     }
     return saved;

@@ -39,7 +39,7 @@ export class NotificationsService {
     const qb = this.repo
       .createQueryBuilder('n')
       .where('n.recipient_id = :userId', { userId })
-      .andWhere('n.readAt IS NULL');
+      .andWhere('n.is_read = 0');
 
     if (since) {
       const sinceDate = new Date(since);

@@ -315,7 +315,8 @@ export class LoanRequestService {
   }
   
   async update(id: number, updateLoanRequestDto: UpdateLoanRequestDto): Promise<LoanRequest> {
-    const loanRequest = await this.loanRequestRepository.findOne({ where: { id } });
+    const loanRequest = await this.loanRequestRepository.findOne({ where: { id },
+      relations: ['agent', 'agent.branch', 'agent.branch.administrator'], });
     
     if (!loanRequest) {
       throw new NotFoundException(`loanRequest with ID ${id} not found`);

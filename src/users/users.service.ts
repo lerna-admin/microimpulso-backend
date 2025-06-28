@@ -149,4 +149,9 @@ export class UsersService {
     });
     return this.userRepository.save(user);
   }
+  async update(id: number, data: Partial<User>): Promise<User | null> {
+    await this.userRepository.update(id, data);
+    return this.userRepository.findOne({ where: { id } });
+  }
+
 }

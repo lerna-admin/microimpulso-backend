@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Query, DefaultValuePipe, ParseIntPipe } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Query, DefaultValuePipe, ParseIntPipe, NotFoundException, Patch } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { User, UserRole} from '../entities/user.entity';
 
@@ -49,5 +49,15 @@ async findAll(
   @Post()
   create(@Body() data: Partial<User>): Promise<User> {
     return this.usersService.create(data);
+  }
+  /* ---------- PATCH /users/:id  (update) --------------------------- */
+  @Patch(':id')
+  async update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() data: Partial<User>,
+  ): Promise<User> {
+    const updated = await this.usersService.update(id, data);
+    if (!updated) throw new NotFoundException('User not found');
+    return updated;
   }
 }

@@ -28,7 +28,7 @@ export class NotificationsService {
   }
 
   async markAsRead(id: number) {
-    await this.repo.update(id, { isRead: true });
+    return await this.repo.update(id, { isRead: true });
   }
 
   /**

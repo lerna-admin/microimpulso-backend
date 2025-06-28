@@ -118,7 +118,8 @@ export class TransactionsService {
       
       const svgBuffer = Buffer.from(svgContent, 'utf-8');
       const pngBuffer = await sharp(svgBuffer).png().toBuffer();
-      
+      try {
+        
       await this.chatService.sendMessageToClient(client.id, message);
       
       await this.chatService.sendSimulationToClient(client.id, {
@@ -133,6 +134,10 @@ export class TransactionsService {
         buffer: pngBuffer,
         stream: Readable.from(pngBuffer),
       });
+      } catch (error) {
+        console.log(error)
+      }
+      
     }
     
     if (transactionType === TransactionType.REPAYMENT) {

@@ -111,7 +111,6 @@ export class UsersService {
   *    - not granted → false
   */
   async findByDocument(document: string): Promise<User | null> {
-    // 1️⃣ Load user with the permissions he / she already has
     const user = await this.userRepository.findOne({
       where: { document },
       relations: { branch: true, permissions: true },

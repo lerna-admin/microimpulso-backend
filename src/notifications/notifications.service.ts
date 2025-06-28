@@ -28,7 +28,19 @@ export class NotificationsService {
   }
 
   async markAsRead(id: number) {
-    return await this.repo.update(id, { isRead: true });
+    const result = await this.repo.update(id, { isRead: true });
+    if (result.affected === 0) {
+      return { status: 'error', message: 'Notification not found' };
+    }
+  
+    const updated = result.raw?.changedRows > 0 || result.generatedMaps?.length > 0;
+  
+    if (updated) {
+      return { status: 'success', message: 'Updated successfully' };
+    } else {
+      return { status: 'success', message: 'No changes (already marked as read)' };
+    }
+
   }
 
   /**

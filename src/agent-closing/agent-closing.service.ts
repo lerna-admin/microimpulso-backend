@@ -69,7 +69,7 @@ export class ClosingService {
     console.log(branch)
     const branchAdminId = branch?.administrator?.id;
     console.log(agent.branch)
-    if (branchAdminId) {
+   
       const payload = {
         actor: { id: agent.id, name: agent.name },
         verb: 'https://w3id.org/xapi/dod-isd/verbs/closed',
@@ -92,7 +92,7 @@ export class ClosingService {
           description : description
         }),
       );
-    }
+    
     return saved;
   }
   /** ------------------------------------------------------------------

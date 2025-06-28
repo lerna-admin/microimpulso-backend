@@ -30,4 +30,26 @@ export class NotificationsService {
   async markAsRead(id: number) {
     await this.repo.update(id, { isRead: true });
   }
+
+  /**
+   * Return all unread notifications for a given user.
+   * If `since` is provided, only notifications created after that date are returned.
+   */
+  async findUnreadByUser(userId: number, since?: string): Promise<Notification[]> {
+    const qb = this.repo
+      .createQueryBuilder('n')
+      .where('n.userId = :userId', { userId })
+      .andWhere('n.readAt IS NULL');
+
+    if (since) {
+      const sinceDate = new Date(since);
+      qb.andWhere('n.createdAt > :sinceDate', { sinceDate });
+    }
+
+    return qb
+      .orderBy('n.createdAt', 'DESC')
+      .getMany();
+  }
+
+
 }

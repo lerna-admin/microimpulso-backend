@@ -15,7 +15,7 @@ export class NotificationsController {
   @Post(':id/read')
   @HttpCode(204)
   async read(@Param('id') id: number) {
-    await this.service.markAsRead(id);
+    return await this.service.markAsRead(id);
   }
   @Get(':userId')
   async getUnread(

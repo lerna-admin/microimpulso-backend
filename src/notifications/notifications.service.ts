@@ -32,14 +32,18 @@ export class NotificationsService {
     if (result.affected === 0) {
       return { status: 'error', message: 'Notification not found' };
     }
+    console.log(1)
   
     const updated = result.raw?.changedRows > 0 || result.generatedMaps?.length > 0;
+    console.log(updated)
   
     if (updated) {
       return { status: 'success', message: 'Updated successfully' };
     } else {
+      console.log("mmmm")
       return { status: 'success', message: 'No changes (already marked as read)' };
     }
+    console.log(2)
 
   }
 

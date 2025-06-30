@@ -20,8 +20,11 @@ export class AuthService {
     document: string,
     password: string
   ): Promise<{ token: string; role: string; branch:any, closedRoute: boolean, permission:any } | null> {
-    const user = await this.usersService.findByDocument(document);
+    	console.log(document);
+	console.log(password);
+	  const user = await this.usersService.findByDocument(document);
 
+	  console.log(user);
     // Basic password validation (replace with bcrypt.compare if using hashes)
     if (!user || user.password !== password) {
       return null;

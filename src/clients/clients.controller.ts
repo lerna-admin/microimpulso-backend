@@ -18,7 +18,7 @@ export class ClientsController {
     @Query('type') type?: string,
     @Query('mode') mode?: string,
     @Query('agent') agent?: number,
-
+    @Query('branch') branch?: number,
     @Query('paymentDay') paymentDay?: string,
     
     
@@ -33,7 +33,8 @@ export class ClientsController {
         type,
         mode,
         paymentDay,
-        agent
+        agent,
+        branch
       },
     );
   }

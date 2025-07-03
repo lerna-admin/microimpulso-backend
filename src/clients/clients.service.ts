@@ -45,7 +45,9 @@ async findAll(
     mode?: string;
     type?: string;
     paymentDay?: string; 
-    agent?: number
+    agent?: number,
+    branch?: number
+
   }
 ): Promise<any> {
   const loans = await this.loanRequestRepository.find({
@@ -54,6 +56,8 @@ async findAll(
   });
 
   if (filters?.agent) filters.agent = Number(filters.agent);
+  if (filters?.branch) filters.branch = Number(filters.branch);
+
 
   const clientMap = new Map<number, any[]>();
   for (const loan of loans) {
@@ -130,6 +134,8 @@ async findAll(
     if (filters?.type       && sel.type       !== filters.type)       continue;
     if (filters?.paymentDay && sel.paymentDay !== filters.paymentDay) continue;
     if (filters?.agent       && sel.agent.id       !== filters.agent)       continue;
+    if (filters?.branch       && sel.agent.branchId       !== filters.branch)       continue;
+
 
 
     console.log("afgter filters")

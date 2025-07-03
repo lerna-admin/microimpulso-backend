@@ -74,10 +74,10 @@ export class LoanRequest {
   type: string;
   
   @Column({
-    type: 'date',
+    type: 'text',
     nullable: true,
   })
-  mode: Date;
+  mode: string;
   
   @Column({
     type: 'int',

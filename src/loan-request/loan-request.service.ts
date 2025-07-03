@@ -42,7 +42,9 @@ export class LoanRequestService {
 
       data.agent = randomAgent;
     }
+    console.log(data)
 
+    data.mode = (data.amount ? data.amount / 1000 : 100 ).toString().concat("X1");
     const loanRequest = this.loanRequestRepository.create(data);
     return await this.loanRequestRepository.save(loanRequest);
   }

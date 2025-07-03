@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Client } from '../entities/client.entity';
 import { LoanRequest, LoanRequestStatus } from 'src/entities/loan-request.entity';
+import { filter } from 'rxjs';
 
 @Injectable()
 export class ClientsService {
@@ -34,7 +35,6 @@ export class ClientsService {
     private readonly loanRequestRepository: Repository<LoanRequest>,
   ) { }
   
-  // TODO HACER LOS MISMOS CAMBIOS DEL AGENT BY ID ACA PARA LOS DEMAS ROLES
 async findAll(
   limit: number = 10,
   page: number = 1,
@@ -45,12 +45,15 @@ async findAll(
     mode?: string;
     type?: string;
     paymentDay?: string; 
+    agent?: number
   }
 ): Promise<any> {
   const loans = await this.loanRequestRepository.find({
-    relations: { client: true, transactions: true },
+    relations: { client: true, transactions: true, agent: true },
     order: { createdAt: 'DESC' },
   });
+
+  if (filters?.agent) filters.agent = Number(filters.agent);
 
   const clientMap = new Map<number, any[]>();
   for (const loan of loans) {
@@ -126,9 +129,14 @@ async findAll(
     if (filters?.mode       && sel.mode       !== filters.mode)       continue;
     if (filters?.type       && sel.type       !== filters.type)       continue;
     if (filters?.paymentDay && sel.paymentDay !== filters.paymentDay) continue;
+    if (filters?.agent       && sel.agent.id       !== filters.agent)       continue;
 
+
+    console.log("afgter filters")
+    console.log(sel.agent)
     allResults.push({
       client,
+      agent :  sel ? { id : sel.agent.id, name : sel.agent.name} : null,
       loanRequest: {
         id: sel.id,
         status: sel.status,
@@ -276,6 +284,7 @@ async findAll(
           // Push loan details to response array
           allResults.push({
             client,
+            agent : loan.agent.id,
             loanRequest: {
               id: loan.id,
               status: loan.status,

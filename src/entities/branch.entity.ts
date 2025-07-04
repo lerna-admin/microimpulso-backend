@@ -18,7 +18,7 @@ export class Branch {
   @Column()
   name: string;
 
-  @OneToOne(() => User, { nullable: false })
+  @OneToOne(() => User, { nullable: true })
   @JoinColumn()
   administrator: User;
 

@@ -10,10 +10,16 @@ export class BranchService {
         private branchRepository: Repository<Branch>,
     ) {}
     
-    create(data: Partial<Branch>) {
-        const branch = this.branchRepository.create(data);
+   // branches.service.ts
+    async create(data: { name: string; administrator: number }): Promise<Branch> {
+        const branch = this.branchRepository.create({
+        name: data.name,
+        administrator: { id: data.administrator }, // 👈 turn the ID into a relation
+        });
+    
         return this.branchRepository.save(branch);
     }
+  
     
     findAll(filters?: { name?: string; administratorId?: number }) {
         const where: any = {};

@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { User, UserRole} from '../entities/user.entity';
 import { truncate } from 'fs';
 import { Permission } from 'src/entities/permissions.entity';
+import { Branch } from 'src/entities/branch.entity';
 
 @Injectable()
 export class UsersService {
@@ -12,6 +13,9 @@ export class UsersService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(Permission)
     private readonly permissionRepository: Repository<Permission>,
+    @InjectRepository(Branch)
+    private readonly branchRepository: Repository<Branch>,
+    
   ) {}
   
   async findAll(options: {
@@ -146,6 +150,13 @@ export class UsersService {
       createdAt: new Date(),
       updatedAt: new Date(),
     });
+
+    if( user.role == UserRole.ADMINISTRATOR){
+      //UPDATE BRANCH
+      await this.branchRepository.update(user.branchId, {
+        administrator: { id: user.id },
+      });      
+    }
     return this.userRepository.save(user);
   }
   async update(id: number, data: Partial<User>): Promise<User | null> {

@@ -153,9 +153,10 @@ export class UsersService {
 
     if( user.role == UserRole.ADMINISTRATOR){
       //UPDATE BRANCH
-      await this.branchRepository.update(user.branchId, {
+      let resp = await this.branchRepository.update(user.branchId, {
         administrator: { id: user.id },
       });      
+      console.log(resp)
     }
     return this.userRepository.save(user);
   }

@@ -22,7 +22,7 @@ import { Permission } from './permissions.entity';
 */
 export enum UserRole {
   AGENT = 'AGENT',
-  ADMINISTRATOR = 'ADMINISTRATOR',
+  ADMINISTRATOR = 'ADMIN',
   MANAGER = 'MANAGER',
 }
 

@@ -157,6 +157,9 @@ export class UsersService {
         administrator: { id: user.id },
       });      
       console.log(resp)
+      console.log({
+        administrator: { id: user.id },
+      })
     }else {
       console.log(user.role, UserRole.ADMINISTRATOR)
     }

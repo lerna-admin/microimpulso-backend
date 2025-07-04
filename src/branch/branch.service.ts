@@ -34,7 +34,6 @@ export class BranchService {
         
         return this.branchRepository
         .createQueryBuilder('branch')
-        .select(['branch.id', 'branch.name'])
         .orderBy('branch.createdAt', 'DESC')
         .getMany();
         

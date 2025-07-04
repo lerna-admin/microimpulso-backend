@@ -21,23 +21,22 @@ export class BranchService {
     }
   
     
-    findAll(filters?: { name?: string; administratorId?: number }) {
+    async findAll(filters?: { name?: string; administratorId?: number }) {
         const where: any = {};
-        
+      
         if (filters?.name) {
-            where.name = ILike(`%${filters.name}%`);
+          where.name = ILike(`%${filters.name}%`);
         }
-        
         if (filters?.administratorId) {
-            where.administrator = { id: filters.administratorId };
+          where.administrator = { id: filters.administratorId };
         }
-        
-        return this.branchRepository
-        .createQueryBuilder('branch')
-        .orderBy('branch.createdAt', 'DESC')
-        .getMany();
-        
-    }
+      
+        return this.branchRepository.find({
+          where,
+          relations: { administrator: true },      // 👈 loads the User entity
+          order: { createdAt: 'DESC' },
+        });
+      }
     
     findOne(id: number) {
         return this.branchRepository.findOne({

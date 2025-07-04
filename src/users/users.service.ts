@@ -145,25 +145,27 @@ export class UsersService {
   
   // Create a new user
   async create(data: Partial<User>): Promise<User> {
-    const user = this.userRepository.create({
-      ...data,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
-    
-    if( user.role == UserRole.ADMINISTRATOR){
-      //UPDATE BRANCH
-      let resp = await this.branchRepository.update(user.branchId, {
-        administrator: { id: user.id },
-      });      
-      console.log(resp)
-      console.log({
-        administrator: { id: user.id },
-      })
-    }else {
-      console.log(user.role, UserRole.ADMINISTRATOR)
+    /* 1️⃣  Persist the user first – we need its ID for the branch update */
+    const savedUser = await this.userRepository.save(
+      this.userRepository.create({
+        ...data,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }),
+    );
+  
+    /* 2️⃣  If the user is an ADMINISTRATOR, set them as branch.administrator */
+    if (
+      savedUser.role === UserRole.ADMINISTRATOR &&      // correct role check
+      savedUser.branchId !== undefined                  // make sure we have a branch
+    ) {
+      await this.branchRepository.update(savedUser.branchId, {
+        administrator: { id: savedUser.id },            // partial relation object
+      });
     }
-    return this.userRepository.save(user);
+  
+    /* 3️⃣  Return the newly created user (already contains the PK) */
+    return savedUser;
   }
   async update(id: number, data: Partial<User>): Promise<User | null> {
     await this.userRepository.update(id, data);

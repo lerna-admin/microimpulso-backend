@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ConsoleLogger, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User, UserRole} from '../entities/user.entity';
@@ -150,13 +150,15 @@ export class UsersService {
       createdAt: new Date(),
       updatedAt: new Date(),
     });
-
+    
     if( user.role == UserRole.ADMINISTRATOR){
       //UPDATE BRANCH
       let resp = await this.branchRepository.update(user.branchId, {
         administrator: { id: user.id },
       });      
       console.log(resp)
+    }else {
+      console.log(user.role, UserRole.ADMINISTRATOR)
     }
     return this.userRepository.save(user);
   }

@@ -51,17 +51,6 @@ export class PaymentAccount {
   @Column()
   holderDocument: string;                // Colombian CC / NIT / Passport
 
-  @Column()
-  ownerId: number;                       // FK to Branch.id or User.id, decided by ownerType
-
-  /* Optional helpful relations */
-  @ManyToOne(() => Branch, { nullable: true })
-  @JoinColumn({ name: 'ownerId' })
-  branch?: Branch;
-
-  @ManyToOne(() => User, { nullable: true })
-  @JoinColumn({ name: 'ownerId' })
-  agent?: User;
 
   /* ───── Timestamps ───── */
   @CreateDateColumn()

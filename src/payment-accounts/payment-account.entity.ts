@@ -1,15 +1,28 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn, UpdateDateColumn } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  UpdateDateColumn,
+  ManyToOne,
+  JoinColumn,
+} from 'typeorm';
+import { Branch } from '../entities/branch.entity';
+import { User }   from '../entities/user.entity';
+
+export type AccountOwner = 'BRANCH' | 'AGENT';
 
 @Entity()
 export class PaymentAccount {
   @PrimaryGeneratedColumn()
   id: number;
 
+  /* ───── Basic data ───── */
   @Column()
-  bankName: string;                      // "Bancolombia"
+  bankName: string;                      // e.g. "Bancolombia"
 
   @Column()
-  accountNumber: string;                 // "123-456-789"
+  accountNumber: string;                 // e.g. "123-456-789"
 
   @Column()
   accountType: string;                   // "Savings" | "Checking"
@@ -17,26 +30,43 @@ export class PaymentAccount {
   @Column({ default: 'COP' })
   currency: string;                      // ISO code
 
-  /* --- limit control --- */
+  /* ───── Limit control ───── */
   @Column('decimal', { precision: 16, scale: 2, default: 0 })
-  limit: number;                    // max amount this acct can receive / day
+  limit: number;                         // Max amount this account can receive (period configurable)
 
   @Column('decimal', { precision: 16, scale: 2, default: 0 })
-  dailyReceived: number;                 // running total for “today”
+  dailyReceived: number;                 // Running total for “today”
 
+  /* ───── Status flags ───── */
   @Column({ default: true })
   isActive: boolean;
 
-  @UpdateDateColumn()
-  updatedAt: Date;
-
   @Column({ default: false })
-  isPrimary: boolean;   
-  
-  /* --- holder info --- */
+  isPrimary: boolean;
+
+  /* ───── Holder info ───── */
   @Column()
   holderName: string;                    // Account holder’s full name
 
   @Column()
-  holderDocument: string;                // e.g. Colombian CC / NIT
+  holderDocument: string;                // Colombian CC / NIT / Passport
+
+  @Column()
+  ownerId: number;                       // FK to Branch.id or User.id, decided by ownerType
+
+  /* Optional helpful relations */
+  @ManyToOne(() => Branch, { nullable: true })
+  @JoinColumn({ name: 'ownerId' })
+  branch?: Branch;
+
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: 'ownerId' })
+  agent?: User;
+
+  /* ───── Timestamps ───── */
+  @CreateDateColumn()
+  createdAt: Date;
+
+  @UpdateDateColumn()
+  updatedAt: Date;
 }

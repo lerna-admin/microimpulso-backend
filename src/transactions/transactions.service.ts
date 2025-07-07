@@ -11,6 +11,7 @@ import { Readable } from 'stream';
 import * as sharp from 'sharp';
 import { CashMovementCategory } from 'src/entities/cash-movement-category.enum';
 import { toZonedTime, format, fromZonedTime } from 'date-fns-tz';
+import { PaymentAccount } from 'src/payment-accounts/payment-account.entity';
 
 function formatCOP(value: number | string | null | undefined): string {
   if (!value) return 'N/A';
@@ -21,6 +22,7 @@ function formatDateOnly(date: Date | string | null | undefined): string {
   if (!date) return 'N/A';
   return new Date(date).toISOString().split('T')[0];
 }
+
 
 @Injectable()
 export class TransactionsService {
@@ -33,9 +35,46 @@ export class TransactionsService {
     
     @InjectRepository(CashMovement)
     private readonly cashMovementRepo: Repository<CashMovement>,
+
+    @InjectRepository(PaymentAccount)
+    private readonly paymentAccountRepo: Repository<PaymentAccount>,
     
     private readonly chatService: ChatService,
   ) { }
+
+  async findRepaymentAccountForLoan(requestedAmount: number): Promise<PaymentAccount | null> {
+  const now = new Date();
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  const accounts = await this.paymentAccountRepo.find({
+    where: { isActive: true },
+    order: { isPrimary: 'DESC' },
+  });
+
+  for (const account of accounts) {
+    const totalReceived = await this.transactionRepo
+      .createQueryBuilder('tx')
+      .leftJoin('tx.loanRequest', 'loan')
+      .where('tx.Transactiontype = :type', { type: TransactionType.REPAYMENT })
+      .andWhere('loan.repaymentAccountId = :accountId', { accountId: account.id })
+      .andWhere('tx.date BETWEEN :start AND :end', {
+        start: startOfMonth.toISOString(),
+        end: now.toISOString(),
+      })
+      .select('SUM(tx.amount)', 'sum')
+      .getRawOne();
+
+    const currentTotal = Number(totalReceived?.sum ?? 0);
+    const projected = currentTotal + requestedAmount;
+
+    if (projected <= Number(account.limit)) {
+      return account;
+    }
+  }
+
+  return null;
+}
+
   
   async create(data: any): Promise<LoanTransaction> {
     const { loanRequestId, transactionType, amount, reference } = data;
@@ -87,6 +126,14 @@ export class TransactionsService {
       date: new Date(), // Usa hora local del servidor directamente
     });
     
+    if (!loanRequest.repaymentAccount) {
+      const repaymentAccount = await this.findRepaymentAccountForLoan(loanRequest.requestedAmount);
+      if (!repaymentAccount) {
+        throw new BadRequestException('No repayment account available with sufficient limit');
+      }
+      
+      loanRequest.repaymentAccount = repaymentAccount;
+    }
     if (transactionType === TransactionType.DISBURSEMENT) {
       loanRequest.status = LoanRequestStatus.FUNDED;
       await this.loanRequestRepo.save(loanRequest);

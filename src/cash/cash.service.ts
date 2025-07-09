@@ -385,10 +385,10 @@ export class CashService {
     /* ─── 3 · Assemble tiles ─── */
     const tiles = [
       { label: 'Caja anterior', value: opening },
-      { label: 'Entra caja',    value: entraCaja,        trend: '↑' },
-      { label: 'Cobro',         value: totalCobros,      trend: '↑' },
-      { label: 'Préstamos',     value: totalDesembolsos, trend: '↓' },
-      { label: 'Gastos',        value: totalGastos,      trend: '↓', hideForAgent: true },
+      { label: 'Entra caja',    value: entraCaja,        trend: 'increase' },
+      { label: 'Cobro',         value: totalCobros,      trend: 'increase' },
+      { label: 'Préstamos',     value: totalDesembolsos, trend: 'decrease' },
+      { label: 'Gastos',        value: totalGastos,      trend: 'decrease', hideForAgent: true },
       { label: 'Caja real',     value: realCash },
       { label: 'Renovados',     value: totalRenovados, amount: renewed.size },
       { label: 'Nuevos',        value: totalNuevos,  amount: nuevosHoy.length },

@@ -6,10 +6,11 @@ import { CashService } from './cash.service';
 import { CashController } from './cash.controller';
 import { LoanRequestStatus } from 'src/entities/loan-request.entity';
 import { LoanTransaction } from 'src/entities/transaction.entity';
+import { User } from 'src/entities/user.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([CashMovement, AgentClosing, LoanTransaction]),  
+    TypeOrmModule.forFeature([CashMovement, AgentClosing, LoanTransaction, User]),  
   ],
   providers: [CashService],
   controllers: [CashController],

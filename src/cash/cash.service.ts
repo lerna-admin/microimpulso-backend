@@ -10,6 +10,7 @@ import { AgentClosing } from 'src/entities/agent-closing.entity';
 import { LoanRequest } from 'src/entities/loan-request.entity';
 import { LoanTransaction, TransactionType } from 'src/entities/transaction.entity';
 import { format } from 'date-fns';
+import { User } from 'src/entities/user.entity';
 
 function getLocalDayRange(rawDate: string | Date): { start: Date; end: Date } {
     const date = typeof rawDate === 'string' ? new Date(rawDate) : rawDate;
@@ -32,6 +33,9 @@ export class CashService {
         private readonly closingRepo: Repository<AgentClosing>,
         @InjectRepository(LoanTransaction)
         private readonly loanTransactionRepo: Repository<LoanTransaction>,
+        @InjectRepository(User)
+        private readonly userRepository: Repository<User>,
+        
         
     ) { }
     
@@ -290,4 +294,107 @@ export class CashService {
             { label: 'Nuevos', value: totalNuevos,    trend: 'increase', amount: countNuevos },
         ];
     }
+
+    /**
+   * Returns the branch-level dashboard for the day that belongs to `userId`.
+   * • ADMIN / MANAGER → full dashboard (same columns as before).  
+   * • AGENT           → identical, except the “Gastos” tile is omitted.
+   */
+  async getDailyTotalsByUser(userId: number, rawDate: Date | string) {
+    /* ─── 0 · Resolve branch + role from the user ─── */
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+      relations: { branch: true },
+    });
+    if (!user?.branch?.id) throw new BadRequestException('User has no branch');
+    const branchId = user.branch.id;
+    const role     = user.role; // 'ADMIN' | 'AGENT' | 'MANAGER' …
+
+    /* ─── 1 · [start, end] for local day ─── */
+    const start =
+    typeof rawDate === 'string'
+    ? (() => {
+        const [y, m, d] = rawDate.split('-').map(Number);
+        return new Date(y, m - 1, d, 0, 0, 0, 0); // 00:00 local
+    })()
+    : new Date(rawDate.setHours(0, 0, 0, 0));
+    
+    const end = new Date(start);
+    end.setHours(23, 59, 59, 999);
+
+
+    /* ─── 2 · Cash movements ─── */
+    const [today, history] = await Promise.all([
+      this.cashRepo.find({
+        where: { branch: { id: branchId }, createdAt: Between(start, end) },
+      }),
+      this.cashRepo.find({
+        where: { branch: { id: branchId }, createdAt: LessThan(start) },
+      }),
+    ]);
+
+    /* Opening cash */
+    const opening = history.reduce(
+      (tot, m) => tot + (m.type === 'ENTRADA' ? +m.amount : -+m.amount),
+      0,
+    );
+
+    /* Net for today */
+    const totalEntradas = today
+      .filter((m) => m.type === 'ENTRADA')
+      .reduce((s, m) => s + +m.amount, 0);
+    const totalSalidas = today
+      .filter((m) => m.type === 'SALIDA')
+      .reduce((s, m) => s + +m.amount, 0);
+    const realCash = opening + totalEntradas - totalSalidas;
+
+    /* Category helpers */
+    const byCategory = (cat: string) =>
+      today
+        .filter((m) => m.category === cat)
+        .reduce((s, m) => s + +m.amount, 0);
+
+    const entraCaja        = byCategory('ENTRADA_GERENCIA');
+    const totalCobros      = byCategory('COBRO_CLIENTE');
+    const totalDesembolsos = byCategory('PRESTAMO');
+    const totalGastos      = byCategory('GASTO_PROVEEDOR');
+
+    /* KPIs: renovados / nuevos */
+    const penalties = await this.loanTransactionRepo.find({
+      where: {
+        Transactiontype: TransactionType.PENALTY,
+        date: Between(start, end),
+        loanRequest: { agent: { branch: { id: branchId } } },
+      },
+      relations: { loanRequest: true },
+    });
+    const renewed = new Map<number, LoanRequest>();
+    penalties.forEach((p) =>
+      renewed.set(p.loanRequest.id, p.loanRequest as LoanRequest),
+    );
+    const totalRenovados = [...renewed.values()].reduce(
+      (s, r) => s + +(r.requestedAmount ?? r.amount ?? 0),
+      0,
+    );
+
+    const nuevosHoy = today.filter(
+      (m) => m.type === 'SALIDA' && m.category === 'PRESTAMO',
+    );
+    const totalNuevos = nuevosHoy.reduce((s, m) => s + +m.amount, 0);
+
+    /* ─── 3 · Assemble tiles ─── */
+    const tiles = [
+      { label: 'Caja anterior', value: opening },
+      { label: 'Entra caja',    value: entraCaja,        trend: '↑' },
+      { label: 'Cobro',         value: totalCobros,      trend: '↑' },
+      { label: 'Préstamos',     value: totalDesembolsos, trend: '↓' },
+      { label: 'Gastos',        value: totalGastos,      trend: '↓', hideForAgent: true },
+      { label: 'Caja real',     value: realCash },
+      { label: 'Renovados',     value: totalRenovados, amount: renewed.size },
+      { label: 'Nuevos',        value: totalNuevos,  amount: nuevosHoy.length },
+    ];
+
+    /* For AGENT, remove any tile flagged hideForAgent */
+    return role === 'AGENT' ? tiles.filter(t => !t.hideForAgent) : tiles;
+  }
 }

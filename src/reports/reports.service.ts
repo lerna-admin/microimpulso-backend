@@ -138,6 +138,141 @@ export class ReportsService {
         };
     }
     
-    
-    
+    /* ---------------------------------------------------------------------------
+    * DAILY CASH COUNT BY AGENT  (Arqueo Diario por Agente)
+    *  • ADMIN   → datos por agente dentro de SU sucursal
+    *  • MANAGER → datos agregados por sucursal (todos los agentes)
+    * ------------------------------------------------------------------------ */
+    async getDailyCashCountByAgent(userId: string, date?: string) {
+        /* 1 · Caller ---------------------------------------------------------- */
+        const caller = await this.userRepo.findOne({ where: { id: +userId } });
+        if (!caller) throw new NotFoundException('User not found');
+        
+        const businessDate =
+        date ?? dayjs().tz('America/Bogota').format('YYYY-MM-DD');
+        
+        /* 2 · Query: loan_transaction → loan_request → agent(user) → branch
+        *    LEFT JOIN agent_closing (si existe cierre físico)               */
+        const qb = this.txRepo
+        .createQueryBuilder('t')                                   // loan_transaction
+        .innerJoin('loan_request', 'lr', 'lr.id = t.loanRequestId')
+        .innerJoin('user', 'agent', 'agent.id = lr.agentId')
+        .innerJoin('branch', 'branch', 'branch.id = agent.branchId')
+        .leftJoin(
+            'agent_closing',
+            'ac',
+            'ac.agentId = agent.id AND DATE(ac.closedAt) = :businessDate',
+            { businessDate },
+        )
+        .where('DATE(t.date) = :businessDate', { businessDate });
+        
+        /* 3 · Agrupación y alcance según rol --------------------------------- */
+        let roleView: 'ADMIN' | 'MANAGER';
+        
+        if (caller.role === 'ADMIN') {
+            roleView = 'ADMIN';
+            qb.andWhere('branch.id = :ownBranch', { ownBranch: caller.branchId })
+            .select([
+                'agent.id               AS groupId',      // bloque = agente
+                'agent.name             AS groupLabel',
+                'IFNULL(ac.cobrado,0)   AS physicalCash', // efectivo contado (0 si no hay cierre)
+                't.Transactiontype      AS type',
+                'COUNT(*)               AS count',
+                'SUM(t.amount)          AS amount',
+            ])
+            .groupBy('agent.id, agent.name, ac.cobrado, t.Transactiontype');
+        } else if (caller.role === 'MANAGER') {
+            roleView = 'MANAGER';
+            qb.select([
+                'branch.id              AS groupId',      // bloque = sucursal
+                'branch.name            AS groupLabel',
+                'SUM(IFNULL(ac.cobrado,0)) AS physicalCash',
+                't.Transactiontype      AS type',
+                'COUNT(*)               AS count',
+                'SUM(t.amount)          AS amount',
+            ])
+            .groupBy('branch.id, branch.name, t.Transactiontype');
+        } else {
+            throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+        }
+        
+        const rows = await qb.getRawMany<{
+            groupId: string;
+            groupLabel: string;
+            physicalCash: string;
+            type: string;
+            count: string;
+            amount: string;
+        }>();
+        
+        /* 4 · Construir bloques y totales ------------------------------------ */
+        const blocks: Record<
+        string,
+        {
+            id: string;
+            label: string;
+            kpi: {
+                expectedCash: number;
+                physicalCash: number;
+                difference: number;
+                transactionCount: number;
+            };
+            breakdown: { type: string; count: number; amount: number }[];
+        }
+        > = {};
+        
+        const totals = {
+            expectedCash: 0,
+            physicalCash: 0,
+            difference: 0,
+            transactionCount: 0,
+        };
+        
+        for (const r of rows) {
+            const key = r.groupId;
+            if (!blocks[key]) {
+                blocks[key] = {
+                    id: key,
+                    label: r.groupLabel,
+                    kpi: {
+                        expectedCash: 0,
+                        physicalCash: +r.physicalCash,
+                        difference: 0,
+                        transactionCount: 0,
+                    },
+                    breakdown: [],
+                };
+            }
+            
+            const blk = blocks[key];
+            const amt = +r.amount;
+            const cnt = +r.count;
+            
+            blk.breakdown.push({ type: r.type, count: cnt, amount: amt });
+            blk.kpi.expectedCash += amt;          // movimiento del día
+            blk.kpi.transactionCount += cnt;
+        }
+        
+        /* 5 · Calcular diferencias y sumatorios globales --------------------- */
+        for (const blk of Object.values(blocks)) {
+            blk.kpi.difference =
+            blk.kpi.physicalCash - blk.kpi.expectedCash;
+            
+            totals.expectedCash += blk.kpi.expectedCash;
+            totals.physicalCash += blk.kpi.physicalCash;
+            totals.difference += blk.kpi.difference;
+            totals.transactionCount += blk.kpi.transactionCount;
+        }
+        
+        /* 6 · Payload final --------------------------------------------------- */
+        return {
+            meta: {
+                date: businessDate,
+                view: roleView,
+                generatedAt: new Date().toISOString(),
+            },
+            totals,
+            blocks: Object.values(blocks),
+        };
+    }
 }

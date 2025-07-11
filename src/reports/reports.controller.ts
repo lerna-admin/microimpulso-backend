@@ -14,4 +14,21 @@ export class ReportsController {
         return this.reports.getDailyCashSummary(userId, date);
     }
     
+    /**
+    * Daily cash reconciliation (“Arqueo Diario por Agente”)
+    * Only userId (caller) and optional date are required.
+    * – ADMIN  → results for every agent in caller’s branch
+    * – MANAGER → results for every branch, grouped per agent
+    */
+    @Get('daily-cash-count')
+    async dailyCashCount(
+        @Query('userId') userId: string,
+        @Query('date') date?: string,
+    ) {
+        if (!userId) {
+            throw new BadRequestException('userId is required');
+        }
+        return this.reports.getDailyCashCountByAgent(userId, date);
+    }
+    
 }

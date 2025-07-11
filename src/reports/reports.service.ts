@@ -17,41 +17,42 @@ export class ReportsService {
     ) {}
     
     async getDailyCashSummary(userId: string, date?: string) {
-        /* ── 1 · load caller ── */
+        /* 1 · Load caller ------------------------------------------------------ */
         const caller = await this.userRepo.findOne({ where: { id: +userId } });
         if (!caller) throw new NotFoundException('User not found');
         
-        const businessDate = date ?? dayjs().tz('America/Bogota').format('YYYY-MM-DD');
+        const businessDate =
+        date ?? dayjs().tz('America/Bogota').format('YYYY-MM-DD');
         
-        /* ── 2 · base query: join through loan_request → agent(user) → branch ── */
+        /* 2 · Base query: loan_transaction → loan_request → agent(user) → branch */
         const qb = this.txRepo
-        .createQueryBuilder('t')                                              // loan_transaction
+        .createQueryBuilder('t')                              // loan_transaction
         .innerJoin('loan_request', 'lr', 'lr.id = t.loanRequestId')
-        .innerJoin('user',         'agent', 'agent.id = lr.agentId')         // agent is a user
-        .innerJoin('branch',       'branch', 'branch.id = agent.branchId')   // names table may differ
+        .innerJoin('user', 'agent', 'agent.id = lr.agentId')  // agent row
+        .innerJoin('branch', 'branch', 'branch.id = agent.branchId')
         .where('DATE(t.date) = :businessDate', { businessDate });
         
-        /* ── 3 · role-specific grouping ── */
+        /* 3 · Role-specific grouping ------------------------------------------ */
         let roleView: 'ADMIN' | 'MANAGER';
         if (caller.role === 'ADMIN') {
             roleView = 'ADMIN';
-            qb.andWhere('branch.id = :ownBranch', { ownBranch: caller.branchId })   // force own branch
+            qb.andWhere('branch.id = :ownBranch', { ownBranch: caller.branchId })
             .select([
-                'agent.id              AS groupId',     // per-agent
-                'agent.name            AS groupLabel',
-                't.Transactiontype     AS type',
-                'COUNT(*)              AS count',
-                'SUM(t.amount)         AS amount',
+                'agent.id          AS groupId',
+                'agent.name        AS groupLabel',
+                't.Transactiontype AS type',
+                'COUNT(*)          AS count',
+                'SUM(t.amount)     AS amount',
             ])
             .groupBy('agent.id, t.Transactiontype');
         } else if (caller.role === 'MANAGER') {
             roleView = 'MANAGER';
             qb.select([
-                'branch.id             AS groupId',     // per-branch
-                'branch.name           AS groupLabel',
-                't.Transactiontype     AS type',
-                'COUNT(*)              AS count',
-                'SUM(t.amount)         AS amount',
+                'branch.id         AS groupId',
+                'branch.name       AS groupLabel',
+                't.Transactiontype AS type',
+                'COUNT(*)          AS count',
+                'SUM(t.amount)     AS amount',
             ])
             .groupBy('branch.id, t.Transactiontype');
         } else {
@@ -66,13 +67,28 @@ export class ReportsService {
             amount: string;
         }>();
         
-        /* ── 4 · fold rows → view blocks ── */
-        const blocks: Record<string, {
+        /* 4 · Fold rows → blocks and grand totals ----------------------------- */
+        const blocks: Record<
+        string,
+        {
             id: string;
             label: string;
-            kpi: { totalCollected: number; cashPaidOut: number; netBalance: number; transactionCount: number };
+            kpi: {
+                totalCollected: number;
+                cashPaidOut: number;
+                netBalance: number;
+                transactionCount: number;
+            };
             breakdown: { type: string; count: number; amount: number }[];
-        }> = {};
+        }
+        > = {};
+        
+        const totals = {
+            totalCollected: 0,
+            cashPaidOut: 0,
+            netBalance: 0,
+            transactionCount: 0,
+        };
         
         for (const r of rows) {
             const key = r.groupId;
@@ -80,29 +96,48 @@ export class ReportsService {
                 blocks[key] = {
                     id: key,
                     label: r.groupLabel,
-                    kpi: { totalCollected: 0, cashPaidOut: 0, netBalance: 0, transactionCount: 0 },
+                    kpi: {
+                        totalCollected: 0,
+                        cashPaidOut: 0,
+                        netBalance: 0,
+                        transactionCount: 0,
+                    },
                     breakdown: [],
                 };
             }
+            
             const blk = blocks[key];
             const amt = +r.amount;
-            blk.breakdown.push({ type: r.type, count: +r.count, amount: amt });
-            blk.kpi.transactionCount += +r.count;
+            const cnt = +r.count;
+            
+            // Per-block accumulation
+            blk.breakdown.push({ type: r.type, count: cnt, amount: amt });
+            blk.kpi.transactionCount += cnt;
             if (amt >= 0) blk.kpi.totalCollected += amt;
-            else          blk.kpi.cashPaidOut   += -amt;
-            blk.kpi.netBalance = blk.kpi.totalCollected - blk.kpi.cashPaidOut;
+            else blk.kpi.cashPaidOut += -amt;
+            blk.kpi.netBalance =
+            blk.kpi.totalCollected - blk.kpi.cashPaidOut;
+            
+            // Grand totals accumulation
+            totals.transactionCount += cnt;
+            if (amt >= 0) totals.totalCollected += amt;
+            else totals.cashPaidOut += -amt;
         }
+        totals.netBalance =
+        totals.totalCollected - totals.cashPaidOut;
         
-        /* ── 5 · response ── */
+        /* 5 · Final payload ---------------------------------------------------- */
         return {
             meta: {
                 date: businessDate,
-                view: roleView,                    // ADMIN or MANAGER
+                view: roleView,
                 generatedAt: new Date().toISOString(),
             },
-            blocks: Object.values(blocks),       // array of per-agent or per-branch sections
+            totals,                                // overall KPIs
+            blocks: Object.values(blocks),         // per-agent or per-branch
         };
     }
+    
     
     
 }

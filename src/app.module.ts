@@ -16,6 +16,7 @@ import { BranchModule } from './branch/branch.module';
 import { PaymentAccountModule } from './payment-accounts/payment-account.module';
 import { ConfigParamModule } from './config-param/config-param.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { ReportsModule } from './reports/reports.module';
 @Module({
   imports: [
     TypeOrmModule.forRoot({
@@ -39,7 +40,8 @@ import { NotificationsModule } from './notifications/notifications.module';
     BranchModule,
     ConfigParamModule,
     PaymentAccountModule,
-    NotificationsModule
+    NotificationsModule,
+    ReportsModule
 
   ],
 })

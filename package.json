@@ -34,6 +34,7 @@
     "better-sqlite3": "^11.9.1",
     "date-fns": "^4.1.0",
     "date-fns-tz": "^3.2.0",
+    "dayjs": "^1.11.13",
     "form-data": "^4.0.2",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
@@ -42,8 +43,7 @@
     "rxjs": "^7.8.1",
     "sharp": "^0.34.2",
     "sqlite": "^5.1.1",
-    "sqlite3": "^5.1.7",
-    "typeorm": "^0.3.23"
+    "sqlite3": "^5.1.7"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
@@ -71,6 +71,7 @@
     "ts-loader": "^9.5.2",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
+    "typeorm": "^0.3.25",
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.20.0"
   },

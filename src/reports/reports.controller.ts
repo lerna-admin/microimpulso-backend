@@ -43,5 +43,26 @@ export class ReportsController {
         }
         return this.reports.getActiveLoansByStatus(userId);
     }
-    
+    /* ------------------------------------------------------------------
+    * Upcoming-due loans (next 7 days)
+    * ---------------------------------------------------------------- */
+    @Get('upcoming-dues')
+    async upcomingDues(
+        @Query('userId') userId: string,
+    ) {
+        if (!userId) throw new BadRequestException('userId is required');
+        return this.reports.getUpcomingDues(userId);      // 7-day window
+    }
+
+
+    /* ------------------------------------------------------------------
+    * Over-due loans (all already past due)
+    * ---------------------------------------------------------------- */
+    @Get('overdue-loans')
+    async overdueLoans(
+    @Query('userId') userId: string,
+    ) {
+    if (!userId) throw new BadRequestException('userId is required');
+    return this.reports.getOverdueLoans(userId);
+    }
 }

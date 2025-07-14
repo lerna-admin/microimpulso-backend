@@ -6,6 +6,7 @@ import 'dayjs/plugin/timezone';
 import 'dayjs/plugin/utc';
 import { LoanTransaction } from 'src/entities/transaction.entity';
 import { User } from 'src/entities/user.entity';
+import { LoanRequest } from 'src/entities/loan-request.entity';
 
 @Injectable()
 export class ReportsService {
@@ -14,6 +15,9 @@ export class ReportsService {
         private readonly txRepo: Repository<LoanTransaction>,
         @InjectRepository(User)
         private readonly userRepo: Repository<User>,
+        @InjectRepository(LoanRequest)
+        private readonly loanRepo: Repository<LoanRequest>,
+        
     ) {}
     
     async getDailyCashSummary(userId: string, date?: string) {
@@ -321,6 +325,93 @@ export class ReportsService {
             },
             totals,
             blocks: Object.values(blocks),
+        };
+    }
+    
+    /* ---------------------------------------------------------------------------
+    * ACTIVE LOANS BY STATUS REPORT
+    *   - ADMIN   → shows only loans in caller's branch
+    *   - MANAGER → shows loans across all branches
+    * ------------------------------------------------------------------------ */
+    async getActiveLoansByStatus(userId: string) {
+        /* 1 · Load caller ----------------------------------------------------- */
+        const caller = await this.userRepo.findOne({ where: { id: +userId } });
+        if (!caller) throw new NotFoundException('User not found');
+        
+        if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
+            throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+        }
+        
+        /* 2 · Build raw SQL: count and outstanding per status ---------------- */
+        const ACTIVE_STATUSES = [
+            "'new'",
+            "'under_review'",
+            "'approved'",
+            "'funded'",
+        ].join(',');
+        
+        const sql = caller.role === 'ADMIN'
+        ? `
+      SELECT
+        lr.status                                AS status,
+        COUNT(*)                                 AS cnt,
+        SUM(lr.amount - IFNULL(rep.repaid, 0))   AS outstanding
+      FROM loan_request lr
+        INNER JOIN user agent ON agent.id = lr.agentId
+        INNER JOIN branch     ON branch.id = agent.branchId
+        LEFT JOIN (
+          SELECT loanRequestId, SUM(amount) AS repaid
+          FROM   loan_transaction
+          WHERE  Transactiontype = 'repayment'
+          GROUP  BY loanRequestId
+        ) rep ON rep.loanRequestId = lr.id
+      WHERE lr.status IN (${ACTIVE_STATUSES})
+        AND branch.id = ?
+      GROUP BY lr.status
+    `
+        : `
+      SELECT
+        lr.status                                AS status,
+        COUNT(*)                                 AS cnt,
+        SUM(lr.amount - IFNULL(rep.repaid, 0))   AS outstanding
+      FROM loan_request lr
+        LEFT JOIN (
+          SELECT loanRequestId, SUM(amount) AS repaid
+          FROM   loan_transaction
+          WHERE  Transactiontype = 'repayment'
+          GROUP  BY loanRequestId
+        ) rep ON rep.loanRequestId = lr.id
+      WHERE lr.status IN (${ACTIVE_STATUSES})
+      GROUP BY lr.status
+    `;
+        
+        const rows: { status: string; cnt: number; outstanding: number }[] =
+        caller.role === 'ADMIN'
+        ? await this.loanRepo.query(sql, [caller.branchId])
+        : await this.loanRepo.query(sql);
+        
+        /* 3 · Totals ---------------------------------------------------------- */
+        const totals = rows.reduce(
+            (acc, r) => {
+                acc.count += r.cnt;
+                acc.outstanding += r.outstanding;
+                return acc;
+            },
+            { count: 0, outstanding: 0 },
+        );
+        
+        /* 4 · Payload --------------------------------------------------------- */
+        return {
+            meta: {
+                view: caller.role,          // ADMIN or MANAGER
+                generatedAt: new Date().toISOString(),
+            },
+            totals,
+            statuses: rows.map(r => ({
+                status: r.status,
+                count: r.cnt,
+                outstanding: r.outstanding,
+            })),
         };
     }
     

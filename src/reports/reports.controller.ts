@@ -31,4 +31,17 @@ export class ReportsController {
         return this.reports.getDailyCashCountByAgent(userId, date);
     }
     
+    /* ------------------------------------------------------------------
+    * Active Loans by Status
+    * ---------------------------------------------------------------- */
+    @Get('active-loans-status')
+    async activeLoansByStatus(
+        @Query('userId') userId: string,
+    ) {
+        if (!userId) {
+            throw new BadRequestException('userId is required');
+        }
+        return this.reports.getActiveLoansByStatus(userId);
+    }
+    
 }

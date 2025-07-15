@@ -121,6 +121,115 @@ export class ReportsController {
         return this.reports.getClientsActiveInactive(userId);
     }
 
+    /* ------------------------------------------------------------------
+    * Ranking de Agentes
+    *   GET /reports/agents-ranking
+    *   Parámetros:
+    *     userId     (number, obligatorio)
+    *     startDate  (YYYY-MM-DD, opcional; default 1.er día del mes)
+    *     endDate    (YYYY-MM-DD, opcional; default hoy)
+    *     metric     (fundedCount | disbursedAmount | collectionAmount;
+    *                 opcional; default fundedCount)
+    *     limit      (number, opcional; default sin límite)
+    * ---------------------------------------------------------------- */
+    @Get('agents-ranking')
+    async agentsRanking(
+        @Query('userId')    userId: string,
+        @Query('startDate') startDate?: string,
+        @Query('endDate')   endDate?: string,
+        @Query('metric')    metric?: 'fundedCount' | 'disbursedAmount' | 'collectionAmount',
+        @Query('limit')     limit?: string,
+    ) {
+            if (!userId) throw new BadRequestException('userId is required');
+            return this.reports.getAgentsRanking(
+                userId,
+                startDate,
+                endDate,
+                metric,
+                limit ? +limit : undefined,
+        );
+    }
+
+    /* ------------------------------------------------------------------
+    * Monto Prestado Total (Acumulado)
+    *   GET /reports/total-loaned
+    *   Parámetros:
+    *     userId     (number, obligatorio)
+    *     startDate  (YYYY-MM-DD, opcional; default inicio de registros)
+    *     endDate    (YYYY-MM-DD, opcional; default hoy)
+    * ---------------------------------------------------------------- */
+    @Get('total-loaned')
+    async totalLoaned(
+        @Query('userId') userId: string,
+        @Query('startDate') startDate?: string,
+        @Query('endDate') endDate?: string,
+    ) {
+        if (!userId) throw new BadRequestException('userId is required');
+        return this.reports.getTotalLoaned(userId, startDate, endDate);
+    }
+
+    /* ------------------------------------------------------------------
+    * Recaudo Total (Pagos Recibidos)
+    *   GET /reports/total-collected
+    *   Parámetros:
+    *     userId     (number, obligatorio)
+    *     startDate  (YYYY-MM-DD, opcional; default inicio de registros)
+    *     endDate    (YYYY-MM-DD, opcional; default hoy)
+    * ---------------------------------------------------------------- */
+    @Get('total-collected')
+    async totalCollected(
+        @Query('userId') userId: string,
+        @Query('startDate') startDate?: string,
+        @Query('endDate') endDate?: string,
+    ) {
+        if (!userId) throw new BadRequestException('userId is required');
+        return this.reports.getTotalCollected(userId, startDate, endDate);
+    }
+
+    /* ------------------------------------------------------------------
+    * Documentos Subidos por Cliente
+    *   GET /reports/documents-by-client
+    *   Parámetros:
+    *     userId    (number, obligatorio)
+    *     startDate (YYYY-MM-DD, opcional; default todo el historial)
+    *     endDate   (YYYY-MM-DD, opcional; default hoy)
+    *     docType   (string, opcional; filtra por tipo de documento)
+    * ---------------------------------------------------------------- */
+    @Get('documents-by-client')
+    async documentsByClient(
+        @Query('userId') userId: string,
+        @Query('startDate') startDate?: string,
+        @Query('endDate')   endDate?: string,
+        @Query('docType')   docType?: string,
+    ) {
+        if (!userId) throw new BadRequestException('userId is required');
+        return this.reports.getDocumentsByClient(
+            userId,
+            startDate,
+            endDate,
+            docType,
+        );
+    }
+
+
+    /* ------------------------------------------------------------------
+    * Actividad de los Agentes
+    *   GET /reports/agent-activity
+    *   Parámetros:
+    *     userId     (number, obligatorio)
+    *     startDate  (YYYY-MM-DD, opcional; default inicio del mes)
+    *     endDate    (YYYY-MM-DD, opcional; default hoy)
+    * ---------------------------------------------------------------- */
+    @Get('agent-activity')
+    async agentActivity(
+        @Query('userId')    userId:    string,
+        @Query('startDate') startDate?: string,
+        @Query('endDate')   endDate?:   string,
+    ) {
+        if (!userId) throw new BadRequestException('userId is required');
+        return this.reports.getAgentActivity(userId, startDate, endDate);
+    }
+
 
     
 }

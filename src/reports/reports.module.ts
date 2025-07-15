@@ -6,9 +6,10 @@ import { ReportsService } from './reports.service';
 import { User } from 'src/entities/user.entity';
 import { LoanRequest } from 'src/entities/loan-request.entity';
 import { Client } from 'src/entities/client.entity';
+import { Document } from 'src/entities/document.entity';
 
 @Module({
-  imports: [ TypeOrmModule.forFeature([LoanTransaction, User, LoanRequest, Client]) ],
+  imports: [ TypeOrmModule.forFeature([LoanTransaction, User, LoanRequest, Client, Document]) ],
   controllers: [ ReportsController ],
   providers: [ ReportsService ],
 })

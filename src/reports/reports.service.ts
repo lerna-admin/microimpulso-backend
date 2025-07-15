@@ -618,6 +618,7 @@ export class ReportsService {
                 generatedAt: new Date().toISOString(),
             },
             totals,
+            loans,
             blocks,
         };
     }

@@ -103,13 +103,23 @@ export class ReportsController {
     @Query('startDate') startDate?: string,
     @Query('endDate')   endDate?:   string,
     ) {
-    if (!userId) {
-        throw new BadRequestException('userId is required');
-    }
-    return this.reports.getNewClients(userId, startDate, endDate);
+        if (!userId) {
+            throw new BadRequestException('userId is required');
+        }
+        return this.reports.getNewClients(userId, startDate, endDate);
     }
 
-
+    /* ------------------------------------------------------------------
+    * Clientes Activos vs Inactivos
+    *   GET /reports/clients-active-inactive?userId=
+    * ---------------------------------------------------------------- */
+    @Get('clients-active-inactive')
+    async clientsActiveInactive(
+    @Query('userId') userId: string,
+    ) {
+        if (!userId) throw new BadRequestException('userId is required');
+        return this.reports.getClientsActiveInactive(userId);
+    }
 
 
     

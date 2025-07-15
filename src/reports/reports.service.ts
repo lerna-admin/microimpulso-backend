@@ -1202,4 +1202,168 @@ export class ReportsService {
             })),
         };
     }
+
+    /* ---------------------------------------------------------------------------
+    * CLIENTES ACTIVOS vs INACTIVOS
+    *   ADMIN   → bloque por agente (solo su sucursal)
+    *   MANAGER → bloques por sucursal, cada uno con sus agentes
+    * ------------------------------------------------------------------------ */
+   
+    async getClientsActiveInactive(userId: string) {
+        /* ── 1 · Validar usuario que llama ────────────────────────────────── */
+        const caller = await this.userRepo.findOne({ where: { id: +userId } });
+        if (!caller) throw new NotFoundException('User not found');
+        if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
+            throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+        }
+
+        /* ── 2 · Sub-consulta de clientes con al menos un préstamo funded ─── */
+        const activeSub = `
+            SELECT DISTINCT lr.clientId
+            FROM loan_request lr
+            WHERE lr.status = 'funded'
+        `;                                  /* SQLite-friendly */
+
+        /* ── 3 · Consulta principal según rol ─────────────────────────────── */
+        if (caller.role === 'ADMIN') {
+            /* --- ADMIN: agrupar por agente en SU sucursal -------------------- */
+            const adminRows = await this.clientRepo.query(
+            `
+            SELECT
+                IFNULL(agent.id, 0)                  AS agentId,
+                IFNULL(agent.name, 'Sin asignar')    AS agentName,
+                c.id                                 AS clientId,
+                c.name                               AS clientName,
+                CASE WHEN a.clientId IS NOT NULL THEN 1 ELSE 0 END AS isActive
+            FROM client c
+                LEFT JOIN user   agent  ON agent.id  = c.agentId
+                LEFT JOIN branch        ON branch.id = agent.branchId
+                LEFT JOIN (${activeSub}) a ON a.clientId = c.id
+            WHERE branch.id = ?
+            `,
+            [caller.branchId],
+            );
+
+            /* --- Agrupar en blocks ------------------------------------------ */
+            const agentMap = new Map<number, {
+            id: number; label: string;
+            active: number; inactive: number;
+            clients: { clientId: number; clientName: string; status: 'ACTIVE' | 'INACTIVE' }[];
+            }>();
+
+            for (const r of adminRows) {
+            let blk = agentMap.get(r.agentId);
+            if (!blk) {
+                blk = {
+                id:    r.agentId,
+                label: r.agentName,
+                active: 0,
+                inactive: 0,
+                clients: [],
+                };
+                agentMap.set(r.agentId, blk);
+            }
+            if (r.isActive) blk.active   += 1;
+            else            blk.inactive += 1;
+
+            blk.clients.push({
+                clientId:   r.clientId,
+                clientName: r.clientName,
+                status:     r.isActive ? 'ACTIVE' : 'INACTIVE',
+            });
+            }
+
+            const totals = Array.from(agentMap.values()).reduce(
+            (acc, b) => {
+                acc.active   += b.active;
+                acc.inactive += b.inactive;
+                return acc;
+            },
+            { active: 0, inactive: 0 },
+            );
+
+            return {
+            meta:   { view: 'ADMIN', generatedAt: new Date().toISOString() },
+            totals,
+            blocks: Array.from(agentMap.values())
+                .sort((x, y) => (y.active + y.inactive) - (x.active + x.inactive)),
+            };
+        }
+
+        /* --- MANAGER: bloques por sucursal → agentes ---------------------- */
+        const mgrRows = await this.clientRepo.query(
+            `
+            SELECT
+            branch.id                      AS branchId,
+            branch.name                    AS branchName,
+            IFNULL(agent.id, 0)            AS agentId,
+            IFNULL(agent.name,'Sin asignar') AS agentName,
+            c.id                           AS clientId,
+            c.name                         AS clientName,
+            CASE WHEN a.clientId IS NOT NULL THEN 1 ELSE 0 END AS isActive
+            FROM client c
+            LEFT JOIN user   agent  ON agent.id  = c.agentId
+            LEFT JOIN branch        ON branch.id = agent.branchId
+            LEFT JOIN (${activeSub}) a ON a.clientId = c.id
+            `,
+        );
+
+        /* --- Agrupar sucursal → agente ------------------------------------ */
+        const branchMap = new Map<number, {
+            branchId: number; branchName: string;
+            active: number; inactive: number;
+            agents: {
+            agentId: number; agentName: string;
+            active: number; inactive: number;
+            clients: { clientId: number; clientName: string; status: 'ACTIVE' | 'INACTIVE' }[];
+            }[];
+        }>();
+
+        for (const r of mgrRows) {
+            /* bloque de sucursal */
+            let br = branchMap.get(r.branchId);
+            if (!br) {
+            br = { branchId: r.branchId, branchName: r.branchName, active: 0, inactive: 0, agents: [] };
+            branchMap.set(r.branchId, br);
+            }
+
+            /* sub-bloque de agente */
+            let ag = br.agents.find(a => a.agentId === r.agentId);
+            if (!ag) {
+            ag = { agentId: r.agentId, agentName: r.agentName, active: 0, inactive: 0, clients: [] };
+            br.agents.push(ag);
+            }
+
+            if (r.isActive) { br.active++; ag.active++; }
+            else            { br.inactive++; ag.inactive++; }
+
+            ag.clients.push({
+            clientId: r.clientId,
+            clientName: r.clientName,
+            status: r.isActive ? 'ACTIVE' : 'INACTIVE',
+            });
+        }
+
+        const totals = Array.from(branchMap.values()).reduce(
+            (acc, b) => {
+            acc.active   += b.active;
+            acc.inactive += b.inactive;
+            return acc;
+            },
+            { active: 0, inactive: 0 },
+        );
+
+        return {
+            meta: { view: 'MANAGER', generatedAt: new Date().toISOString() },
+            totals,
+            blocks: Array.from(branchMap.values())
+            .sort((x, y) => (y.active + y.inactive) - (x.active + x.inactive))
+            .map(b => ({
+                ...b,
+                agents: b.agents.sort(
+                (x, y) => (y.active + y.inactive) - (x.active + x.inactive),
+                ),
+            })),
+        };
+    }
 }

@@ -65,4 +65,52 @@ export class ReportsController {
     if (!userId) throw new BadRequestException('userId is required');
     return this.reports.getOverdueLoans(userId);
     }
+    /* ------------------------------------------------------------------
+    * Renewals made on a given day  (“Renovaciones Realizadas”)
+    * ---------------------------------------------------------------- */
+    @Get('renewals')
+    async renewals(
+    @Query('userId') userId: string,
+    @Query('date')   date?: string,         // opcional – por defecto hoy
+    ) {
+    if (!userId) throw new BadRequestException('userId is required');
+    return this.reports.getDailyRenewals(userId, date);
+    }
+
+    /* ------------------------------------------------------------------
+    * Histórico de préstamos por cliente
+    *  GET /reports/client-loans-history?userId=&clientId=
+    * ---------------------------------------------------------------- */
+    @Get('client-loans-history')
+    async clientLoansHistory(
+        @Query('userId')  userId:  string,
+        @Query('clientId') clientId: string,) {
+        if (!userId || !clientId) {
+            throw new BadRequestException('userId and clientId are required');
+        }
+        return this.reports.getClientLoansHistory(userId, clientId);
+    }
+
+    /* ------------------------------------------------------------------
+    * Clientes nuevos por rango de fechas
+    *   GET /reports/new-clients?userId=&startDate=&endDate=
+    *   • startDate / endDate  → YYYY-MM-DD (ambos opcionales; por defecto
+    *     los últimos 7 días contados desde hoy).
+    * ---------------------------------------------------------------- */
+    @Get('new-clients')
+    async newClients(
+    @Query('userId')    userId:    string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate')   endDate?:   string,
+    ) {
+    if (!userId) {
+        throw new BadRequestException('userId is required');
+    }
+    return this.reports.getNewClients(userId, startDate, endDate);
+    }
+
+
+
+
+    
 }

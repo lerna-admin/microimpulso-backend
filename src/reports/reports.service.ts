@@ -7,6 +7,7 @@ import 'dayjs/plugin/utc';
 import { LoanTransaction } from 'src/entities/transaction.entity';
 import { User } from 'src/entities/user.entity';
 import { LoanRequest } from 'src/entities/loan-request.entity';
+import { Client } from 'src/entities/client.entity';
 
 @Injectable()
 export class ReportsService {
@@ -17,6 +18,8 @@ export class ReportsService {
         private readonly userRepo: Repository<User>,
         @InjectRepository(LoanRequest)
         private readonly loanRepo: Repository<LoanRequest>,
+        @InjectRepository(Client)
+        private readonly clientRepo: Repository<Client>,
         
     ) {}
     
@@ -814,6 +817,387 @@ export class ReportsService {
     };
     }
 
+    /* ---------------------------------------------------------------------------
+    * DAILY RENEWALS REPORT
+    *   ADMIN   → bloque por agente (solo su sucursal)
+    *   MANAGER → bloques por sucursal, cada uno con agentes
+    *   • Cuenta transacciones tipo 'penalty' (renovaciones)
+    *   • No muestra monto — solo el número de renovaciones realizadas
+    * ------------------------------------------------------------------------ */
+    async getDailyRenewals(userId: string, date?: string) {
+        /* 1 · Caller --------------------------------------------------------- */
+        const caller = await this.userRepo.findOne({ where: { id: +userId } });
+        if (!caller) throw new NotFoundException('User not found');
+
+        if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
+            throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+        }
+
+        /* 2 · Fecha del reporte --------------------------------------------- */
+        const businessDate =
+            (date ?? dayjs().format('YYYY-MM-DD'))
+            .slice(0, 10);                    // ensure YYYY-MM-DD
+
+        /* 3 · SQL: contar transacciones 'penalty' del día -------------------- */
+        const baseSql = `
+            FROM loan_transaction t
+            INNER JOIN loan_request lr ON lr.id = t.loanRequestId
+            INNER JOIN user agent      ON agent.id = lr.agentId
+            INNER JOIN branch          ON branch.id = agent.branchId
+            WHERE t.Transactiontype = 'penalty'
+            AND DATE(t.date) = DATE(?)
+        `;
+
+        const adminSql = `
+            SELECT agent.id   AS groupId,
+                agent.name AS groupLabel,
+                COUNT(*)   AS renewals
+            ${baseSql}
+            AND branch.id = ?
+            GROUP BY agent.id, agent.name
+        `;
+
+        const managerSql = `
+            SELECT branch.id   AS branchId,
+                branch.name AS branchName,
+                agent.id    AS agentId,
+                agent.name  AS agentName,
+                COUNT(*)    AS renewals
+            ${baseSql}
+            GROUP BY branch.id, branch.name, agent.id, agent.name
+        `;
+
+        /* 4 · Ejecutar y armar estructura ----------------------------------- */
+
+        if (caller.role === 'ADMIN') {
+            const rows: { groupId: number; groupLabel: string; renewals: number }[] =
+            await this.txRepo.query(adminSql, [businessDate, caller.branchId]);
+
+            const blocks = rows.map(r => ({
+            id: r.groupId,
+            label: r.groupLabel,
+            renewals: r.renewals,
+            }));
+
+            const totalRenewals = rows.reduce((sum, r) => sum + r.renewals, 0);
+
+            return {
+            meta: {
+                date: businessDate,
+                view: 'ADMIN',
+                generatedAt: new Date().toISOString(),
+            },
+            totals: { renewals: totalRenewals },
+            blocks,                         // un bloque por agente
+            };
+        }
+
+        /* -- MANAGER -------------------------------------------------------- */
+        const rows: {
+            branchId: number;
+            branchName: string;
+            agentId: number;
+            agentName: string;
+            renewals: number;
+        }[] = await this.txRepo.query(managerSql, [businessDate]);
+
+        // agrupar sucursal→agentes
+        const branchMap = new Map<number, {
+            branchId: number;
+            branchName: string;
+            renewals: number;
+            agents: { agentId: number; agentName: string; renewals: number }[];
+        }>();
+
+        for (const r of rows) {
+            let branch = branchMap.get(r.branchId);
+            if (!branch) {
+            branch = {
+                branchId: r.branchId,
+                branchName: r.branchName,
+                renewals: 0,
+                agents: [],
+            };
+            branchMap.set(r.branchId, branch);
+            }
+            branch.renewals += r.renewals;
+            branch.agents.push({
+            agentId: r.agentId,
+            agentName: r.agentName,
+            renewals: r.renewals,
+            });
+        }
+
+        const totals = {
+            renewals: Array.from(branchMap.values()).reduce(
+            (sum, b) => sum + b.renewals, 0),
+        };
+
+        return {
+            meta: {
+            date: businessDate,
+            view: 'MANAGER',
+            generatedAt: new Date().toISOString(),
+            },
+            totals,
+            blocks: Array.from(branchMap.values())    // bloques por sucursal
+        };
+    }
 
 
+    /* ---------------------------------------------------------------------------
+    * CLIENT LOANS HISTORY
+    *  ADMIN   → sólo clientes de su propia sucursal
+    *  MANAGER → clientes de cualquier sucursal
+    *  Devuelve cada préstamo del cliente con saldo pendiente y totales agregados
+    * ------------------------------------------------------------------------ */
+    async getClientLoansHistory(userId: string, clientId: string) {
+        /* 1 · Usuario que llama ---------------------------------------------- */
+        const caller = await this.userRepo.findOne({ where: { id: +userId } });
+        if (!caller) throw new NotFoundException('User not found');
+        if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
+            throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+        }
+
+        /* 2 · Información básica del cliente --------------------------------- */
+        const client = await this.clientRepo.findOne({ where: { id: +clientId } });
+        if (!client) throw new NotFoundException('Client not found');
+
+        /* 3 · Consulta SQL ---------------------------------------------------- */
+        const sql = caller.role === 'ADMIN'
+            ? `
+            SELECT
+                lr.id                        AS loanId,
+                lr.amount                    AS loanAmount,
+                lr.status                    AS status,
+                DATE(lr.createdAt)  AS startDate,
+                DATE(lr.endDateAt)  AS endDate,
+                IFNULL(rep.repaid,0)         AS totalRepaid,
+                (lr.amount - IFNULL(rep.repaid,0)) AS outstanding
+            FROM loan_request lr
+                INNER JOIN user agent ON agent.id = lr.agentId
+                INNER JOIN branch     ON branch.id = agent.branchId
+                LEFT JOIN (
+                SELECT loanRequestId, SUM(amount) AS repaid
+                FROM   loan_transaction
+                WHERE  Transactiontype = 'repayment'
+                GROUP  BY loanRequestId
+                ) rep ON rep.loanRequestId = lr.id
+            WHERE lr.clientId = ?
+                AND branch.id = ?
+            ORDER BY lr.createdAt DESC
+            `
+            : `
+            SELECT
+                lr.id                        AS loanId,
+                lr.amount                    AS loanAmount,
+                lr.status                    AS status,
+                DATE(lr.createdAt)         AS startDate,
+                DATE(lr.endDateAt)           AS endDate,
+                IFNULL(rep.repaid,0)         AS totalRepaid,
+                (lr.amount - IFNULL(rep.repaid,0)) AS outstanding
+            FROM loan_request lr
+                LEFT JOIN (
+                SELECT loanRequestId, SUM(amount) AS repaid
+                FROM   loan_transaction
+                WHERE  Transactiontype = 'repayment'
+                GROUP  BY loanRequestId
+                ) rep ON rep.loanRequestId = lr.id
+            WHERE lr.clientId = ?
+            ORDER BY lr.createdAt DESC
+            `;
+
+        const params = caller.role === 'ADMIN'
+            ? [+clientId, caller.branchId]
+            : [+clientId];
+
+        const rows: {
+            loanId: number;
+            loanAmount: number;
+            status: string;
+            startDate: string;
+            endDate: string;
+            totalRepaid: number;
+            outstanding: number;
+        }[] = await this.loanRepo.query(sql, params);
+
+        /* 4 · Totales -------------------------------------------------------- */
+        const totals = rows.reduce(
+            (acc, r) => {
+            acc.loanCount += 1;
+            acc.totalLoaned += r.loanAmount;
+            acc.totalRepaid += r.totalRepaid;
+            acc.totalOutstanding += r.outstanding;
+            return acc;
+            },
+            { loanCount: 0, totalLoaned: 0, totalRepaid: 0, totalOutstanding: 0 },
+        );
+
+        /* 5 · Payload -------------------------------------------------------- */
+        return {
+            meta: {
+            clientId: client.id,
+            clientName: client.name,
+            view: caller.role,
+            generatedAt: new Date().toISOString(),
+            },
+            totals,
+            loans: rows,          // lista de todos los préstamos del cliente
+        };
+    }
+
+    /* ---------------------------------------------------------------------------
+    * NEW CLIENTS BY DATE RANGE
+    *   ADMIN   → un bloque por agente de SU sucursal
+    *   MANAGER → bloques por sucursal, cada uno con sus agentes
+    *   • Cuenta cuántos clientes fueron creados entre startDate y endDate
+    *   • Desglosa por status inicial (PROSPECT, ACTIVE, …)
+    * ------------------------------------------------------------------------ */
+    async getNewClients(
+        userId: string,
+        startDate?: string,
+        endDate?: string,
+        ) {
+        /* 1 · Llamador ------------------------------------------------------- */
+        const caller = await this.userRepo.findOne({ where: { id: +userId } });
+        if (!caller) throw new NotFoundException('User not found');
+        if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
+            throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+        }
+
+        /* 2 · Ventana temporal (default últimos 7 días) ---------------------- */
+        const end   = endDate
+            ? dayjs(endDate).endOf('day')
+            : dayjs().endOf('day');
+        const start = startDate
+            ? dayjs(startDate).startOf('day')
+            : end.subtract(7, 'day').startOf('day');
+
+        /* 3 · SQL base ------------------------------------------------------- */
+        const baseSql = `
+            FROM client c
+            INNER JOIN user agent  ON agent.id  = c.agentId
+            INNER JOIN branch      ON branch.id = agent.branchId
+            WHERE DATE(c.createdAt) BETWEEN DATE(?) AND DATE(?)
+        `;
+
+        /* -------- ADMIN: agrupar por agente en su sucursal ----------------- */
+        const adminSql = `
+            SELECT
+            agent.id    AS agentId,
+            agent.name  AS agentName,
+            c.status    AS status,
+            COUNT(*)    AS cnt
+            ${baseSql}
+            AND branch.id = ?
+            GROUP BY agent.id, agent.name, c.status
+        `;
+
+        /* -------- MANAGER: agrupar por sucursal → agente ------------------- */
+        const managerSql = `
+            SELECT
+            branch.id   AS branchId,
+            branch.name AS branchName,
+            agent.id    AS agentId,
+            agent.name  AS agentName,
+            c.status    AS status,
+            COUNT(*)    AS cnt
+            ${baseSql}
+            GROUP BY branch.id, branch.name, agent.id, agent.name, c.status
+        `;
+
+        /* 4 · Ejecutar consulta --------------------------------------------- */
+        const paramsAdmin   = [start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD'), caller.branchId];
+        const paramsManager = [start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD')];
+
+        if (caller.role === 'ADMIN') {
+            const rows: { agentId: number; agentName: string; status: string; cnt: number }[] =
+            await this.clientRepo.query(adminSql, paramsAdmin);
+
+            /* Bloques por agente */
+            const blocks = rows.reduce((acc, r) => {
+            let ag = acc.get(r.agentId);
+            if (!ag) {
+                ag = {
+                id: r.agentId,
+                label: r.agentName,
+                newCount: 0,
+                byStatus: {} as Record<string, number>,
+                };
+                acc.set(r.agentId, ag);
+            }
+            ag.newCount += r.cnt;
+            ag.byStatus[r.status] = (ag.byStatus[r.status] ?? 0) + r.cnt;
+            return acc;
+            }, new Map<number, any>());
+
+            const total = Array.from(blocks.values()).reduce((s, b) => s + b.newCount, 0);
+
+            return {
+            meta: {
+                range: `${start.format('YYYY-MM-DD')} → ${end.format('YYYY-MM-DD')}`,
+                view: 'ADMIN',
+                generatedAt: new Date().toISOString(),
+            },
+            totals: { newCount: total },
+            blocks: Array.from(blocks.values()).sort((a, b) => b.newCount - a.newCount),
+            };
+        }
+
+        /* ------------- MANAGER --------------------------------------------- */
+        const rows: {
+            branchId: number; branchName: string;
+            agentId: number;  agentName: string;
+            status: string;   cnt: number;
+        }[] = await this.clientRepo.query(managerSql, paramsManager);
+
+        /* Construir mapa branch → agents */
+        const branchMap = new Map<number, any>();
+
+        for (const r of rows) {
+            /* rama sucursal */
+            let br = branchMap.get(r.branchId);
+            if (!br) {
+            br = {
+                branchId: r.branchId,
+                branchName: r.branchName,
+                newCount: 0,
+                agents: [] as any[],
+            };
+            branchMap.set(r.branchId, br);
+            }
+            br.newCount += r.cnt;
+
+            /* sub-rama agente */
+            let ag = br.agents.find((a: any) => a.agentId === r.agentId);
+            if (!ag) {
+            ag = {
+                agentId: r.agentId,
+                agentName: r.agentName,
+                newCount: 0,
+                byStatus: {} as Record<string, number>,
+            };
+            br.agents.push(ag);
+            }
+            ag.newCount += r.cnt;
+            ag.byStatus[r.status] = (ag.byStatus[r.status] ?? 0) + r.cnt;
+        }
+
+        const total = Array.from(branchMap.values()).reduce((s, b) => s + b.newCount, 0);
+
+        return {
+            meta: {
+            range: `${start.format('YYYY-MM-DD')} → ${end.format('YYYY-MM-DD')}`,
+            view: 'MANAGER',
+            generatedAt: new Date().toISOString(),
+            },
+            totals: { newCount: total },
+            blocks: Array.from(branchMap.values())
+            .sort((a: any, b: any) => b.newCount - a.newCount)
+            .map((b: any) => ({
+                ...b,
+                agents: b.agents.sort((x: any, y: any) => y.newCount - x.newCount),
+            })),
+        };
+    }
 }

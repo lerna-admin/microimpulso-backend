@@ -812,6 +812,7 @@ export class ReportsService {
         view: caller.role,
         generatedAt: new Date().toISOString(),
         },
+        loans,
         totals,
         blocks,
     };

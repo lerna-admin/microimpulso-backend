@@ -8,6 +8,7 @@ import { LoanTransaction } from 'src/entities/transaction.entity';
 import { User } from 'src/entities/user.entity';
 import { LoanRequest } from 'src/entities/loan-request.entity';
 import { Client } from 'src/entities/client.entity';
+import { TransactionType } from 'src/entities/transaction.entity';
 
 @Injectable()
 export class ReportsService {
@@ -24,12 +25,11 @@ export class ReportsService {
     ) {}
     
     async getDailyCashSummary(userId: string, date?: string) {
-        /* 1 · Load caller ------------------------------------------------------ */
+        /* 1 · Load caller -------------------------------------------------------- */
         const caller = await this.userRepo.findOne({ where: { id: +userId } });
         if (!caller) throw new NotFoundException('User not found');
         
-        const businessDate =
-        date ?? dayjs().format('YYYY-MM-DD');
+        const businessDate = date ?? dayjs().format('YYYY-MM-DD');
         
         /* 2 · Base query: loan_transaction → loan_request → agent(user) → branch */
         const qb = this.txRepo
@@ -39,7 +39,7 @@ export class ReportsService {
         .innerJoin('branch', 'branch', 'branch.id = agent.branchId')
         .where('DATE(t.date) = :businessDate', { businessDate });
         
-        /* 3 · Role-specific grouping ------------------------------------------ */
+        /* 3 · Role-specific grouping -------------------------------------------- */
         let roleView: 'ADMIN' | 'MANAGER';
         if (caller.role === 'ADMIN') {
             roleView = 'ADMIN';
@@ -74,7 +74,7 @@ export class ReportsService {
             amount: string;
         }>();
         
-        /* 4 · Fold rows → blocks and grand totals ----------------------------- */
+        /* 4 · Fold rows → blocks and grand totals ------------------------------- */
         const blocks: Record<
         string,
         {
@@ -114,26 +114,40 @@ export class ReportsService {
             }
             
             const blk = blocks[key];
-            const amt = +r.amount;
+            const amt = +r.amount;            // signed amount from SQL
             const cnt = +r.count;
+            const isDisbursement =
+            r.type === TransactionType.DISBURSEMENT || r.type === 'DISBURSEMENT';
             
-            // Per-block accumulation
+            /* ── 4.1  Store row in breakdown list ── */
             blk.breakdown.push({ type: r.type, count: cnt, amount: amt });
+            
+            /* ── 4.2  Accumulate KPIs ───────────────────────────────────────────── */
             blk.kpi.transactionCount += cnt;
-            if (amt >= 0) blk.kpi.totalCollected += amt;
-            else blk.kpi.cashPaidOut += -amt;
+            totals.transactionCount += cnt;
+            
+            if (isDisbursement) {
+                // Always treat disbursements as money *out*, even if amount is positive
+                blk.kpi.cashPaidOut += Math.abs(amt);
+                totals.cashPaidOut += Math.abs(amt);
+            } else if (amt >= 0) {
+                // Regular inbound cash (repayments, penalties, etc.)
+                blk.kpi.totalCollected += amt;
+                totals.totalCollected += amt;
+            } else {
+                // Any other negative amount (refunds, corrections) counts as outflow
+                blk.kpi.cashPaidOut += -amt;
+                totals.cashPaidOut += -amt;
+            }
+            
             blk.kpi.netBalance =
             blk.kpi.totalCollected - blk.kpi.cashPaidOut;
-            
-            // Grand totals accumulation
-            totals.transactionCount += cnt;
-            if (amt >= 0) totals.totalCollected += amt;
-            else totals.cashPaidOut += -amt;
         }
+        
         totals.netBalance =
         totals.totalCollected - totals.cashPaidOut;
         
-        /* 5 · Final payload ---------------------------------------------------- */
+        /* 5 · Final payload ------------------------------------------------------ */
         return {
             meta: {
                 date: businessDate,
@@ -417,7 +431,7 @@ export class ReportsService {
             })),
         };
     }
-
+    
     /* ---------------------------------------------------------------------------
     * UPCOMING DUES (next-7-days window)
     *   ADMIN   → grouped by agent in caller’s branch
@@ -600,46 +614,46 @@ export class ReportsService {
         /* 6 · Sort blocks by nextDueDate ------------------------------------ */
         const blocks = Array.from(branchMap.values()).sort((a: any, b: any) =>
             dayjs(a.nextDueDate).diff(dayjs(b.nextDueDate)),
-        );
-        if (caller.role === 'MANAGER') {
-            blocks.forEach(b =>
-                b.agents.sort((x, y) =>
-                    dayjs(x.nextDueDate).diff(dayjs(y.nextDueDate)),
-            ),
-        );
-        }
+    );
+    if (caller.role === 'MANAGER') {
+        blocks.forEach(b =>
+            b.agents.sort((x, y) =>
+                dayjs(x.nextDueDate).diff(dayjs(y.nextDueDate)),
+        ),
+    );
+}
 
-        /* 7 · Payload -------------------------------------------------------- */
-        return {
-            meta: {
-                date: startDate.format('YYYY-MM-DD'),
-                window: 7,
-                view: caller.role,         // ADMIN or MANAGER
-                generatedAt: new Date().toISOString(),
-            },
-            totals,
-            loans,
-            blocks,
-        };
-    }
+/* 7 · Payload -------------------------------------------------------- */
+return {
+    meta: {
+        date: startDate.format('YYYY-MM-DD'),
+        window: 7,
+        view: caller.role,         // ADMIN or MANAGER
+        generatedAt: new Date().toISOString(),
+    },
+    totals,
+    loans,
+    blocks,
+};
+}
 
-    /* ---------------------------------------------------------------------------
-    * OVER-DUE LOANS REPORT
-    *   ADMIN   → one block per agent in caller’s branch
-    *   MANAGER → blocks per branch, each with agent breakdown
-    * ------------------------------------------------------------------------ */
-    async getOverdueLoans(userId: string) {
+/* ---------------------------------------------------------------------------
+* OVER-DUE LOANS REPORT
+*   ADMIN   → one block per agent in caller’s branch
+*   MANAGER → blocks per branch, each with agent breakdown
+* ------------------------------------------------------------------------ */
+async getOverdueLoans(userId: string) {
     /* 1 · Caller --------------------------------------------------------- */
     const caller = await this.userRepo.findOne({ where: { id: +userId } });
     if (!caller) throw new NotFoundException('User not found');
-
+    
     if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
         throw new ForbiddenException('Only ADMIN or MANAGER may call this');
     }
-
+    
     /* 2 · Reference date: today ----------------------------------------- */
     const today = dayjs().startOf('day');
-
+    
     /* 3 · Raw SQL: list every loan past due and still outstanding -------- */
     const ACTIVE_STATUSES = [
         "'new'",
@@ -647,9 +661,9 @@ export class ReportsService {
         "'approved'",
         "'funded'",
     ].join(',');
-
+    
     const sql = caller.role === 'ADMIN'
-        ? `
+    ? `
         SELECT
             lr.id                  AS loanId,
             DATE(lr.endDateAt)     AS dueDate,
@@ -672,7 +686,7 @@ export class ReportsService {
             AND DATE(lr.endDateAt) < DATE(?)        /* past due */
             AND branch.id = ?
         `
-        : `
+    : `
         SELECT
             lr.id                  AS loanId,
             DATE(lr.endDateAt)     AS dueDate,
@@ -694,11 +708,11 @@ export class ReportsService {
         WHERE lr.status IN (${ACTIVE_STATUSES})
             AND DATE(lr.endDateAt) < DATE(?)
         `;
-
+    
     const params = caller.role === 'ADMIN'
-        ? [today.format('YYYY-MM-DD'), caller.branchId]
-        : [today.format('YYYY-MM-DD')];
-
+    ? [today.format('YYYY-MM-DD'), caller.branchId]
+    : [today.format('YYYY-MM-DD')];
+    
     const loans: {
         loanId: number;
         dueDate: string;
@@ -709,7 +723,7 @@ export class ReportsService {
         branchId: number;
         branchName: string;
     }[] = await this.loanRepo.query(sql, params);
-
+    
     /* 4 · Build blocks --------------------------------------------------- */
     type AgentBlock = {
         agentId: number;
@@ -718,7 +732,7 @@ export class ReportsService {
         amountDue: number;
         mostOverdueDays: number;
     };
-
+    
     type BranchBlock = {
         branchId: number;
         branchName: string;
@@ -727,121 +741,121 @@ export class ReportsService {
         mostOverdueDays: number;
         agents: AgentBlock[];
     };
-
+    
     const branchMap = new Map<number, BranchBlock>();
-
+    
     for (const l of loans) {
         const pending = l.loanAmount - l.totalRepaid;
         const overdueDays = today.diff(dayjs(l.dueDate), 'day');
-
+        
         if (caller.role === 'ADMIN') {
-        /* --- group by agent only --------------------------------------- */
-        let agent = branchMap.get(l.agentId) as unknown as AgentBlock | undefined;
-        if (!agent) {
-            agent = {
-            agentId: l.agentId,
-            agentName: l.agentName,
-            loanCount: 0,
-            amountDue: 0,
-            mostOverdueDays: overdueDays,
-            };
-            branchMap.set(l.agentId, agent as unknown as BranchBlock);
-        }
-        agent.loanCount += 1;
-        agent.amountDue += pending;
-        agent.mostOverdueDays = Math.max(agent.mostOverdueDays, overdueDays);
+            /* --- group by agent only --------------------------------------- */
+            let agent = branchMap.get(l.agentId) as unknown as AgentBlock | undefined;
+            if (!agent) {
+                agent = {
+                    agentId: l.agentId,
+                    agentName: l.agentName,
+                    loanCount: 0,
+                    amountDue: 0,
+                    mostOverdueDays: overdueDays,
+                };
+                branchMap.set(l.agentId, agent as unknown as BranchBlock);
+            }
+            agent.loanCount += 1;
+            agent.amountDue += pending;
+            agent.mostOverdueDays = Math.max(agent.mostOverdueDays, overdueDays);
         } else {
-        /* --- group by branch then agent -------------------------------- */
-        let branch = branchMap.get(l.branchId);
-        if (!branch) {
-            branch = {
-            branchId: l.branchId,
-            branchName: l.branchName,
-            loanCount: 0,
-            amountDue: 0,
-            mostOverdueDays: overdueDays,
-            agents: [],
-            };
-            branchMap.set(l.branchId, branch);
-        }
-        branch.loanCount += 1;
-        branch.amountDue += pending;
-        branch.mostOverdueDays = Math.max(branch.mostOverdueDays, overdueDays);
-
-        let agent = branch.agents.find(a => a.agentId === l.agentId);
-        if (!agent) {
-            agent = {
-            agentId: l.agentId,
-            agentName: l.agentName,
-            loanCount: 0,
-            amountDue: 0,
-            mostOverdueDays: overdueDays,
-            };
-            branch.agents.push(agent);
-        }
-        agent.loanCount += 1;
-        agent.amountDue += pending;
-        agent.mostOverdueDays = Math.max(agent.mostOverdueDays, overdueDays);
+            /* --- group by branch then agent -------------------------------- */
+            let branch = branchMap.get(l.branchId);
+            if (!branch) {
+                branch = {
+                    branchId: l.branchId,
+                    branchName: l.branchName,
+                    loanCount: 0,
+                    amountDue: 0,
+                    mostOverdueDays: overdueDays,
+                    agents: [],
+                };
+                branchMap.set(l.branchId, branch);
+            }
+            branch.loanCount += 1;
+            branch.amountDue += pending;
+            branch.mostOverdueDays = Math.max(branch.mostOverdueDays, overdueDays);
+            
+            let agent = branch.agents.find(a => a.agentId === l.agentId);
+            if (!agent) {
+                agent = {
+                    agentId: l.agentId,
+                    agentName: l.agentName,
+                    loanCount: 0,
+                    amountDue: 0,
+                    mostOverdueDays: overdueDays,
+                };
+                branch.agents.push(agent);
+            }
+            agent.loanCount += 1;
+            agent.amountDue += pending;
+            agent.mostOverdueDays = Math.max(agent.mostOverdueDays, overdueDays);
         }
     }
-
+    
     /* 5 · Totals --------------------------------------------------------- */
     const totals = {
         loanCount: loans.length,
         amountDue: loans.reduce(
-        (sum, l) => sum + (l.loanAmount - l.totalRepaid),
-        0,
+            (sum, l) => sum + (l.loanAmount - l.totalRepaid),
+            0,
         ),
     };
-
+    
     /* 6 · Sort blocks (oldest overdue first) ----------------------------- */
     const blocks = Array.from(branchMap.values()).sort(
         (a: any, b: any) => b.mostOverdueDays - a.mostOverdueDays,
     );
     if (caller.role === 'MANAGER') {
         blocks.forEach(b =>
-        b.agents.sort(
-            (x, y) => y.mostOverdueDays - x.mostOverdueDays,
-        ),
+            b.agents.sort(
+                (x, y) => y.mostOverdueDays - x.mostOverdueDays,
+            ),
         );
     }
-
+    
     /* 7 · Payload -------------------------------------------------------- */
     return {
         meta: {
-        asOf: today.format('YYYY-MM-DD'),
-        view: caller.role,
-        generatedAt: new Date().toISOString(),
+            asOf: today.format('YYYY-MM-DD'),
+            view: caller.role,
+            generatedAt: new Date().toISOString(),
         },
         loans,
         totals,
         blocks,
     };
+}
+
+/* ---------------------------------------------------------------------------
+* DAILY RENEWALS REPORT
+*   ADMIN   → bloque por agente (solo su sucursal)
+*   MANAGER → bloques por sucursal, cada uno con agentes
+*   • Cuenta transacciones tipo 'penalty' (renovaciones)
+*   • No muestra monto — solo el número de renovaciones realizadas
+* ------------------------------------------------------------------------ */
+async getDailyRenewals(userId: string, date?: string) {
+    /* 1 · Caller --------------------------------------------------------- */
+    const caller = await this.userRepo.findOne({ where: { id: +userId } });
+    if (!caller) throw new NotFoundException('User not found');
+    
+    if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
+        throw new ForbiddenException('Only ADMIN or MANAGER may call this');
     }
-
-    /* ---------------------------------------------------------------------------
-    * DAILY RENEWALS REPORT
-    *   ADMIN   → bloque por agente (solo su sucursal)
-    *   MANAGER → bloques por sucursal, cada uno con agentes
-    *   • Cuenta transacciones tipo 'penalty' (renovaciones)
-    *   • No muestra monto — solo el número de renovaciones realizadas
-    * ------------------------------------------------------------------------ */
-    async getDailyRenewals(userId: string, date?: string) {
-        /* 1 · Caller --------------------------------------------------------- */
-        const caller = await this.userRepo.findOne({ where: { id: +userId } });
-        if (!caller) throw new NotFoundException('User not found');
-
-        if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
-            throw new ForbiddenException('Only ADMIN or MANAGER may call this');
-        }
-
-        /* 2 · Fecha del reporte --------------------------------------------- */
-        const businessDate =
-            (date ?? dayjs().format('YYYY-MM-DD'))
-            .slice(0, 10);                    // ensure YYYY-MM-DD
-
-        /* 3 · SQL: contar transacciones 'penalty' del día -------------------- */
-        const baseSql = `
+    
+    /* 2 · Fecha del reporte --------------------------------------------- */
+    const businessDate =
+    (date ?? dayjs().format('YYYY-MM-DD'))
+    .slice(0, 10);                    // ensure YYYY-MM-DD
+    
+    /* 3 · SQL: contar transacciones 'penalty' del día -------------------- */
+    const baseSql = `
             FROM loan_transaction t
             INNER JOIN loan_request lr ON lr.id = t.loanRequestId
             INNER JOIN user agent      ON agent.id = lr.agentId
@@ -849,8 +863,8 @@ export class ReportsService {
             WHERE t.Transactiontype = 'penalty'
             AND DATE(t.date) = DATE(?)
         `;
-
-        const adminSql = `
+    
+    const adminSql = `
             SELECT agent.id   AS groupId,
                 agent.name AS groupLabel,
                 COUNT(*)   AS renewals
@@ -858,8 +872,8 @@ export class ReportsService {
             AND branch.id = ?
             GROUP BY agent.id, agent.name
         `;
-
-        const managerSql = `
+    
+    const managerSql = `
             SELECT branch.id   AS branchId,
                 branch.name AS branchName,
                 agent.id    AS agentId,
@@ -868,22 +882,22 @@ export class ReportsService {
             ${baseSql}
             GROUP BY branch.id, branch.name, agent.id, agent.name
         `;
-
-        /* 4 · Ejecutar y armar estructura ----------------------------------- */
-
-        if (caller.role === 'ADMIN') {
-            const rows: { groupId: number; groupLabel: string; renewals: number }[] =
-            await this.txRepo.query(adminSql, [businessDate, caller.branchId]);
-
-            const blocks = rows.map(r => ({
+    
+    /* 4 · Ejecutar y armar estructura ----------------------------------- */
+    
+    if (caller.role === 'ADMIN') {
+        const rows: { groupId: number; groupLabel: string; renewals: number }[] =
+        await this.txRepo.query(adminSql, [businessDate, caller.branchId]);
+        
+        const blocks = rows.map(r => ({
             id: r.groupId,
             label: r.groupLabel,
             renewals: r.renewals,
-            }));
-
-            const totalRenewals = rows.reduce((sum, r) => sum + r.renewals, 0);
-
-            return {
+        }));
+        
+        const totalRenewals = rows.reduce((sum, r) => sum + r.renewals, 0);
+        
+        return {
             meta: {
                 date: businessDate,
                 view: 'ADMIN',
@@ -891,29 +905,29 @@ export class ReportsService {
             },
             totals: { renewals: totalRenewals },
             blocks,                         // un bloque por agente
-            };
-        }
-
-        /* -- MANAGER -------------------------------------------------------- */
-        const rows: {
-            branchId: number;
-            branchName: string;
-            agentId: number;
-            agentName: string;
-            renewals: number;
-        }[] = await this.txRepo.query(managerSql, [businessDate]);
-
-        // agrupar sucursal→agentes
-        const branchMap = new Map<number, {
-            branchId: number;
-            branchName: string;
-            renewals: number;
-            agents: { agentId: number; agentName: string; renewals: number }[];
-        }>();
-
-        for (const r of rows) {
-            let branch = branchMap.get(r.branchId);
-            if (!branch) {
+        };
+    }
+    
+    /* -- MANAGER -------------------------------------------------------- */
+    const rows: {
+        branchId: number;
+        branchName: string;
+        agentId: number;
+        agentName: string;
+        renewals: number;
+    }[] = await this.txRepo.query(managerSql, [businessDate]);
+    
+    // agrupar sucursal→agentes
+    const branchMap = new Map<number, {
+        branchId: number;
+        branchName: string;
+        renewals: number;
+        agents: { agentId: number; agentName: string; renewals: number }[];
+    }>();
+    
+    for (const r of rows) {
+        let branch = branchMap.get(r.branchId);
+        if (!branch) {
             branch = {
                 branchId: r.branchId,
                 branchName: r.branchName,
@@ -921,32 +935,32 @@ export class ReportsService {
                 agents: [],
             };
             branchMap.set(r.branchId, branch);
-            }
-            branch.renewals += r.renewals;
-            branch.agents.push({
+        }
+        branch.renewals += r.renewals;
+        branch.agents.push({
             agentId: r.agentId,
             agentName: r.agentName,
             renewals: r.renewals,
-            });
-        }
-
-        const totals = {
-            renewals: Array.from(branchMap.values()).reduce(
+        });
+    }
+    
+    const totals = {
+        renewals: Array.from(branchMap.values()).reduce(
             (sum, b) => sum + b.renewals, 0),
         };
-
+        
         return {
             meta: {
-            date: businessDate,
-            view: 'MANAGER',
-            generatedAt: new Date().toISOString(),
+                date: businessDate,
+                view: 'MANAGER',
+                generatedAt: new Date().toISOString(),
             },
             totals,
             blocks: Array.from(branchMap.values())    // bloques por sucursal
         };
     }
-
-
+    
+    
     /* ---------------------------------------------------------------------------
     * CLIENT LOANS HISTORY
     *  ADMIN   → sólo clientes de su propia sucursal
@@ -960,14 +974,14 @@ export class ReportsService {
         if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
             throw new ForbiddenException('Only ADMIN or MANAGER may call this');
         }
-
+        
         /* 2 · Información básica del cliente --------------------------------- */
         const client = await this.clientRepo.findOne({ where: { id: +clientId } });
         if (!client) throw new NotFoundException('Client not found');
-
+        
         /* 3 · Consulta SQL ---------------------------------------------------- */
         const sql = caller.role === 'ADMIN'
-            ? `
+        ? `
             SELECT
                 lr.id                        AS loanId,
                 lr.amount                    AS loanAmount,
@@ -989,7 +1003,7 @@ export class ReportsService {
                 AND branch.id = ?
             ORDER BY lr.createdAt DESC
             `
-            : `
+        : `
             SELECT
                 lr.id                        AS loanId,
                 lr.amount                    AS loanAmount,
@@ -1008,11 +1022,11 @@ export class ReportsService {
             WHERE lr.clientId = ?
             ORDER BY lr.createdAt DESC
             `;
-
+        
         const params = caller.role === 'ADMIN'
-            ? [+clientId, caller.branchId]
-            : [+clientId];
-
+        ? [+clientId, caller.branchId]
+        : [+clientId];
+        
         const rows: {
             loanId: number;
             loanAmount: number;
@@ -1022,32 +1036,32 @@ export class ReportsService {
             totalRepaid: number;
             outstanding: number;
         }[] = await this.loanRepo.query(sql, params);
-
+        
         /* 4 · Totales -------------------------------------------------------- */
         const totals = rows.reduce(
             (acc, r) => {
-            acc.loanCount += 1;
-            acc.totalLoaned += r.loanAmount;
-            acc.totalRepaid += r.totalRepaid;
-            acc.totalOutstanding += r.outstanding;
-            return acc;
+                acc.loanCount += 1;
+                acc.totalLoaned += r.loanAmount;
+                acc.totalRepaid += r.totalRepaid;
+                acc.totalOutstanding += r.outstanding;
+                return acc;
             },
             { loanCount: 0, totalLoaned: 0, totalRepaid: 0, totalOutstanding: 0 },
         );
-
+        
         /* 5 · Payload -------------------------------------------------------- */
         return {
             meta: {
-            clientId: client.id,
-            clientName: client.name,
-            view: caller.role,
-            generatedAt: new Date().toISOString(),
+                clientId: client.id,
+                clientName: client.name,
+                view: caller.role,
+                generatedAt: new Date().toISOString(),
             },
             totals,
             loans: rows,          // lista de todos los préstamos del cliente
         };
     }
-
+    
     /* ---------------------------------------------------------------------------
     * NEW CLIENTS BY DATE RANGE
     *   ADMIN   → un bloque por agente de SU sucursal
@@ -1059,22 +1073,22 @@ export class ReportsService {
         userId: string,
         startDate?: string,
         endDate?: string,
-        ) {
+    ) {
         /* 1 · Llamador ------------------------------------------------------- */
         const caller = await this.userRepo.findOne({ where: { id: +userId } });
         if (!caller) throw new NotFoundException('User not found');
         if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
             throw new ForbiddenException('Only ADMIN or MANAGER may call this');
         }
-
+        
         /* 2 · Ventana temporal (default últimos 7 días) ---------------------- */
         const end   = endDate
-            ? dayjs(endDate).endOf('day')
-            : dayjs().endOf('day');
+        ? dayjs(endDate).endOf('day')
+        : dayjs().endOf('day');
         const start = startDate
-            ? dayjs(startDate).startOf('day')
-            : end.subtract(7, 'day').startOf('day');
-
+        ? dayjs(startDate).startOf('day')
+        : end.subtract(7, 'day').startOf('day');
+        
         /* 3 · SQL base ------------------------------------------------------- */
         const baseSql = `
             FROM client c
@@ -1082,7 +1096,7 @@ export class ReportsService {
             INNER JOIN branch      ON branch.id = agent.branchId
             WHERE DATE(c.createdAt) BETWEEN DATE(?) AND DATE(?)
         `;
-
+        
         /* -------- ADMIN: agrupar por agente en su sucursal ----------------- */
         const adminSql = `
             SELECT
@@ -1094,7 +1108,7 @@ export class ReportsService {
             AND branch.id = ?
             GROUP BY agent.id, agent.name, c.status
         `;
-
+        
         /* -------- MANAGER: agrupar por sucursal → agente ------------------- */
         const managerSql = `
             SELECT
@@ -1107,91 +1121,91 @@ export class ReportsService {
             ${baseSql}
             GROUP BY branch.id, branch.name, agent.id, agent.name, c.status
         `;
-
+        
         /* 4 · Ejecutar consulta --------------------------------------------- */
         const paramsAdmin   = [start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD'), caller.branchId];
         const paramsManager = [start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD')];
-
+        
         if (caller.role === 'ADMIN') {
             const rows: { agentId: number; agentName: string; status: string; cnt: number }[] =
             await this.clientRepo.query(adminSql, paramsAdmin);
-
+            
             /* Bloques por agente */
             const blocks = rows.reduce((acc, r) => {
-            let ag = acc.get(r.agentId);
-            if (!ag) {
-                ag = {
-                id: r.agentId,
-                label: r.agentName,
-                newCount: 0,
-                byStatus: {} as Record<string, number>,
-                };
-                acc.set(r.agentId, ag);
-            }
-            ag.newCount += r.cnt;
-            ag.byStatus[r.status] = (ag.byStatus[r.status] ?? 0) + r.cnt;
-            return acc;
+                let ag = acc.get(r.agentId);
+                if (!ag) {
+                    ag = {
+                        id: r.agentId,
+                        label: r.agentName,
+                        newCount: 0,
+                        byStatus: {} as Record<string, number>,
+                    };
+                    acc.set(r.agentId, ag);
+                }
+                ag.newCount += r.cnt;
+                ag.byStatus[r.status] = (ag.byStatus[r.status] ?? 0) + r.cnt;
+                return acc;
             }, new Map<number, any>());
-
+            
             const total = Array.from(blocks.values()).reduce((s, b) => s + b.newCount, 0);
-
+            
             return {
-            meta: {
-                range: `${start.format('YYYY-MM-DD')} → ${end.format('YYYY-MM-DD')}`,
-                view: 'ADMIN',
-                generatedAt: new Date().toISOString(),
-            },
-            totals: { newCount: total },
-            blocks: Array.from(blocks.values()).sort((a, b) => b.newCount - a.newCount),
+                meta: {
+                    range: `${start.format('YYYY-MM-DD')} → ${end.format('YYYY-MM-DD')}`,
+                    view: 'ADMIN',
+                    generatedAt: new Date().toISOString(),
+                },
+                totals: { newCount: total },
+                blocks: Array.from(blocks.values()).sort((a, b) => b.newCount - a.newCount),
             };
         }
-
+        
         /* ------------- MANAGER --------------------------------------------- */
         const rows: {
             branchId: number; branchName: string;
             agentId: number;  agentName: string;
             status: string;   cnt: number;
         }[] = await this.clientRepo.query(managerSql, paramsManager);
-
+        
         /* Construir mapa branch → agents */
         const branchMap = new Map<number, any>();
-
+        
         for (const r of rows) {
             /* rama sucursal */
             let br = branchMap.get(r.branchId);
             if (!br) {
-            br = {
-                branchId: r.branchId,
-                branchName: r.branchName,
-                newCount: 0,
-                agents: [] as any[],
-            };
-            branchMap.set(r.branchId, br);
+                br = {
+                    branchId: r.branchId,
+                    branchName: r.branchName,
+                    newCount: 0,
+                    agents: [] as any[],
+                };
+                branchMap.set(r.branchId, br);
             }
             br.newCount += r.cnt;
-
+            
             /* sub-rama agente */
             let ag = br.agents.find((a: any) => a.agentId === r.agentId);
             if (!ag) {
-            ag = {
-                agentId: r.agentId,
-                agentName: r.agentName,
-                newCount: 0,
-                byStatus: {} as Record<string, number>,
-            };
-            br.agents.push(ag);
+                ag = {
+                    agentId: r.agentId,
+                    agentName: r.agentName,
+                    newCount: 0,
+                    byStatus: {} as Record<string, number>,
+                };
+                br.agents.push(ag);
             }
             ag.newCount += r.cnt;
             ag.byStatus[r.status] = (ag.byStatus[r.status] ?? 0) + r.cnt;
         }
-
+        
         const total = Array.from(branchMap.values()).reduce((s, b) => s + b.newCount, 0);
-
+        
         return {
             meta: {
-            range: `${start.format('YYYY-MM-DD')} → ${end.format('YYYY-MM-DD')}`,
-            view: 'MANAGER',
-            generatedAt: new Date().toISOString(),
+                range: `${start.format('YYYY-MM-DD')} → ${end.format('YYYY-MM-DD')}`,
+                view: 'MANAGER',
+                generatedAt: new Date().toISOString(),
             },
             totals: { newCount: total },
             blocks: Array.from(branchMap.values())
@@ -1202,13 +1216,13 @@ export class ReportsService {
             })),
         };
     }
-
+    
     /* ---------------------------------------------------------------------------
     * CLIENTES ACTIVOS vs INACTIVOS
     *   ADMIN   → bloque por agente (solo su sucursal)
     *   MANAGER → bloques por sucursal, cada uno con sus agentes
     * ------------------------------------------------------------------------ */
-   
+    
     async getClientsActiveInactive(userId: string) {
         /* ── 1 · Validar usuario que llama ────────────────────────────────── */
         const caller = await this.userRepo.findOne({ where: { id: +userId } });
@@ -1216,19 +1230,19 @@ export class ReportsService {
         if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
             throw new ForbiddenException('Only ADMIN or MANAGER may call this');
         }
-
+        
         /* ── 2 · Sub-consulta de clientes con al menos un préstamo funded ─── */
         const activeSub = `
             SELECT DISTINCT lr.clientId
             FROM loan_request lr
             WHERE lr.status = 'funded'
         `;                                  /* SQLite-friendly */
-
+        
         /* ── 3 · Consulta principal según rol ─────────────────────────────── */
         if (caller.role === 'ADMIN') {
             /* --- ADMIN: agrupar por agente en SU sucursal -------------------- */
             const adminRows = await this.clientRepo.query(
-            `
+                `
             SELECT
                 IFNULL(agent.id, 0)                  AS agentId,
                 IFNULL(agent.name, 'Sin asignar')    AS agentName,
@@ -1241,55 +1255,55 @@ export class ReportsService {
                 LEFT JOIN (${activeSub}) a ON a.clientId = c.id
             WHERE branch.id = ?
             `,
-            [caller.branchId],
+                [caller.branchId],
             );
-
+            
             /* --- Agrupar en blocks ------------------------------------------ */
             const agentMap = new Map<number, {
-            id: number; label: string;
-            active: number; inactive: number;
-            clients: { clientId: number; clientName: string; status: 'ACTIVE' | 'INACTIVE' }[];
+                id: number; label: string;
+                active: number; inactive: number;
+                clients: { clientId: number; clientName: string; status: 'ACTIVE' | 'INACTIVE' }[];
             }>();
-
+            
             for (const r of adminRows) {
-            let blk = agentMap.get(r.agentId);
-            if (!blk) {
-                blk = {
-                id:    r.agentId,
-                label: r.agentName,
-                active: 0,
-                inactive: 0,
-                clients: [],
-                };
-                agentMap.set(r.agentId, blk);
+                let blk = agentMap.get(r.agentId);
+                if (!blk) {
+                    blk = {
+                        id:    r.agentId,
+                        label: r.agentName,
+                        active: 0,
+                        inactive: 0,
+                        clients: [],
+                    };
+                    agentMap.set(r.agentId, blk);
+                }
+                if (r.isActive) blk.active   += 1;
+                else            blk.inactive += 1;
+                
+                blk.clients.push({
+                    clientId:   r.clientId,
+                    clientName: r.clientName,
+                    status:     r.isActive ? 'ACTIVE' : 'INACTIVE',
+                });
             }
-            if (r.isActive) blk.active   += 1;
-            else            blk.inactive += 1;
-
-            blk.clients.push({
-                clientId:   r.clientId,
-                clientName: r.clientName,
-                status:     r.isActive ? 'ACTIVE' : 'INACTIVE',
-            });
-            }
-
+            
             const totals = Array.from(agentMap.values()).reduce(
-            (acc, b) => {
-                acc.active   += b.active;
-                acc.inactive += b.inactive;
-                return acc;
-            },
-            { active: 0, inactive: 0 },
+                (acc, b) => {
+                    acc.active   += b.active;
+                    acc.inactive += b.inactive;
+                    return acc;
+                },
+                { active: 0, inactive: 0 },
             );
-
+            
             return {
-            meta:   { view: 'ADMIN', generatedAt: new Date().toISOString() },
-            totals,
-            blocks: Array.from(agentMap.values())
+                meta:   { view: 'ADMIN', generatedAt: new Date().toISOString() },
+                totals,
+                blocks: Array.from(agentMap.values())
                 .sort((x, y) => (y.active + y.inactive) - (x.active + x.inactive)),
             };
         }
-
+        
         /* --- MANAGER: bloques por sucursal → agentes ---------------------- */
         const mgrRows = await this.clientRepo.query(
             `
@@ -1307,52 +1321,52 @@ export class ReportsService {
             LEFT JOIN (${activeSub}) a ON a.clientId = c.id
             `,
         );
-
+        
         /* --- Agrupar sucursal → agente ------------------------------------ */
         const branchMap = new Map<number, {
             branchId: number; branchName: string;
             active: number; inactive: number;
             agents: {
-            agentId: number; agentName: string;
-            active: number; inactive: number;
-            clients: { clientId: number; clientName: string; status: 'ACTIVE' | 'INACTIVE' }[];
+                agentId: number; agentName: string;
+                active: number; inactive: number;
+                clients: { clientId: number; clientName: string; status: 'ACTIVE' | 'INACTIVE' }[];
             }[];
         }>();
-
+        
         for (const r of mgrRows) {
             /* bloque de sucursal */
             let br = branchMap.get(r.branchId);
             if (!br) {
-            br = { branchId: r.branchId, branchName: r.branchName, active: 0, inactive: 0, agents: [] };
-            branchMap.set(r.branchId, br);
+                br = { branchId: r.branchId, branchName: r.branchName, active: 0, inactive: 0, agents: [] };
+                branchMap.set(r.branchId, br);
             }
-
+            
             /* sub-bloque de agente */
             let ag = br.agents.find(a => a.agentId === r.agentId);
             if (!ag) {
-            ag = { agentId: r.agentId, agentName: r.agentName, active: 0, inactive: 0, clients: [] };
-            br.agents.push(ag);
+                ag = { agentId: r.agentId, agentName: r.agentName, active: 0, inactive: 0, clients: [] };
+                br.agents.push(ag);
             }
-
+            
             if (r.isActive) { br.active++; ag.active++; }
             else            { br.inactive++; ag.inactive++; }
-
+            
             ag.clients.push({
-            clientId: r.clientId,
-            clientName: r.clientName,
-            status: r.isActive ? 'ACTIVE' : 'INACTIVE',
+                clientId: r.clientId,
+                clientName: r.clientName,
+                status: r.isActive ? 'ACTIVE' : 'INACTIVE',
             });
         }
-
+        
         const totals = Array.from(branchMap.values()).reduce(
             (acc, b) => {
-            acc.active   += b.active;
-            acc.inactive += b.inactive;
-            return acc;
+                acc.active   += b.active;
+                acc.inactive += b.inactive;
+                return acc;
             },
             { active: 0, inactive: 0 },
         );
-
+        
         return {
             meta: { view: 'MANAGER', generatedAt: new Date().toISOString() },
             totals,
@@ -1361,7 +1375,7 @@ export class ReportsService {
             .map(b => ({
                 ...b,
                 agents: b.agents.sort(
-                (x, y) => (y.active + y.inactive) - (x.active + x.inactive),
+                    (x, y) => (y.active + y.inactive) - (x.active + x.inactive),
                 ),
             })),
         };

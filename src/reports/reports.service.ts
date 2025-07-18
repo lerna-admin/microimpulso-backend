@@ -784,7 +784,7 @@ return {
                 agent.id               AS agentId,
                 agent.name             AS agentName,
                 branch.id              AS branchId,
-                branch.name            AS branchName
+                branch.name            AS branchName,
                 client.name            AS clientName
 
             FROM loan_request lr

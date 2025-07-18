@@ -354,7 +354,7 @@ export class ReportsService {
     *   - ADMIN   → shows only loans in caller's branch
     *   - MANAGER → shows loans across all branches
     * ------------------------------------------------------------------------ */
-    async getActiveLoansByStatus(userId: string) {
+    async getActiveLoansByStatus(userId: string, branchId?: string) {
         /* 1 · Load caller ----------------------------------------------------- */
         const caller = await this.userRepo.findOne({ where: { id: +userId } });
         if (!caller) throw new NotFoundException('User not found');
@@ -371,7 +371,7 @@ export class ReportsService {
             "'funded'",
         ].join(',');
         
-        const sql = caller.role === 'ADMIN'
+        let sql = caller.role === 'ADMIN'
         ? `
       SELECT
         lr.status                                AS status,
@@ -405,13 +405,38 @@ export class ReportsService {
       WHERE lr.status IN (${ACTIVE_STATUSES})
       GROUP BY lr.status
     `;
+
+    let params: any[] = caller.role === 'ADMIN' ? [caller.branchId] : [];
+
+    /* 3 · Apply optional override if MANAGER + branchId ------------------ */
+    if (caller.role === 'MANAGER' && branchId) {
+        sql = `
+      SELECT
+        lr.status                                AS status,
+        COUNT(*)                                 AS cnt,
+        SUM(lr.amount - IFNULL(rep.repaid, 0))   AS outstanding
+      FROM loan_request lr
+        INNER JOIN user agent ON agent.id = lr.agentId
+        INNER JOIN branch     ON branch.id = agent.branchId
+        LEFT JOIN (
+          SELECT loanRequestId, SUM(amount) AS repaid
+          FROM   loan_transaction
+          WHERE  Transactiontype = 'repayment'
+          GROUP  BY loanRequestId
+        ) rep ON rep.loanRequestId = lr.id
+      WHERE lr.status IN (${ACTIVE_STATUSES})
+        AND branch.id = ?
+      GROUP BY lr.status
+    `;
+        params = [branchId];
+    }
+
+
         
         const rows: { status: string; cnt: number; outstanding: number }[] =
-        caller.role === 'ADMIN'
-        ? await this.loanRepo.query(sql, [caller.branchId])
-        : await this.loanRepo.query(sql);
+        await this.loanRepo.query(sql, params);
         
-        /* 3 · Totals ---------------------------------------------------------- */
+        /* 4 · Totals ---------------------------------------------------------- */
         const totals = rows.reduce(
             (acc, r) => {
                 acc.count += r.cnt;
@@ -421,7 +446,7 @@ export class ReportsService {
             { count: 0, outstanding: 0 },
         );
         
-        /* 4 · Payload --------------------------------------------------------- */
+        /* 5 · Payload --------------------------------------------------------- */
         return {
             meta: {
                 view: caller.role,          // ADMIN or MANAGER

@@ -24,6 +24,7 @@ export class ReportsController {
     async dailyCashCount(
         @Query('userId') userId: string,
         @Query('date') date?: string,
+
     ) {
         if (!userId) {
             throw new BadRequestException('userId is required');
@@ -37,11 +38,13 @@ export class ReportsController {
     @Get('active-loans-status')
     async activeLoansByStatus(
         @Query('userId') userId: string,
+        @Query('branchId') branchId: string,
+
     ) {
         if (!userId) {
             throw new BadRequestException('userId is required');
         }
-        return this.reports.getActiveLoansByStatus(userId);
+        return this.reports.getActiveLoansByStatus(userId, branchId);
     }
     /* ------------------------------------------------------------------
     * Upcoming-due loans (next 7 days)

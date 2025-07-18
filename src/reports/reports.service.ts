@@ -170,7 +170,7 @@ export class ReportsService {
     *  - Cartera (monto aún adeudado)
     *  - Repayments / Disbursements / Penalties del día
     * ------------------------------------------------------------------------ */
-    async getDailyCashCountByAgent(userId: string, date?: string) {
+    async getDailyCashCountByAgent(userId: string, date?: string, branchId?:string) {
         /* ---------------------------------------------------------------------------
         * DAILY PORTFOLIO & MOVEMENTS REPORT  (versión SQLite sin TS errors)
         * ------------------------------------------------------------------------ */
@@ -227,39 +227,90 @@ export class ReportsService {
             movRows = await this.txRepo.query(movSql, [businessDate, caller.branchId]);
         } else {
             /* --- MANAGER: agrupar POR SUCURSAL (todas) ------------------------ */
-            const carteraSql = `
-      SELECT
-        branch.id   AS groupId,
-        branch.name AS groupLabel,
-        SUM(lr.amount)              AS totalLoaned,
-        IFNULL(SUM(rep.repaid),0)   AS totalRepaid
-      FROM loan_request lr
-        INNER JOIN user agent ON agent.id = lr.agentId
-        INNER JOIN branch     ON branch.id = agent.branchId
-        LEFT JOIN (
-          SELECT loanRequestId, SUM(amount) AS repaid
-          FROM   loan_transaction
-          WHERE  Transactiontype = 'repayment'
-          GROUP  BY loanRequestId
-        ) rep ON rep.loanRequestId = lr.id
-      GROUP BY branch.id, branch.name
-    `;
-            carteraRows = await this.txRepo.query(carteraSql);
+            let carteraSql: string;
+            let carteraParams: any[] = [];
+
+            if (branchId) {
+                carteraSql = `
+                    SELECT
+                        branch.id   AS groupId,
+                        branch.name AS groupLabel,
+                        SUM(lr.amount)              AS totalLoaned,
+                        IFNULL(SUM(rep.repaid), 0)  AS totalRepaid
+                    FROM loan_request lr
+                        INNER JOIN user agent ON agent.id = lr.agentId
+                        INNER JOIN branch     ON branch.id = agent.branchId
+                        LEFT JOIN (
+                            SELECT loanRequestId, SUM(amount) AS repaid
+                            FROM loan_transaction
+                            WHERE Transactiontype = 'repayment'
+                            GROUP BY loanRequestId
+                        ) rep ON rep.loanRequestId = lr.id
+                    WHERE branch.id = ?
+                    GROUP BY branch.id, branch.name
+                    `;
+                    carteraParams = [branchId];
+                } else {
+                    carteraSql = `
+                    SELECT
+                        branch.id   AS groupId,
+                        branch.name AS groupLabel,
+                        SUM(lr.amount)              AS totalLoaned,
+                        IFNULL(SUM(rep.repaid), 0)  AS totalRepaid
+                    FROM loan_request lr
+                        INNER JOIN user agent ON agent.id = lr.agentId
+                        INNER JOIN branch     ON branch.id = agent.branchId
+                        LEFT JOIN (
+                            SELECT loanRequestId, SUM(amount) AS repaid
+                            FROM loan_transaction
+                            WHERE Transactiontype = 'repayment'
+                            GROUP BY loanRequestId
+                        ) rep ON rep.loanRequestId = lr.id
+                    GROUP BY branch.id, branch.name
+                    `;
+                    carteraParams = [];
+                }
+
+                carteraRows = await this.txRepo.query(carteraSql, carteraParams);
+
             
-            const movSql = `
-      SELECT
-        branch.id          AS groupId,
-        t.Transactiontype  AS type,
-        COUNT(*)           AS cnt,
-        SUM(t.amount)      AS amt
-      FROM loan_transaction t
-        INNER JOIN loan_request lr ON lr.id = t.loanRequestId
-        INNER JOIN user agent      ON agent.id = lr.agentId
-        INNER JOIN branch          ON branch.id = agent.branchId
-      WHERE DATE(t.date) = ?
-      GROUP BY branch.id, t.Transactiontype
-    `;
-            movRows = await this.txRepo.query(movSql, [businessDate]);
+            let movSql: string;
+            let movParams: any[] = [];
+
+            if (branchId) {
+                movSql = `
+                SELECT
+                    branch.id          AS groupId,
+                    t.Transactiontype  AS type,
+                    COUNT(*)           AS cnt,
+                    SUM(t.amount)      AS amt
+                FROM loan_transaction t
+                    INNER JOIN loan_request lr ON lr.id = t.loanRequestId
+                    INNER JOIN user agent      ON agent.id = lr.agentId
+                    INNER JOIN branch          ON branch.id = agent.branchId
+                WHERE DATE(t.date) = ? AND branch.id = ?
+                GROUP BY branch.id, t.Transactiontype
+                `;
+                movParams = [businessDate, branchId];
+            } else {
+                movSql = `
+                SELECT
+                    branch.id          AS groupId,
+                    t.Transactiontype  AS type,
+                    COUNT(*)           AS cnt,
+                    SUM(t.amount)      AS amt
+                FROM loan_transaction t
+                    INNER JOIN loan_request lr ON lr.id = t.loanRequestId
+                    INNER JOIN user agent      ON agent.id = lr.agentId
+                    INNER JOIN branch          ON branch.id = agent.branchId
+                WHERE DATE(t.date) = ?
+                GROUP BY branch.id, t.Transactiontype
+                `;
+                movParams = [businessDate];
+            }
+
+            movRows = await this.txRepo.query(movSql, movParams);
+
         }
         
         /* 3 · Combinar resultados ------------------------------------------- */

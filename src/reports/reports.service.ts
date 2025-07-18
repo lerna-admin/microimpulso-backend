@@ -571,10 +571,12 @@ export class ReportsService {
             agent.id               AS agentId,
             agent.name             AS agentName,
             branch.id              AS branchId,
-            branch.name            AS branchName
+            branch.name            AS branchName,
+            client.name            AS clientName
         FROM loan_request lr
             INNER JOIN user agent  ON agent.id  = lr.agentId
             INNER JOIN branch      ON branch.id = agent.branchId
+            INNER JOIN client      ON client.id = lr.clientId
             LEFT  JOIN (
             SELECT loanRequestId, SUM(amount) AS repaid
             FROM   loan_transaction
@@ -598,6 +600,7 @@ export class ReportsService {
             agentName: string;
             branchId: number;
             branchName: string;
+            clientName: string;
         }[] = await this.loanRepo.query(sql, params);
         
         /* 4 · Build blocks --------------------------------------------------- */

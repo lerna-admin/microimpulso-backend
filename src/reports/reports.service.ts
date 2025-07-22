@@ -1157,244 +1157,139 @@ return {
     }
     
    /**
-     * Returns a report of *new* clients created within a date window,
-     * plus the number of loan requests originated **on the very same calendar day**
-     * as each client.  
-     *
-     * Rules
-     * ─────
-     * • Clients are counted even if they have *no* loan_request.  
-     * • A loan_request is counted **only** when:
-     *     DATE(lr.createdAt) = DATE(c.createdAt)
-     *   (same day, same client).  
-     * • ADMIN ‒ restricted to caller’s branch.  
-     * • MANAGER ‒ all branches visible.  
-     *
-     * Response shape
-     * ──────────────
-     * {
-     *   meta   : { range, view, generatedAt },
-     *   totals : { newCount, loanCount },
-     *   blocks : [                         // branch → agents (MANAGER)
-     *     {                                 // or just agents (ADMIN)
-     *       branchId   ,
-     *       branchName ,
-     *       newCount   ,   // clients
-     *       loanCount  ,   // loans (same-day)
-     *       agents : [
-     *         {
-     *           agentId   ,
-     *           agentName ,
-     *           newCount  ,
-     *           loanCount ,
-     *           byStatus  : { PROSPECT: n, ... }
-     *         }
-     *       ]
-     *     }
-     *   ]
-     * }
-     */
-    async getNewClients(
-        userId: string,
-        startDate?: string,
-        endDate?: string,
-    ) {
-        /* ---------- 1 · Caller ------------------------------------------------ */
-        const caller = await this.userRepo.findOne({ where: { id: +userId } });
-        if (!caller) throw new NotFoundException('User not found');
-        if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
-            throw new ForbiddenException('Only ADMIN or MANAGER may call this');
-        }
+ * getNewClients
+ * -------------
+ * Returns every client created in [start, end] with its agent / branch
+ * and, if created on the same calendar day, the matching loan_request.
+ *
+ * • loan_request joined with AND DATE(lr.createdAt) = DATE(c.createdAt)
+ *   so only same-day loans are returned.
+ * • ADMIN   → restricted to caller.branchId (if branch present).
+ * • MANAGER → all branches.
+ */
+async getNewClients(userId: string, startDate?: string, endDate?: string) {
+  /* 1 · Caller --------------------------------------------------------- */
+  const caller = await this.userRepo.findOne({ where: { id: +userId } });
+  if (!caller) throw new NotFoundException('User not found');
+  if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
+    throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+  }
 
-        /* ---------- 2 · Date window (defaults to last 7 days) ----------------- */
-        const end   = endDate
-            ? dayjs(endDate).endOf('day')
-            : dayjs().endOf('day');
+  /* 2 · Date window ---------------------------------------------------- */
+  const end   = endDate
+    ? dayjs(endDate).endOf('day')
+    : dayjs().endOf('day');
 
-        const start = startDate
-            ? dayjs(startDate).startOf('day')
-            : end.clone().subtract(7, 'day').startOf('day');
+  const start = startDate
+    ? dayjs(startDate).startOf('day')
+    : end.clone().subtract(7, 'day').startOf('day');
 
-        /* ---------- 3 · Base SQL fragment ------------------------------------ */
-        const baseSql = `
-            FROM client c
-            LEFT JOIN loan_request lr ON lr.clientId = c.id
-            LEFT JOIN user    agent   ON agent.id   = c.agentId      -- may be NULL
-            LEFT JOIN branch          ON branch.id  = agent.branchId -- may be NULL
-            WHERE DATE(c.createdAt) BETWEEN DATE(?) AND DATE(?)
-        `;
+  /* 3 · Base SQL ------------------------------------------------------- */
+  const baseSql = `
+      FROM client c
+      /* pick ONE same-day loan via a correlated sub-query (first row) */
+      LEFT JOIN loan_request lr
+             ON lr.id = (
+                   SELECT lr2.id
+                   FROM loan_request lr2
+                   WHERE lr2.clientId = c.id
+                     AND DATE(lr2.createdAt) = DATE(c.createdAt)
+                   ORDER BY lr2.id
+                   LIMIT 1
+                 )
+      LEFT JOIN user    agent   ON agent.id  = lr.agentId
+      LEFT JOIN branch          ON branch.id = agent.branchId
+      WHERE DATE(c.createdAt) BETWEEN DATE(?) AND DATE(?)
+  `;
 
-        /* ---------- ADMIN ---------------------------------------------------- */
-        const adminSql = `
-            SELECT
-                agent.id                              AS agentId,
-                COALESCE(agent.name,'Unassigned')     AS agentName,
-                c.status                              AS status,
-                COUNT(DISTINCT c.id)                  AS clientCnt,
-                COUNT(DISTINCT CASE
-                    WHEN lr.id IS NOT NULL
-                    AND DATE(lr.createdAt) = DATE(c.createdAt)
-                    THEN lr.id END)                AS loanCnt
-            ${baseSql}
-            AND (branch.id = ? OR branch.id IS NULL)
-            GROUP BY agent.id, agentName, c.status          -- ★ usa agent.id
-        `;
+  /* 3.1 · SELECT list -------------------------------------------------- */
+  const selectCols = `
+      c.id        AS clientId,
+      c.name      AS clientName,
+      c.status    AS clientStatus,
+      c.createdAt AS clientCreatedAt,
+      c.phone     AS clientPhone,
+      c.email     AS clientEmail,
 
-        /* ---------- MANAGER -------------------------------------------------- */
-        const managerSql = `
-            SELECT
-                branch.id                              AS branchId,
-                COALESCE(branch.name,'Unassigned')     AS branchName,
-                agent.id                               AS agentId,
-                COALESCE(agent.name,'Unassigned')      AS agentName,
-                c.status                               AS status,
-                COUNT(DISTINCT c.id)                   AS clientCnt,
-                COUNT(DISTINCT CASE
-                    WHEN lr.id IS NOT NULL
-                    AND DATE(lr.createdAt) = DATE(c.createdAt)
-                    THEN lr.id END)                 AS loanCnt
-            ${baseSql}
-            GROUP BY branch.id, branchName, agent.id, agentName, c.status   -- ★ usa branch.id y agent.id
-        `;
+      lr.id       AS loanId,
+      lr.amount   AS loanAmount,
+      lr.status   AS loanStatus,
+      lr.createdAt AS loanCreatedAt,
 
-        /* ---------- 4 · Parameter arrays ------------------------------------- */
-        const paramsAdmin   = [
-            start.format('YYYY-MM-DD'),
-            end  .format('YYYY-MM-DD'),
-            caller.branchId,
-        ];
-        const paramsManager = [
-            start.format('YYYY-MM-DD'),
-            end  .format('YYYY-MM-DD'),
-        ];
+      agent.id    AS agentId,
+      agent.name  AS agentName,
 
-        /* ---------- 5 · ADMIN view ------------------------------------------- */
-        if (caller.role === 'ADMIN') {
-            type RowAdmin = {
-            agentId: number | null;
-            agentName: string;
-            status: string;
-            clientCnt: number;
-            loanCnt: number;
-            };
+      branch.id   AS branchId,
+      branch.name AS branchName
+  `;
 
-            const rows: RowAdmin[] = await this.clientRepo.query(adminSql, paramsAdmin);
+  /* 3.2 · Queries ------------------------------------------------------ */
+  const adminSql = `
+      SELECT ${selectCols}
+      ${baseSql}
+        AND (branch.id = ? OR branch.id IS NULL) /* ADMIN filter */
+      ORDER BY c.createdAt DESC
+  `;
+  const managerSql = `
+      SELECT ${selectCols}
+      ${baseSql}
+      ORDER BY c.createdAt DESC
+  `;
 
-            const blocks = rows.reduce((m, r) => {
-            const key = r.agentId ?? -1;           // -1 for unassigned
-            let ag = m.get(key);
-            if (!ag) {
-                ag = {
-                id:         r.agentId,
-                label:      r.agentName,
-                newCount:   0,
-                loanCount:  0,
-                byStatus: {} as Record<string, number>,
-                };
-                m.set(key, ag);
-            }
-            ag.newCount  += r.clientCnt;
-            ag.loanCount += r.loanCnt;
-            ag.byStatus[r.status] =
-                (ag.byStatus[r.status] ?? 0) + r.clientCnt;
-            return m;
-            }, new Map<number, any>());
+  /* 4 · Params --------------------------------------------------------- */
+  const paramsAdmin   = [ start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD'), caller.branchId ];
+  const paramsManager = [ start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD') ];
 
-            const totals = [...blocks.values()].reduce(
-            (acc, b) => {
-                acc.newCount  += b.newCount;
-                acc.loanCount += b.loanCount;
-                return acc;
-            },
-            { newCount: 0, loanCount: 0 },
-            );
+  /* 5 · Run query ------------------------------------------------------ */
+  const rows: any[] = await this.clientRepo.query(
+    caller.role === 'ADMIN' ? adminSql : managerSql,
+    caller.role === 'ADMIN' ? paramsAdmin : paramsManager,
+  );
 
-            return {
-            meta: {
-                range: `${start.format('YYYY-MM-DD')} → ${end.format('YYYY-MM-DD')}`,
-                view : 'ADMIN',
-                generatedAt: new Date().toISOString(),
-            },
-            totals,
-            blocks: [...blocks.values()].sort((a, b) => b.newCount - a.newCount),
-            };
-        }
+  /* 6 · Transform rows ------------------------------------------------- */
+  const records = rows.map(r => ({
+    client: {
+      id        : r.clientId,
+      name      : r.clientName,
+      status    : r.clientStatus,
+      createdAt : r.clientCreatedAt,
+      phone     : r.clientPhone,
+      email     : r.clientEmail,
+    },
+    loan: r.loanId ? {
+      id        : r.loanId,
+      amount    : r.loanAmount,
+      status    : r.loanStatus,
+      createdAt : r.loanCreatedAt,
+      agent : r.agentId ? {
+        id   : r.agentId,
+        name : r.agentName,
+        branch: r.branchId ? { id: r.branchId, name: r.branchName } : undefined,
+      } : null,
+    } : null,
+  }));
 
-        /* ---------- 6 · MANAGER view ----------------------------------------- */
-        type RowMgr = {
-            branchId  : number | null; branchName: string;
-            agentId   : number | null; agentName : string;
-            status    : string;
-            clientCnt : number;
-            loanCnt   : number;
-        };
+  /* 7 · Totals --------------------------------------------------------- */
+  const totals = records.reduce(
+    (acc, rec) => {
+      acc.newCount  += 1;
+      acc.loanCount += rec.loan ? 1 : 0;
+      return acc;
+    },
+    { newCount: 0, loanCount: 0 },
+  );
 
-        const rows: RowMgr[] = await this.clientRepo.query(managerSql, paramsManager);
-
-        /* Build branch → agent structure */
-        const branchMap = new Map<number, any>();   // key -1 represents 'Unassigned'
-
-        for (const r of rows) {
-            const branchKey = r.branchId ?? -1;
-
-            /* -------- branch level -------- */
-            let br = branchMap.get(branchKey);
-            if (!br) {
-            br = {
-                branchId  : r.branchId,
-                branchName: r.branchName,
-                newCount  : 0,
-                loanCount : 0,
-                agents    : [] as any[],
-            };
-            branchMap.set(branchKey, br);
-            }
-            br.newCount  += r.clientCnt;
-            br.loanCount += r.loanCnt;
-
-            /* -------- agent level --------- */
-            const agentKey = r.agentId ?? -1;
-            let ag = br.agents.find((a: any) => (a.agentId ?? -1) === agentKey);
-            if (!ag) {
-            ag = {
-                agentId  : r.agentId,
-                agentName: r.agentName,
-                newCount : 0,
-                loanCount: 0,
-                byStatus : {} as Record<string, number>,
-            };
-            br.agents.push(ag);
-            }
-            ag.newCount  += r.clientCnt;
-            ag.loanCount += r.loanCnt;
-            ag.byStatus[r.status] =
-            (ag.byStatus[r.status] ?? 0) + r.clientCnt;
-        }
-
-        const totals = [...branchMap.values()].reduce(
-            (acc, b) => {
-            acc.newCount  += b.newCount;
-            acc.loanCount += b.loanCount;
-            return acc;
-            },
-            { newCount: 0, loanCount: 0 },
-        );
-
-        return {
-            meta: {
-            range: `${start.format('YYYY-MM-DD')} → ${end.format('YYYY-MM-DD')}`,
-            view : 'MANAGER',
-            generatedAt: new Date().toISOString(),
-            },
-            totals,
-            blocks: [...branchMap.values()]
-            .sort((a: any, b: any) => b.newCount - a.newCount)
-            .map((b: any) => ({
-                ...b,
-                agents: b.agents.sort((x: any, y: any) => y.newCount - x.newCount),
-            })),
-        };
-        }
+  /* 8 · Response ------------------------------------------------------- */
+  return {
+    meta: {
+      range: `${start.format('YYYY-MM-DD')} → ${end.format('YYYY-MM-DD')}`,
+      view : caller.role,
+      generatedAt: new Date().toISOString(),
+    },
+    totals,
+    records,
+  };
+}
 
     /* ---------------------------------------------------------------------------
     * CLIENTES ACTIVOS vs INACTIVOS

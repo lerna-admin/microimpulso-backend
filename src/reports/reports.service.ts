@@ -1186,32 +1186,33 @@ return {
         /* 3 · SQL base ------------------------------------------------------- */
         const baseSql = `
             FROM client c
-            INNER JOIN user agent  ON agent.id  = c.agentId
-            INNER JOIN branch      ON branch.id = agent.branchId
+            LEFT JOIN loan_request lr ON lr.clientId = c.id        -- ① ahora es LEFT
+            LEFT JOIN user   agent  ON agent.id  = c.agentId
+            LEFT JOIN branch        ON branch.id = agent.branchId
             WHERE DATE(c.createdAt) BETWEEN DATE(?) AND DATE(?)
         `;
-        
+                
         /* -------- ADMIN: agrupar por agente en su sucursal ----------------- */
         const adminSql = `
             SELECT
-            agent.id    AS agentId,
-            agent.name  AS agentName,
-            c.status    AS status,
-            COUNT(*)    AS cnt
+                agent.id    AS agentId,
+                agent.name  AS agentName,
+                c.status    AS status,
+                COUNT(DISTINCT c.id) AS cnt                     -- ③ clientes únicos
             ${baseSql}
             AND branch.id = ?
             GROUP BY agent.id, agent.name, c.status
         `;
-        
+                
         /* -------- MANAGER: agrupar por sucursal → agente ------------------- */
         const managerSql = `
             SELECT
-            branch.id   AS branchId,
-            branch.name AS branchName,
-            agent.id    AS agentId,
-            agent.name  AS agentName,
-            c.status    AS status,
-            COUNT(*)    AS cnt
+                branch.id   AS branchId,
+                branch.name AS branchName,
+                agent.id    AS agentId,
+                agent.name  AS agentName,
+                c.status    AS status,
+                COUNT(DISTINCT c.id) AS cnt
             ${baseSql}
             GROUP BY branch.id, branch.name, agent.id, agent.name, c.status
         `;

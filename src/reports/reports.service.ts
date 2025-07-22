@@ -1307,11 +1307,11 @@ return {
         
         /* ── 2 · Sub-consulta de clientes con al menos un préstamo funded ─── */
         const activeSub = `
-    SELECT DISTINCT lr.clientId
-    FROM loan_request lr
-    INNER JOIN user agent ON agent.id = lr.agentId
-    WHERE lr.status = 'funded' AND agent.branchId = ?
-`;   
+            SELECT DISTINCT lr.clientId
+            FROM loan_request lr
+            INNER JOIN user agent ON agent.id = lr.agentId
+            WHERE lr.status = 'funded' AND agent.branchId = ?
+        `;
         
         /* ── 3 · Consulta principal según rol ─────────────────────────────── */
         if (caller.role === 'ADMIN') {
@@ -1319,15 +1319,15 @@ return {
             const adminRows = await this.clientRepo.query(
                 `
                 SELECT
-                    IFNULL(agent.id, 0)                  AS agentId,
-                    IFNULL(agent.name, 'Sin asignar')    AS agentName,
-                    c.id                                 AS clientId,
-                    c.name                               AS clientName,
-                    CASE WHEN a.clientId IS NOT NULL THEN 1 ELSE 0 END AS isActive
-                FROM client c
-                LEFT JOIN user   agent  ON agent.id = c.agentId
-                LEFT JOIN branch        ON branch.id = agent.branchId AND branch.id = ?
-                LEFT JOIN (${activeSub}) a ON a.clientId = c.id
+                    lr.clientId                         AS clientId,
+                    c.name                              AS clientName,
+                    agent.id                            AS agentId,
+                    agent.name                          AS agentName,
+                    CASE WHEN lr.status = 'funded' THEN 1 ELSE 0 END AS isActive
+                FROM loan_request lr
+                INNER JOIN client c ON c.id = lr.clientId
+                INNER JOIN user agent ON agent.id = lr.agentId
+                WHERE agent.branchId = ?
                 `,
                 [caller.branchId],
             );

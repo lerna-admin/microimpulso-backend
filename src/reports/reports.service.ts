@@ -1156,162 +1156,246 @@ return {
         };
     }
     
-    /* ---------------------------------------------------------------------------
-    * NEW CLIENTS BY DATE RANGE
-    *   ADMIN   → un bloque por agente de SU sucursal
-    *   MANAGER → bloques por sucursal, cada uno con sus agentes
-    *   • Cuenta cuántos clientes fueron creados entre startDate y endDate
-    *   • Desglosa por status inicial (PROSPECT, ACTIVE, …)
-    * ------------------------------------------------------------------------ */
+   /**
+     * Returns a report of *new* clients created within a date window,
+     * plus the number of loan requests originated **on the very same calendar day**
+     * as each client.  
+     *
+     * Rules
+     * ─────
+     * • Clients are counted even if they have *no* loan_request.  
+     * • A loan_request is counted **only** when:
+     *     DATE(lr.createdAt) = DATE(c.createdAt)
+     *   (same day, same client).  
+     * • ADMIN ‒ restricted to caller’s branch.  
+     * • MANAGER ‒ all branches visible.  
+     *
+     * Response shape
+     * ──────────────
+     * {
+     *   meta   : { range, view, generatedAt },
+     *   totals : { newCount, loanCount },
+     *   blocks : [                         // branch → agents (MANAGER)
+     *     {                                 // or just agents (ADMIN)
+     *       branchId   ,
+     *       branchName ,
+     *       newCount   ,   // clients
+     *       loanCount  ,   // loans (same-day)
+     *       agents : [
+     *         {
+     *           agentId   ,
+     *           agentName ,
+     *           newCount  ,
+     *           loanCount ,
+     *           byStatus  : { PROSPECT: n, ... }
+     *         }
+     *       ]
+     *     }
+     *   ]
+     * }
+     */
     async getNewClients(
         userId: string,
         startDate?: string,
         endDate?: string,
     ) {
-        /* 1 · Llamador ------------------------------------------------------- */
+        /* ---------- 1 · Caller ------------------------------------------------ */
         const caller = await this.userRepo.findOne({ where: { id: +userId } });
         if (!caller) throw new NotFoundException('User not found');
         if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
             throw new ForbiddenException('Only ADMIN or MANAGER may call this');
         }
-        
-        /* 2 · Ventana temporal (default últimos 7 días) ---------------------- */
+
+        /* ---------- 2 · Date window (defaults to last 7 days) ----------------- */
         const end   = endDate
-        ? dayjs(endDate).endOf('day')
-        : dayjs().endOf('day');
+            ? dayjs(endDate).endOf('day')
+            : dayjs().endOf('day');
+
         const start = startDate
-        ? dayjs(startDate).startOf('day')
-        : end.subtract(7, 'day').startOf('day');
-        
-        /* 3 · SQL base ------------------------------------------------------- */
+            ? dayjs(startDate).startOf('day')
+            : end.clone().subtract(7, 'day').startOf('day');
+
+        /* ---------- 3 · Base SQL fragment ------------------------------------ */
         const baseSql = `
             FROM client c
-            LEFT JOIN loan_request lr ON lr.clientId = c.id        -- ① ahora es LEFT
-            LEFT JOIN user   agent  ON agent.id  = c.agentId
-            LEFT JOIN branch        ON branch.id = agent.branchId
+            LEFT JOIN loan_request lr ON lr.clientId = c.id
+            LEFT JOIN user    agent   ON agent.id   = c.agentId      -- may be NULL
+            LEFT JOIN branch          ON branch.id  = agent.branchId -- may be NULL
             WHERE DATE(c.createdAt) BETWEEN DATE(?) AND DATE(?)
         `;
-                
-        /* -------- ADMIN: agrupar por agente en su sucursal ----------------- */
+
+        /* ---------- ADMIN ---------------------------------------------------- */
         const adminSql = `
             SELECT
-                agent.id    AS agentId,
-                agent.name  AS agentName,
-                c.status    AS status,
-                COUNT(DISTINCT c.id) AS cnt                     -- ③ clientes únicos
+                agent.id                              AS agentId,
+                COALESCE(agent.name,'Unassigned')     AS agentName,
+                c.status                              AS status,
+                COUNT(DISTINCT c.id)                  AS clientCnt,
+                COUNT(DISTINCT CASE
+                    WHEN lr.id IS NOT NULL
+                    AND DATE(lr.createdAt) = DATE(c.createdAt)
+                    THEN lr.id END)                AS loanCnt
             ${baseSql}
-            AND branch.id = ?
-            GROUP BY agent.id, agent.name, c.status
+            AND (branch.id = ? OR branch.id IS NULL)
+            GROUP BY agent.id, agentName, c.status          -- ★ usa agent.id
         `;
-                
-        /* -------- MANAGER: agrupar por sucursal → agente ------------------- */
+
+        /* ---------- MANAGER -------------------------------------------------- */
         const managerSql = `
             SELECT
-                branch.id   AS branchId,
-                branch.name AS branchName,
-                agent.id    AS agentId,
-                agent.name  AS agentName,
-                c.status    AS status,
-                COUNT(DISTINCT c.id) AS cnt
+                branch.id                              AS branchId,
+                COALESCE(branch.name,'Unassigned')     AS branchName,
+                agent.id                               AS agentId,
+                COALESCE(agent.name,'Unassigned')      AS agentName,
+                c.status                               AS status,
+                COUNT(DISTINCT c.id)                   AS clientCnt,
+                COUNT(DISTINCT CASE
+                    WHEN lr.id IS NOT NULL
+                    AND DATE(lr.createdAt) = DATE(c.createdAt)
+                    THEN lr.id END)                 AS loanCnt
             ${baseSql}
-            GROUP BY branch.id, branch.name, agent.id, agent.name, c.status
+            GROUP BY branch.id, branchName, agent.id, agentName, c.status   -- ★ usa branch.id y agent.id
         `;
-        
-        /* 4 · Ejecutar consulta --------------------------------------------- */
-        const paramsAdmin   = [start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD'), caller.branchId];
-        const paramsManager = [start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD')];
-        
+
+        /* ---------- 4 · Parameter arrays ------------------------------------- */
+        const paramsAdmin   = [
+            start.format('YYYY-MM-DD'),
+            end  .format('YYYY-MM-DD'),
+            caller.branchId,
+        ];
+        const paramsManager = [
+            start.format('YYYY-MM-DD'),
+            end  .format('YYYY-MM-DD'),
+        ];
+
+        /* ---------- 5 · ADMIN view ------------------------------------------- */
         if (caller.role === 'ADMIN') {
-            const rows: { agentId: number; agentName: string; status: string; cnt: number }[] =
-            await this.clientRepo.query(adminSql, paramsAdmin);
-            
-            /* Bloques por agente */
-            const blocks = rows.reduce((acc, r) => {
-                let ag = acc.get(r.agentId);
-                if (!ag) {
-                    ag = {
-                        id: r.agentId,
-                        label: r.agentName,
-                        newCount: 0,
-                        byStatus: {} as Record<string, number>,
-                    };
-                    acc.set(r.agentId, ag);
-                }
-                ag.newCount += r.cnt;
-                ag.byStatus[r.status] = (ag.byStatus[r.status] ?? 0) + r.cnt;
-                return acc;
-            }, new Map<number, any>());
-            
-            const total = Array.from(blocks.values()).reduce((s, b) => s + b.newCount, 0);
-            
-            return {
-                meta: {
-                    range: `${start.format('YYYY-MM-DD')} → ${end.format('YYYY-MM-DD')}`,
-                    view: 'ADMIN',
-                    generatedAt: new Date().toISOString(),
-                },
-                totals: { newCount: total },
-                blocks: Array.from(blocks.values()).sort((a, b) => b.newCount - a.newCount),
+            type RowAdmin = {
+            agentId: number | null;
+            agentName: string;
+            status: string;
+            clientCnt: number;
+            loanCnt: number;
             };
-        }
-        
-        /* ------------- MANAGER --------------------------------------------- */
-        const rows: {
-            branchId: number; branchName: string;
-            agentId: number;  agentName: string;
-            status: string;   cnt: number;
-        }[] = await this.clientRepo.query(managerSql, paramsManager);
-        
-        /* Construir mapa branch → agents */
-        const branchMap = new Map<number, any>();
-        
-        for (const r of rows) {
-            /* rama sucursal */
-            let br = branchMap.get(r.branchId);
-            if (!br) {
-                br = {
-                    branchId: r.branchId,
-                    branchName: r.branchName,
-                    newCount: 0,
-                    agents: [] as any[],
-                };
-                branchMap.set(r.branchId, br);
-            }
-            br.newCount += r.cnt;
-            
-            /* sub-rama agente */
-            let ag = br.agents.find((a: any) => a.agentId === r.agentId);
+
+            const rows: RowAdmin[] = await this.clientRepo.query(adminSql, paramsAdmin);
+
+            const blocks = rows.reduce((m, r) => {
+            const key = r.agentId ?? -1;           // -1 for unassigned
+            let ag = m.get(key);
             if (!ag) {
                 ag = {
-                    agentId: r.agentId,
-                    agentName: r.agentName,
-                    newCount: 0,
-                    byStatus: {} as Record<string, number>,
+                id:         r.agentId,
+                label:      r.agentName,
+                newCount:   0,
+                loanCount:  0,
+                byStatus: {} as Record<string, number>,
                 };
-                br.agents.push(ag);
+                m.set(key, ag);
             }
-            ag.newCount += r.cnt;
-            ag.byStatus[r.status] = (ag.byStatus[r.status] ?? 0) + r.cnt;
-        }
-        
-        const total = Array.from(branchMap.values()).reduce((s, b) => s + b.newCount, 0);
-        
-        return {
+            ag.newCount  += r.clientCnt;
+            ag.loanCount += r.loanCnt;
+            ag.byStatus[r.status] =
+                (ag.byStatus[r.status] ?? 0) + r.clientCnt;
+            return m;
+            }, new Map<number, any>());
+
+            const totals = [...blocks.values()].reduce(
+            (acc, b) => {
+                acc.newCount  += b.newCount;
+                acc.loanCount += b.loanCount;
+                return acc;
+            },
+            { newCount: 0, loanCount: 0 },
+            );
+
+            return {
             meta: {
                 range: `${start.format('YYYY-MM-DD')} → ${end.format('YYYY-MM-DD')}`,
-                view: 'MANAGER',
+                view : 'ADMIN',
                 generatedAt: new Date().toISOString(),
             },
-            totals: { newCount: total },
-            blocks: Array.from(branchMap.values())
+            totals,
+            blocks: [...blocks.values()].sort((a, b) => b.newCount - a.newCount),
+            };
+        }
+
+        /* ---------- 6 · MANAGER view ----------------------------------------- */
+        type RowMgr = {
+            branchId  : number | null; branchName: string;
+            agentId   : number | null; agentName : string;
+            status    : string;
+            clientCnt : number;
+            loanCnt   : number;
+        };
+
+        const rows: RowMgr[] = await this.clientRepo.query(managerSql, paramsManager);
+
+        /* Build branch → agent structure */
+        const branchMap = new Map<number, any>();   // key -1 represents 'Unassigned'
+
+        for (const r of rows) {
+            const branchKey = r.branchId ?? -1;
+
+            /* -------- branch level -------- */
+            let br = branchMap.get(branchKey);
+            if (!br) {
+            br = {
+                branchId  : r.branchId,
+                branchName: r.branchName,
+                newCount  : 0,
+                loanCount : 0,
+                agents    : [] as any[],
+            };
+            branchMap.set(branchKey, br);
+            }
+            br.newCount  += r.clientCnt;
+            br.loanCount += r.loanCnt;
+
+            /* -------- agent level --------- */
+            const agentKey = r.agentId ?? -1;
+            let ag = br.agents.find((a: any) => (a.agentId ?? -1) === agentKey);
+            if (!ag) {
+            ag = {
+                agentId  : r.agentId,
+                agentName: r.agentName,
+                newCount : 0,
+                loanCount: 0,
+                byStatus : {} as Record<string, number>,
+            };
+            br.agents.push(ag);
+            }
+            ag.newCount  += r.clientCnt;
+            ag.loanCount += r.loanCnt;
+            ag.byStatus[r.status] =
+            (ag.byStatus[r.status] ?? 0) + r.clientCnt;
+        }
+
+        const totals = [...branchMap.values()].reduce(
+            (acc, b) => {
+            acc.newCount  += b.newCount;
+            acc.loanCount += b.loanCount;
+            return acc;
+            },
+            { newCount: 0, loanCount: 0 },
+        );
+
+        return {
+            meta: {
+            range: `${start.format('YYYY-MM-DD')} → ${end.format('YYYY-MM-DD')}`,
+            view : 'MANAGER',
+            generatedAt: new Date().toISOString(),
+            },
+            totals,
+            blocks: [...branchMap.values()]
             .sort((a: any, b: any) => b.newCount - a.newCount)
             .map((b: any) => ({
                 ...b,
                 agents: b.agents.sort((x: any, y: any) => y.newCount - x.newCount),
             })),
         };
-    }
-    
+        }
+
     /* ---------------------------------------------------------------------------
     * CLIENTES ACTIVOS vs INACTIVOS
     *   ADMIN   → bloque por agente (solo su sucursal)

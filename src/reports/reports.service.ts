@@ -1157,139 +1157,139 @@ return {
     }
     
    /**
- * getNewClients
- * -------------
- * Returns every client created in [start, end] with its agent / branch
- * and, if created on the same calendar day, the matching loan_request.
- *
- * • loan_request joined with AND DATE(lr.createdAt) = DATE(c.createdAt)
- *   so only same-day loans are returned.
- * • ADMIN   → restricted to caller.branchId (if branch present).
- * • MANAGER → all branches.
- */
-async getNewClients(userId: string, startDate?: string, endDate?: string) {
-  /* 1 · Caller --------------------------------------------------------- */
-  const caller = await this.userRepo.findOne({ where: { id: +userId } });
-  if (!caller) throw new NotFoundException('User not found');
-  if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
-    throw new ForbiddenException('Only ADMIN or MANAGER may call this');
-  }
+     * getNewClients
+     * -------------
+     * Returns every client created in [start, end] with its agent / branch
+     * and, if created on the same calendar day, the matching loan_request.
+     *
+     * • loan_request joined with AND DATE(lr.createdAt) = DATE(c.createdAt)
+     *   so only same-day loans are returned.
+     * • ADMIN   → restricted to caller.branchId (if branch present).
+     * • MANAGER → all branches.
+     */
+    async getNewClients(userId: string, startDate?: string, endDate?: string) {
+    /* 1 · Caller --------------------------------------------------------- */
+    const caller = await this.userRepo.findOne({ where: { id: +userId } });
+    if (!caller) throw new NotFoundException('User not found');
+    if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
+        throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+    }
 
-  /* 2 · Date window ---------------------------------------------------- */
-  const end   = endDate
-    ? dayjs(endDate).endOf('day')
-    : dayjs().endOf('day');
+    /* 2 · Date window ---------------------------------------------------- */
+    const end   = endDate
+        ? dayjs(endDate).endOf('day')
+        : dayjs().endOf('day');
 
-  const start = startDate
-    ? dayjs(startDate).startOf('day')
-    : end.clone().subtract(7, 'day').startOf('day');
+    const start = startDate
+        ? dayjs(startDate).startOf('day')
+        : end.clone().subtract(7, 'day').startOf('day');
 
-  /* 3 · Base SQL ------------------------------------------------------- */
-  const baseSql = `
-      FROM client c
-      /* pick ONE same-day loan via a correlated sub-query (first row) */
-      LEFT JOIN loan_request lr
-             ON lr.id = (
-                   SELECT lr2.id
-                   FROM loan_request lr2
-                   WHERE lr2.clientId = c.id
-                     AND DATE(lr2.createdAt) = DATE(c.createdAt)
-                   ORDER BY lr2.id
-                   LIMIT 1
-                 )
-      LEFT JOIN user    agent   ON agent.id  = lr.agentId
-      LEFT JOIN branch          ON branch.id = agent.branchId
-      WHERE DATE(c.createdAt) BETWEEN DATE(?) AND DATE(?)
-  `;
+    /* 3 · Base SQL ------------------------------------------------------- */
+    const baseSql = `
+        FROM client c
+        /* pick ONE same-day loan via a correlated sub-query (first row) */
+        LEFT JOIN loan_request lr
+                ON lr.id = (
+                    SELECT lr2.id
+                    FROM loan_request lr2
+                    WHERE lr2.clientId = c.id
+                        AND DATE(lr2.createdAt) = DATE(c.createdAt)
+                    ORDER BY lr2.id
+                    LIMIT 1
+                    )
+        LEFT JOIN user    agent   ON agent.id  = lr.agentId
+        LEFT JOIN branch          ON branch.id = agent.branchId
+        WHERE DATE(c.createdAt) BETWEEN DATE(?) AND DATE(?)
+    `;
 
-  /* 3.1 · SELECT list -------------------------------------------------- */
-  const selectCols = `
-      c.id        AS clientId,
-      c.name      AS clientName,
-      c.status    AS clientStatus,
-      c.createdAt AS clientCreatedAt,
-      c.phone     AS clientPhone,
-      c.email     AS clientEmail,
+    /* 3.1 · SELECT list -------------------------------------------------- */
+    const selectCols = `
+        c.id        AS clientId,
+        c.name      AS clientName,
+        c.status    AS clientStatus,
+        c.createdAt AS clientCreatedAt,
+        c.phone     AS clientPhone,
+        c.email     AS clientEmail,
 
-      lr.id       AS loanId,
-      lr.amount   AS loanAmount,
-      lr.status   AS loanStatus,
-      lr.createdAt AS loanCreatedAt,
+        lr.id       AS loanId,
+        lr.amount   AS loanAmount,
+        lr.status   AS loanStatus,
+        lr.createdAt AS loanCreatedAt,
 
-      agent.id    AS agentId,
-      agent.name  AS agentName,
+        agent.id    AS agentId,
+        agent.name  AS agentName,
 
-      branch.id   AS branchId,
-      branch.name AS branchName
-  `;
+        branch.id   AS branchId,
+        branch.name AS branchName
+    `;
 
-  /* 3.2 · Queries ------------------------------------------------------ */
-  const adminSql = `
-      SELECT ${selectCols}
-      ${baseSql}
-        AND (branch.id = ? OR branch.id IS NULL) /* ADMIN filter */
-      ORDER BY c.createdAt DESC
-  `;
-  const managerSql = `
-      SELECT ${selectCols}
-      ${baseSql}
-      ORDER BY c.createdAt DESC
-  `;
+    /* 3.2 · Queries ------------------------------------------------------ */
+    const adminSql = `
+        SELECT ${selectCols}
+        ${baseSql}
+            AND (branch.id = ? OR branch.id IS NULL) /* ADMIN filter */
+        ORDER BY c.createdAt DESC
+    `;
+    const managerSql = `
+        SELECT ${selectCols}
+        ${baseSql}
+        ORDER BY c.createdAt DESC
+    `;
 
-  /* 4 · Params --------------------------------------------------------- */
-  const paramsAdmin   = [ start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD'), caller.branchId ];
-  const paramsManager = [ start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD') ];
+    /* 4 · Params --------------------------------------------------------- */
+    const paramsAdmin   = [ start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD'), caller.branchId ];
+    const paramsManager = [ start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD') ];
 
-  /* 5 · Run query ------------------------------------------------------ */
-  const rows: any[] = await this.clientRepo.query(
-    caller.role === 'ADMIN' ? adminSql : managerSql,
-    caller.role === 'ADMIN' ? paramsAdmin : paramsManager,
-  );
+    /* 5 · Run query ------------------------------------------------------ */
+    const rows: any[] = await this.clientRepo.query(
+        caller.role === 'ADMIN' ? adminSql : managerSql,
+        caller.role === 'ADMIN' ? paramsAdmin : paramsManager,
+    );
 
-  /* 6 · Transform rows ------------------------------------------------- */
-  const records = rows.map(r => ({
-    client: {
-      id        : r.clientId,
-      name      : r.clientName,
-      status    : r.clientStatus,
-      createdAt : r.clientCreatedAt,
-      phone     : r.clientPhone,
-      email     : r.clientEmail,
-    },
-    loan: r.loanId ? {
-      id        : r.loanId,
-      amount    : r.loanAmount,
-      status    : r.loanStatus,
-      createdAt : r.loanCreatedAt,
-      agent : r.agentId ? {
-        id   : r.agentId,
-        name : r.agentName,
-        branch: r.branchId ? { id: r.branchId, name: r.branchName } : undefined,
-      } : null,
-    } : null,
-  }));
+    /* 6 · Transform rows ------------------------------------------------- */
+    const records = rows.map(r => ({
+        client: {
+        id        : r.clientId,
+        name      : r.clientName,
+        status    : r.clientStatus,
+        createdAt : r.clientCreatedAt,
+        phone     : r.clientPhone,
+        email     : r.clientEmail,
+        },
+        loan: r.loanId ? {
+        id        : r.loanId,
+        amount    : r.loanAmount,
+        status    : r.loanStatus,
+        createdAt : r.loanCreatedAt,
+        agent : r.agentId ? {
+            id   : r.agentId,
+            name : r.agentName,
+            branch: r.branchId ? { id: r.branchId, name: r.branchName } : undefined,
+        } : null,
+        } : null,
+    }));
 
-  /* 7 · Totals --------------------------------------------------------- */
-  const totals = records.reduce(
-    (acc, rec) => {
-      acc.newCount  += 1;
-      acc.loanCount += rec.loan ? 1 : 0;
-      return acc;
-    },
-    { newCount: 0, loanCount: 0 },
-  );
+    /* 7 · Totals --------------------------------------------------------- */
+    const totals = records.reduce(
+        (acc, rec) => {
+        acc.newCount  += 1;
+        acc.loanCount += rec.loan ? 1 : 0;
+        return acc;
+        },
+        { newCount: 0, loanCount: 0 },
+    );
 
-  /* 8 · Response ------------------------------------------------------- */
-  return {
-    meta: {
-      range: `${start.format('YYYY-MM-DD')} → ${end.format('YYYY-MM-DD')}`,
-      view : caller.role,
-      generatedAt: new Date().toISOString(),
-    },
-    totals,
-    records,
-  };
-}
+    /* 8 · Response ------------------------------------------------------- */
+    return {
+        meta: {
+        range: `${start.format('YYYY-MM-DD')} → ${end.format('YYYY-MM-DD')}`,
+        view : caller.role,
+        generatedAt: new Date().toISOString(),
+        },
+        totals,
+        records,
+    };
+    }
 
     /* ---------------------------------------------------------------------------
     * CLIENTES ACTIVOS vs INACTIVOS
@@ -1307,10 +1307,11 @@ async getNewClients(userId: string, startDate?: string, endDate?: string) {
         
         /* ── 2 · Sub-consulta de clientes con al menos un préstamo funded ─── */
         const activeSub = `
-            SELECT DISTINCT lr.clientId
-            FROM loan_request lr
-            WHERE lr.status = 'funded'
-        `;                                  /* SQLite-friendly */
+    SELECT DISTINCT lr.clientId
+    FROM loan_request lr
+    INNER JOIN user agent ON agent.id = lr.agentId
+    WHERE lr.status = 'funded' AND agent.branchId = ?
+`;   
         
         /* ── 3 · Consulta principal según rol ─────────────────────────────── */
         if (caller.role === 'ADMIN') {

@@ -1317,18 +1317,17 @@ async getNewClients(userId: string, startDate?: string, endDate?: string) {
             /* --- ADMIN: agrupar por agente en SU sucursal -------------------- */
             const adminRows = await this.clientRepo.query(
                 `
-            SELECT
-                IFNULL(agent.id, 0)                  AS agentId,
-                IFNULL(agent.name, 'Sin asignar')    AS agentName,
-                c.id                                 AS clientId,
-                c.name                               AS clientName,
-                CASE WHEN a.clientId IS NOT NULL THEN 1 ELSE 0 END AS isActive
-            FROM client c
-                LEFT JOIN user   agent  ON agent.id  = c.agentId
-                LEFT JOIN branch        ON branch.id = agent.branchId
+                SELECT
+                    IFNULL(agent.id, 0)                  AS agentId,
+                    IFNULL(agent.name, 'Sin asignar')    AS agentName,
+                    c.id                                 AS clientId,
+                    c.name                               AS clientName,
+                    CASE WHEN a.clientId IS NOT NULL THEN 1 ELSE 0 END AS isActive
+                FROM client c
+                LEFT JOIN user   agent  ON agent.id = c.agentId
+                LEFT JOIN branch        ON branch.id = agent.branchId AND branch.id = ?
                 LEFT JOIN (${activeSub}) a ON a.clientId = c.id
-            WHERE branch.id = ?
-            `,
+                `,
                 [caller.branchId],
             );
             

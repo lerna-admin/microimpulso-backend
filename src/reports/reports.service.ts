@@ -1813,7 +1813,7 @@ return {
         userId: string,
         startDate?: string,
         endDate?: string,
-        docType?: DocumentType,
+        docType?: string,
         clientId?: number
     ) {
     // 1 · Validar usuario y rol

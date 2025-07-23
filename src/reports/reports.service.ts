@@ -1810,107 +1810,112 @@ return {
     *   • Muestra conteo, desglose por tipo y lista de documentos
     * ------------------------------------------------------------------ */
     async getDocumentsByClient(
-        userId:     string,
-        startDate?: string,
-        endDate?:   string,
-        docType?:   string,
+    userId: string,
+    startDate?: string,
+    endDate?: string,
+    docType?: string
     ) {
-        // 1 · Validar caller y rol
-        const caller = await this.userRepo.findOne({ where: { id: +userId } });
-        if (!caller) throw new NotFoundException('User not found');
-        if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
+    // 1 · Validar usuario y rol
+    const caller = await this.userRepo.findOne({ where: { id: +userId } });
+    if (!caller) throw new NotFoundException('User not found');
+    if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
         throw new ForbiddenException('Only ADMIN or MANAGER may call this');
-        }
+    }
 
-        // 2 · Rango de fechas (por defecto todo historial)
-        const start = startDate
+    // 2 · Rango de fechas
+    const start = startDate
         ? dayjs(startDate).startOf('day')
         : dayjs('1970-01-01').startOf('day');
-        const end   = endDate
+    const end = endDate
         ? dayjs(endDate).endOf('day')
         : dayjs().endOf('day');
 
-        // 3 · Query builder para filtrar documentos
-        const qb = this.docRepo.createQueryBuilder('d')
+    // 3 · Query builder
+    const qb = this.docRepo.createQueryBuilder('d')
         .innerJoin('d.client', 'c')
-        .innerJoin('c.agent', 'agent')
-        .innerJoin('agent.branch', 'branch')
+        .leftJoin('c.agent', 'agent')
+        .leftJoin('agent.branch', 'branch')
         .where('d.createdAt BETWEEN :start AND :end', {
-            start: start.format('YYYY-MM-DD'),
-            end:   end.format('YYYY-MM-DD'),
+        start: start.toISOString(),
+        end: end.toISOString(),
         });
 
-        if (docType) {
+    if (docType) {
         qb.andWhere('d.type = :docType', { docType });
-        }
-        if (caller.role === 'ADMIN') {
-        qb.andWhere('agent.branchId = :branchId', { branchId: caller.branchId });
-        }
+    }
 
-        qb.select([
+    if (caller.role === 'ADMIN') {
+        // Solo filtra si agent existe y pertenece a su sucursal
+        qb.andWhere('(agent.branchId = :branchId)', { branchId: caller.branchId });
+    }
+
+    qb.select([
         'c.id        AS clientId',
         'c.name      AS clientName',
         'd.id        AS docId',
         'd.type      AS type',
         'd.createdAt AS uploadedAt',
-        ]);
+    ]);
 
-        const rows: {
-        clientId:   number;
+    const rows: {
+        clientId: number;
         clientName: string;
-        docId:      number;
-        type:       string;
+        docId: number;
+        type: string;
         uploadedAt: Date;
-        }[] = await qb.getRawMany();
+    }[] = await qb.getRawMany();
 
-        // 4 · Agrupar por cliente
-        const map = new Map<number, {
-        clientId:   number;
+    // 4 · Agrupar por cliente
+    const map = new Map<number, {
+        clientId: number;
         clientName: string;
-        totalDocs:  number;
-        byType:     Record<string, number>;
-        documents:  { docId: number; type: string; uploadedAt: Date }[];
-        }>();
+        totalDocs: number;
+        byType: Record<string, number>;
+        documents: { docId: number; type: string; uploadedAt: Date }[];
+    }>();
 
-        for (const r of rows) {
+    for (const r of rows) {
         let blk = map.get(r.clientId);
         if (!blk) {
-            blk = {
-            clientId:   r.clientId,
+        blk = {
+            clientId: r.clientId,
             clientName: r.clientName,
-            totalDocs:  0,
-            byType:     {},
-            documents:  [],
-            };
-            map.set(r.clientId, blk);
-        }
-        blk.totalDocs += 1;
-        blk.byType[r.type] = (blk.byType[r.type] ?? 0) + 1;
-        blk.documents.push({
-            docId:      r.docId,
-            type:       r.type,
-            uploadedAt: r.uploadedAt,
-        });
+            totalDocs: 0,
+            byType: {},
+            documents: [],
+        };
+        map.set(r.clientId, blk);
         }
 
-        // 5 · Totales globales
-        const totalDocuments = Array.from(map.values())
+        blk.totalDocs += 1;
+        blk.byType[r.type ?? 'UNKNOWN'] = (blk.byType[r.type ?? 'UNKNOWN'] ?? 0) + 1;
+        blk.documents.push({
+        docId: r.docId,
+        type: r.type,
+        uploadedAt: r.uploadedAt,
+        });
+    }
+
+    // 5 · Totales
+    const totalDocuments = Array.from(map.values())
         .reduce((sum, b) => sum + b.totalDocs, 0);
 
-        // 6 · Payload
-        return {
+    // 6 · Payload
+    return {
         meta: {
-            startDate:   start.format('YYYY-MM-DD'),
-            endDate:     end.format('YYYY-MM-DD'),
-            docType:     docType ?? 'all',
-            view:        caller.role,
-            generatedAt: new Date().toISOString(),
+        startDate: start.format('YYYY-MM-DD'),
+        endDate: end.format('YYYY-MM-DD'),
+        docType: docType ?? 'all',
+        view: caller.role,
+        generatedAt: new Date().toISOString(),
         },
         totals: { totalDocuments },
         blocks: Array.from(map.values())
-            .sort((a, b) => b.totalDocs - a.totalDocs),
-        };
+        .sort((a, b) => b.totalDocs - a.totalDocs),
+    };
     }
+
+
     /* ---------------------------------------------------------------------------
     * AGENT ACTIVITY REPORT
     *   • loanRequestsCount   → total solicitudes creadas

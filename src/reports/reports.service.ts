@@ -1810,10 +1810,11 @@ return {
     *   • Muestra conteo, desglose por tipo y lista de documentos
     * ------------------------------------------------------------------ */
     async getDocumentsByClient(
-    userId: string,
-    startDate?: string,
-    endDate?: string,
-    docType?: string
+        userId: string,
+        startDate?: string,
+        endDate?: string,
+        docType?: DocumentType,
+        clientId?: number
     ) {
     // 1 · Validar usuario y rol
     const caller = await this.userRepo.findOne({ where: { id: +userId } });
@@ -1833,8 +1834,6 @@ return {
     // 3 · Query builder
     const qb = this.docRepo.createQueryBuilder('d')
         .innerJoin('d.client', 'c')
-        .leftJoin('c.agent', 'agent')
-        .leftJoin('agent.branch', 'branch')
         .where('d.createdAt BETWEEN :start AND :end', {
         start: start.toISOString(),
         end: end.toISOString(),
@@ -1844,9 +1843,8 @@ return {
         qb.andWhere('d.type = :docType', { docType });
     }
 
-    if (caller.role === 'ADMIN') {
-        // Solo filtra si agent existe y pertenece a su sucursal
-        qb.andWhere('(agent.branchId = :branchId)', { branchId: caller.branchId });
+    if (clientId) {
+        qb.andWhere('c.id = :clientId', { clientId });
     }
 
     qb.select([
@@ -1887,16 +1885,17 @@ return {
         map.set(r.clientId, blk);
         }
 
+        const typeKey = r.type ?? 'UNKNOWN';
         blk.totalDocs += 1;
-        blk.byType[r.type ?? 'UNKNOWN'] = (blk.byType[r.type ?? 'UNKNOWN'] ?? 0) + 1;
+        blk.byType[typeKey] = (blk.byType[typeKey] ?? 0) + 1;
         blk.documents.push({
         docId: r.docId,
-        type: r.type,
+        type: typeKey,
         uploadedAt: r.uploadedAt,
         });
     }
 
-    // 5 · Totales
+    // 5 · Totales globales
     const totalDocuments = Array.from(map.values())
         .reduce((sum, b) => sum + b.totalDocs, 0);
 
@@ -1906,14 +1905,15 @@ return {
         startDate: start.format('YYYY-MM-DD'),
         endDate: end.format('YYYY-MM-DD'),
         docType: docType ?? 'all',
+        clientId: clientId ?? null,
         view: caller.role,
         generatedAt: new Date().toISOString(),
         },
         totals: { totalDocuments },
-        blocks: Array.from(map.values())
-        .sort((a, b) => b.totalDocs - a.totalDocs),
+        blocks: Array.from(map.values()).sort((a, b) => b.totalDocs - a.totalDocs),
     };
     }
+
 
 
     /* ---------------------------------------------------------------------------

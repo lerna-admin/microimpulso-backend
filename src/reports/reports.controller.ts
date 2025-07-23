@@ -1,5 +1,7 @@
 import { Controller, Get, Query, BadRequestException } from '@nestjs/common';
 import { ReportsService } from './reports.service';
+import { DocumentType } from 'src/entities/document.entity';
+
 
 @Controller('reports')
 export class ReportsController {
@@ -208,21 +210,39 @@ export class ReportsController {
     *     endDate   (YYYY-MM-DD, opcional; default hoy)
     *     docType   (string, opcional; filtra por tipo de documento)
     * ---------------------------------------------------------------- */
+
     @Get('documents-by-client')
     async documentsByClient(
-        @Query('userId') userId: string,
-        @Query('startDate') startDate?: string,
-        @Query('endDate')   endDate?: string,
-        @Query('docType')   docType?: string,
+    @Query('userId') userId: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('docType') docType?: string,
+    @Query('clientId') clientId?: string,
     ) {
-        if (!userId) throw new BadRequestException('userId is required');
-        return this.reports.getDocumentsByClient(
-            userId,
-            startDate,
-            endDate,
-            docType,
-        );
+    if (!userId) throw new BadRequestException('userId is required');
+
+    const allowedDocTypes = [
+        'ID',
+        'WORK_LETTER',
+        'UTILITY_BILL',
+        'PAYMENT_DETAIL',
+        'OTHER',
+    ];
+
+    if (docType && !allowedDocTypes.includes(docType)) {
+        throw new BadRequestException(`Invalid document type: ${docType}`);
     }
+
+    return this.reports.getDocumentsByClient(
+        userId,
+        startDate,
+        endDate,
+        docType, // passed as validated string
+        clientId ? Number(clientId) : undefined
+    );
+    }
+
+
 
 
     /* ------------------------------------------------------------------

@@ -1683,6 +1683,7 @@ return {
         userId: string,
         startDate?: string,
         endDate?: string,
+        filters?: { agentId?: number; branchId?: number }
     ) {
         /* 1 · Validar usuario y rol ------------------------------------------- */
         const caller = await this.userRepo.findOne({ where: { id: +userId } });
@@ -1699,25 +1700,44 @@ return {
             ? dayjs(startDate).startOf('day')
             : dayjs('1970-01-01').startOf('day');
 
-        /* 3 · Consulta SQL: sumar t.amount para repayment -------------------- */
+        /* 3 · Construir cláusulas dinámicas para filtros ---------------------- */
+        const conditions: string[] = [
+            `t.Transactiontype = 'repayment'`,
+            `DATE(t.date) BETWEEN DATE(?) AND DATE(?)`,
+        ];
+        const params: (string | number)[] = [
+            start.format('YYYY-MM-DD'),
+            end.format('YYYY-MM-DD'),
+        ];
+
+        if (filters?.branchId) {
+            conditions.push(`agent.branchId = ?`);
+            params.push(filters.branchId);
+        }
+        if (filters?.agentId) {
+            conditions.push(`agent.id = ?`);
+            params.push(filters.agentId);
+        }
+
+        const whereClause = conditions.join(' AND ');
+
+        /* 4 · Consulta SQL con filtros aplicados ------------------------------- */
         const sql = `
             SELECT
             branch.id      AS branchId,
             branch.name    AS branchName,
             agent.id       AS agentId,
             agent.name     AS agentName,
-            IFNULL(SUM(t.amount),0) AS totalCollected
+            IFNULL(SUM(t.amount), 0) AS totalCollected
             FROM loan_transaction t
             INNER JOIN loan_request lr ON lr.id = t.loanRequestId
-            INNER JOIN user   agent  ON agent.id  = lr.agentId
-            INNER JOIN branch        ON branch.id = agent.branchId
-            WHERE t.Transactiontype = 'repayment'
-            AND DATE(t.date) BETWEEN DATE(?) AND DATE(?)
+            INNER JOIN user agent      ON agent.id = lr.agentId
+            INNER JOIN branch          ON branch.id = agent.branchId
+            WHERE ${whereClause}
             GROUP BY branch.id, branch.name, agent.id, agent.name
             ORDER BY branch.id, totalCollected DESC
         `;
 
-        const params = [ start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD') ];
         const rows: {
             branchId: number;
             branchName: string;
@@ -1726,7 +1746,7 @@ return {
             totalCollected: string;
         }[] = await this.txRepo.query(sql, params);
 
-        /* 4 · Construir estructura por sucursal → agentes ------------------- */
+        /* 5 · Construir estructura por sucursal → agentes ------------------- */
         const branchMap = new Map<number, {
             branchId: number;
             branchName: string;
@@ -1738,45 +1758,50 @@ return {
             let br = branchMap.get(r.branchId);
             if (!br) {
             br = {
-                branchId:       r.branchId,
-                branchName:     r.branchName,
+                branchId: r.branchId,
+                branchName: r.branchName,
                 totalCollected: 0,
-                agents:         [],
+                agents: [],
             };
             branchMap.set(r.branchId, br);
             }
             const amt = Number(r.totalCollected);
             br.totalCollected += amt;
             br.agents.push({
-            agentId:        r.agentId,
-            agentName:      r.agentName,
+            agentId: r.agentId,
+            agentName: r.agentName,
             totalCollected: amt,
             });
         }
 
-        /* 5 · Totales generales --------------------------------------------- */
+        /* 6 · Totales generales --------------------------------------------- */
         const grandTotal = Array.from(branchMap.values())
             .reduce((sum, b) => sum + b.totalCollected, 0);
 
-        /* 6 · Payload -------------------------------------------------------- */
+        /* 7 · Payload -------------------------------------------------------- */
         return {
             meta: {
-            startDate:    start.format('YYYY-MM-DD'),
-            endDate:      end.format('YYYY-MM-DD'),
-            view:         caller.role,         // should be 'MANAGER'
-            generatedAt:  new Date().toISOString(),
+            startDate: start.format('YYYY-MM-DD'),
+            endDate: end.format('YYYY-MM-DD'),
+            view: caller.role,
+            generatedAt: new Date().toISOString(),
+            filters: {
+                agentId: filters?.agentId ?? null,
+                branchId: filters?.branchId ?? null,
+            },
             },
             totals: {
             totalCollected: grandTotal,
             },
             blocks: Array.from(branchMap.values()).map(b => ({
-            branchId:        b.branchId,
-            branchName:      b.branchName,
-            totalCollected:  b.totalCollected,
+            branchId: b.branchId,
+            branchName: b.branchName,
+            totalCollected: b.totalCollected,
             agents: b.agents.sort((a, c) => c.totalCollected - a.totalCollected),
             })),
         };
     }
+
 
     /* ---------------------------------------------------------------------
     * DOCUMENTOS SUBIDOS POR CLIENTE

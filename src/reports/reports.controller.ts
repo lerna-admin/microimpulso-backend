@@ -186,10 +186,18 @@ export class ReportsController {
         @Query('userId') userId: string,
         @Query('startDate') startDate?: string,
         @Query('endDate') endDate?: string,
+        @Query('agentId') agentId?: string,
+        @Query('branchId') branchId?: string,
     ) {
         if (!userId) throw new BadRequestException('userId is required');
-        return this.reports.getTotalCollected(userId, startDate, endDate);
+
+        const filters: { agentId?: number; branchId?: number } = {};
+        if (agentId)  filters.agentId  = +agentId;
+        if (branchId) filters.branchId = +branchId;
+
+        return this.reports.getTotalCollected(userId, startDate, endDate, filters);
     }
+
 
     /* ------------------------------------------------------------------
     * Documentos Subidos por Cliente

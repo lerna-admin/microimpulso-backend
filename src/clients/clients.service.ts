@@ -44,10 +44,9 @@ async findAll(
     name?: string;
     mode?: string;
     type?: string;
-    paymentDay?: string; 
-    agent?: number,
-    branch?: number
-
+    paymentDay?: string;
+    agent?: number;
+    branch?: number;
   }
 ): Promise<any> {
   const loans = await this.loanRequestRepository.find({
@@ -57,7 +56,6 @@ async findAll(
 
   if (filters?.agent) filters.agent = Number(filters.agent);
   if (filters?.branch) filters.branch = Number(filters.branch);
-
 
   const clientMap = new Map<number, any[]>();
   for (const loan of loans) {
@@ -79,19 +77,11 @@ async findAll(
   for (const [, clientLoans] of clientMap) {
     const client = clientLoans[0].client;
 
-    const hasFunded    = clientLoans.some(l => l.status === 'funded');
-    const allCompleted = clientLoans.every(l => l.status === 'completed');
-    const hasRejected  = clientLoans.some(l => l.status === 'rejected');
-    
-
+    const hasFunded = clientLoans.some(l => l.status === 'funded');
     const status: 'active' | 'inactive' = hasFunded ? 'active' : 'inactive';
 
-    const sel = clientLoans.find(l =>
-      status === 'active'   ? l.status === 'funded'    :
-      status === 'inactive' ? l.status === 'completed' :
-      status === 'rejected' ? l.status === 'rejected'  :
-      false
-    )!;
+    const sel =
+      clientLoans.find(l => l.status === 'funded') ?? clientLoans[0];
 
     const totalRepayment = sel.transactions
       .filter(t => t.Transactiontype === 'repayment')
@@ -104,19 +94,20 @@ async findAll(
     const remainingAmount = amountBorrowed - totalRepayment;
 
     const endDate = sel.endDateAt ? new Date(sel.endDateAt) : null;
-    const daysLate = endDate && now > endDate
-      ? Math.floor((now.getTime() - endDate.getTime()) / 86_400_000)
-      : 0;
+    const daysLate =
+      endDate && now > endDate
+        ? Math.floor((now.getTime() - endDate.getTime()) / 86_400_000)
+        : 0;
 
     if (status === 'active' && daysLate > 0) {
-      if      (daysLate >= 30) noPayment30++;
-      else if (daysLate > 20)  critical20++;
-      else if (daysLate > 15)  mora15++;
+      if (daysLate >= 30) noPayment30++;
+      else if (daysLate > 20) critical20++;
+      else if (daysLate > 15) mora15++;
     }
 
     if (status === 'active') {
       totalActiveAmountBorrowed += amountBorrowed;
-      totalActiveRepayment      += totalRepayment;
+      totalActiveRepayment += totalRepayment;
       activeClientsCount++;
     }
 
@@ -127,19 +118,15 @@ async findAll(
     }
     if (filters?.document && !client.document?.includes(filters.document)) continue;
     if (filters?.name && !client.name.toLowerCase().includes(filters.name.toLowerCase())) continue;
-    if (filters?.mode       && sel.mode       !== filters.mode)       continue;
-    if (filters?.type       && sel.type       !== filters.type)       continue;
+    if (filters?.mode && sel.mode !== filters.mode) continue;
+    if (filters?.type && sel.type !== filters.type) continue;
     if (filters?.paymentDay && sel.paymentDay !== filters.paymentDay) continue;
-    if (filters?.agent       && sel.agent.id       !== filters.agent)       continue;
-    if (filters?.branch       && sel.agent.branchId       !== filters.branch)       continue;
+    if (filters?.agent && sel.agent?.id !== filters.agent) continue;
+    if (filters?.branch && sel.agent?.branchId !== filters.branch) continue;
 
-
-
-    console.log("afgter filters")
-    console.log(sel.agent)
     allResults.push({
       client,
-      agent :  sel ? { id : sel.agent.id, name : sel.agent.name} : null,
+      agent: sel.agent ? { id: sel.agent.id, name: sel.agent.name } : null,
       loanRequest: {
         id: sel.id,
         status: sel.status,
@@ -164,7 +151,7 @@ async findAll(
 
   const totalItems = allResults.length;
   const startIndex = (page - 1) * limit;
-  const data       = allResults.slice(startIndex, startIndex + limit);
+  const data = allResults.slice(startIndex, startIndex + limit);
 
   return {
     page,
@@ -180,6 +167,7 @@ async findAll(
     data,
   };
 }
+
 
     
     

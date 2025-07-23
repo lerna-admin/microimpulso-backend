@@ -120,11 +120,19 @@ export class ReportsController {
     * ---------------------------------------------------------------- */
     @Get('clients-active-inactive')
     async clientsActiveInactive(
-    @Query('userId') userId: string,
+        @Query('userId') userId: string,
+        @Query('branchId') branchId?: string,
+        @Query('agentId') agentId?: string,
     ) {
         if (!userId) throw new BadRequestException('userId is required');
-        return this.reports.getClientsActiveInactive(userId);
+
+        return this.reports.getClientsActiveInactive(
+            userId,
+            branchId ? +branchId : undefined,
+            agentId ? +agentId : undefined,
+        );
     }
+
 
     /* ------------------------------------------------------------------
     * Ranking de Agentes

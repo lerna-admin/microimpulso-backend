@@ -1297,25 +1297,26 @@ return {
     *   MANAGER → bloques por sucursal, cada uno con sus agentes
     * ------------------------------------------------------------------------ */
     
-    async getClientsActiveInactive(userId: string) {
-        /* ── 1 · Validar usuario que llama ────────────────────────────────── */
+    async getClientsActiveInactive(userId: string, branchId?: number, agentId?: number) {
         const caller = await this.userRepo.findOne({ where: { id: +userId } });
         if (!caller) throw new NotFoundException('User not found');
         if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
             throw new ForbiddenException('Only ADMIN or MANAGER may call this');
         }
-        
-        /* ── 2 · Sub-consulta de clientes con al menos un préstamo funded ─── */
+
         const activeSub = `
             SELECT DISTINCT lr.clientId
             FROM loan_request lr
             INNER JOIN user agent ON agent.id = lr.agentId
-            WHERE lr.status = 'funded' AND agent.branchId = ?
+            WHERE lr.status = 'funded'
+            ${branchId ? 'AND agent.branchId = ?' : ''}
+            ${agentId ? 'AND agent.id = ?' : ''}
         `;
-        
-        /* ── 3 · Consulta principal según rol ─────────────────────────────── */
+        const subParams: any[] = [];
+        if (branchId) subParams.push(branchId);
+        if (agentId) subParams.push(agentId);
+
         if (caller.role === 'ADMIN') {
-            /* --- ADMIN: agrupar por agente en SU sucursal -------------------- */
             const adminRows = await this.clientRepo.query(
                 `
                 SELECT
@@ -1328,17 +1329,17 @@ return {
                 INNER JOIN client c ON c.id = lr.clientId
                 INNER JOIN user agent ON agent.id = lr.agentId
                 WHERE agent.branchId = ?
+                ${agentId ? 'AND agent.id = ?' : ''}
                 `,
-                [caller.branchId],
+                agentId ? [branchId ?? caller.branchId, agentId] : [branchId ?? caller.branchId],
             );
-            
-            /* --- Agrupar en blocks ------------------------------------------ */
+
             const agentMap = new Map<number, {
                 id: number; label: string;
                 active: number; inactive: number;
                 clients: { clientId: number; clientName: string; status: 'ACTIVE' | 'INACTIVE' }[];
             }>();
-            
+
             for (const r of adminRows) {
                 let blk = agentMap.get(r.agentId);
                 if (!blk) {
@@ -1351,16 +1352,16 @@ return {
                     };
                     agentMap.set(r.agentId, blk);
                 }
-                if (r.isActive) blk.active   += 1;
-                else            blk.inactive += 1;
-                
+                if (r.isActive) blk.active++;
+                else blk.inactive++;
+
                 blk.clients.push({
                     clientId:   r.clientId,
                     clientName: r.clientName,
                     status:     r.isActive ? 'ACTIVE' : 'INACTIVE',
                 });
             }
-            
+
             const totals = Array.from(agentMap.values()).reduce(
                 (acc, b) => {
                     acc.active   += b.active;
@@ -1369,7 +1370,7 @@ return {
                 },
                 { active: 0, inactive: 0 },
             );
-            
+
             return {
                 meta:   { view: 'ADMIN', generatedAt: new Date().toISOString() },
                 totals,
@@ -1377,26 +1378,27 @@ return {
                 .sort((x, y) => (y.active + y.inactive) - (x.active + x.inactive)),
             };
         }
-        
-        /* --- MANAGER: bloques por sucursal → agentes ---------------------- */
+
         const mgrRows = await this.clientRepo.query(
             `
             SELECT
-            branch.id                      AS branchId,
-            branch.name                    AS branchName,
-            IFNULL(agent.id, 0)            AS agentId,
-            IFNULL(agent.name,'Sin asignar') AS agentName,
-            c.id                           AS clientId,
-            c.name                         AS clientName,
-            CASE WHEN a.clientId IS NOT NULL THEN 1 ELSE 0 END AS isActive
+                branch.id                      AS branchId,
+                branch.name                    AS branchName,
+                IFNULL(agent.id, 0)            AS agentId,
+                IFNULL(agent.name,'Sin asignar') AS agentName,
+                c.id                           AS clientId,
+                c.name                         AS clientName,
+                CASE WHEN a.clientId IS NOT NULL THEN 1 ELSE 0 END AS isActive
             FROM client c
             LEFT JOIN user   agent  ON agent.id  = c.agentId
             LEFT JOIN branch        ON branch.id = agent.branchId
             LEFT JOIN (${activeSub}) a ON a.clientId = c.id
+            ${branchId ? 'WHERE branch.id = ?' : ''}
+            ${agentId ? (branchId ? ' AND agent.id = ?' : 'WHERE agent.id = ?') : ''}
             `,
+            subParams,
         );
-        
-        /* --- Agrupar sucursal → agente ------------------------------------ */
+
         const branchMap = new Map<number, {
             branchId: number; branchName: string;
             active: number; inactive: number;
@@ -1406,32 +1408,30 @@ return {
                 clients: { clientId: number; clientName: string; status: 'ACTIVE' | 'INACTIVE' }[];
             }[];
         }>();
-        
+
         for (const r of mgrRows) {
-            /* bloque de sucursal */
             let br = branchMap.get(r.branchId);
             if (!br) {
                 br = { branchId: r.branchId, branchName: r.branchName, active: 0, inactive: 0, agents: [] };
                 branchMap.set(r.branchId, br);
             }
-            
-            /* sub-bloque de agente */
+
             let ag = br.agents.find(a => a.agentId === r.agentId);
             if (!ag) {
                 ag = { agentId: r.agentId, agentName: r.agentName, active: 0, inactive: 0, clients: [] };
                 br.agents.push(ag);
             }
-            
+
             if (r.isActive) { br.active++; ag.active++; }
             else            { br.inactive++; ag.inactive++; }
-            
+
             ag.clients.push({
                 clientId: r.clientId,
                 clientName: r.clientName,
                 status: r.isActive ? 'ACTIVE' : 'INACTIVE',
             });
         }
-        
+
         const totals = Array.from(branchMap.values()).reduce(
             (acc, b) => {
                 acc.active   += b.active;
@@ -1440,7 +1440,7 @@ return {
             },
             { active: 0, inactive: 0 },
         );
-        
+
         return {
             meta: { view: 'MANAGER', generatedAt: new Date().toISOString() },
             totals,
@@ -1454,6 +1454,7 @@ return {
             })),
         };
     }
+
 
     /* ---------------------------------------------------------------------------
     * RANKING DE AGENTES

@@ -83,11 +83,8 @@ async findAll(
     const allCompleted = clientLoans.every(l => l.status === 'completed');
     const hasRejected  = clientLoans.some(l => l.status === 'rejected');
     
-    let status: 'active' | 'inactive' | 'rejected' | 'unknown' = 'unknown';
-    if (hasFunded) status = 'active';
-    else if (allCompleted) status = 'inactive';
-    else if (hasRejected) status = 'rejected';
-    if (status === 'unknown') continue;
+
+    const status: 'active' | 'inactive' = hasFunded ? 'active' : 'inactive';
 
     const sel = clientLoans.find(l =>
       status === 'active'   ? l.status === 'funded'    :

@@ -1809,110 +1809,141 @@ return {
     *   • Manager ve TODOS los clientes
     *   • Muestra conteo, desglose por tipo y lista de documentos
     * ------------------------------------------------------------------ */
-    async getDocumentsByClient(
-        userId: string,
-        startDate?: string,
-        endDate?: string,
-        docType?: string,
-        clientId?: number
-    ) {
-    // 1 · Validar usuario y rol
-    const caller = await this.userRepo.findOne({ where: { id: +userId } });
-    if (!caller) throw new NotFoundException('User not found');
-    if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
-        throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+
+ DOC_TYPE_LABELS: Record<string, string> = {
+  ID: 'Cédula',
+  WORK_LETTER: 'Carta laboral',
+  UTILITY_BILL: 'Recibo',
+  PAYMENT_DETAIL: 'Desprendible de pago',
+  OTHER: 'Otro documento',
+};
+
+ VALID_DOC_TYPES = Object.keys(this.DOC_TYPE_LABELS);
+
+async getDocumentsByClient(
+  userId: string,
+  startDate?: string,
+  endDate?: string,
+  docType?: string,
+  clientId?: number
+) {
+  // 1 · Validar usuario y rol
+  const caller = await this.userRepo.findOne({ where: { id: +userId } });
+  if (!caller) throw new NotFoundException('User not found');
+  if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
+    throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+  }
+
+  // 2 · Fechas
+  const start = startDate
+    ? dayjs(startDate).startOf('day')
+    : dayjs('1970-01-01').startOf('day');
+  const end = endDate
+    ? dayjs(endDate).endOf('day')
+    : dayjs().endOf('day');
+
+  // 3 · Diccionario de etiquetas
+  const DOC_TYPE_LABELS: Record<string, string> = {
+    ID: 'Cédula',
+    WORK_LETTER: 'Carta laboral',
+    UTILITY_BILL: 'Recibo',
+    PAYMENT_DETAIL: 'Desprendible de pago',
+    OTHER: 'Otro documento',
+    UNKNOWN: 'Desconocido',
+  };
+
+  // 4 · Query
+  const qb = this.docRepo.createQueryBuilder('d')
+    .innerJoin('d.client', 'c')
+    .where('d.createdAt BETWEEN :start AND :end', {
+      start: start.toISOString(),
+      end: end.toISOString(),
+    });
+
+  if (docType) {
+    qb.andWhere('d.classification = :docType', { docType });
+  }
+
+  if (clientId) {
+    qb.andWhere('c.id = :clientId', { clientId });
+  }
+
+  qb.select([
+    'c.id               AS clientId',
+    'c.name             AS clientName',
+    'd.id               AS docId',
+    'd.classification   AS classification',
+    'd.createdAt        AS uploadedAt',
+  ]);
+
+  const rows: {
+    clientId: number;
+    clientName: string;
+    docId: string;
+    classification: string | null;
+    uploadedAt: Date;
+  }[] = await qb.getRawMany();
+
+  // 5 · Agrupación
+  const map = new Map<number, {
+    clientId: number;
+    clientName: string;
+    totalDocs: number;
+    byType: Record<string, number>;
+    documents: {
+      docId: string;
+      type: string;
+      uploadedAt: Date;
+      label: string;
+    }[];
+  }>();
+
+  for (const r of rows) {
+    let blk = map.get(r.clientId);
+    if (!blk) {
+      blk = {
+        clientId: r.clientId,
+        clientName: r.clientName,
+        totalDocs: 0,
+        byType: {},
+        documents: [],
+      };
+      map.set(r.clientId, blk);
     }
 
-    // 2 · Rango de fechas
-    const start = startDate
-        ? dayjs(startDate).startOf('day')
-        : dayjs('1970-01-01').startOf('day');
-    const end = endDate
-        ? dayjs(endDate).endOf('day')
-        : dayjs().endOf('day');
+    const typeKey = r.classification?.toUpperCase() || 'UNKNOWN';
+    const label = DOC_TYPE_LABELS[typeKey] ?? 'Desconocido';
 
-    // 3 · Query builder
-    const qb = this.docRepo.createQueryBuilder('d')
-        .innerJoin('d.client', 'c')
-        .where('d.createdAt BETWEEN :start AND :end', {
-        start: start.toISOString(),
-        end: end.toISOString(),
-        });
+    blk.totalDocs += 1;
+    blk.byType[typeKey] = (blk.byType[typeKey] ?? 0) + 1;
+    blk.documents.push({
+      docId: r.docId,
+      type: typeKey,
+      uploadedAt: r.uploadedAt,
+      label,
+    });
+  }
 
-    if (docType) {
-        qb.andWhere('d.type = :docType', { docType });
-    }
+  const totalDocuments = Array.from(map.values())
+    .reduce((sum, b) => sum + b.totalDocs, 0);
 
-    if (clientId) {
-        qb.andWhere('c.id = :clientId', { clientId });
-    }
+  return {
+    meta: {
+      startDate: start.format('YYYY-MM-DD'),
+      endDate: end.format('YYYY-MM-DD'),
+      docType: docType ?? 'all',
+      clientId: clientId ?? null,
+      view: caller.role,
+      generatedAt: new Date().toISOString(),
+    },
+    totals: { totalDocuments },
+    blocks: Array.from(map.values()).sort((a, b) => b.totalDocs - a.totalDocs),
+  };
+}
 
-    qb.select([
-        'c.id        AS clientId',
-        'c.name      AS clientName',
-        'd.id        AS docId',
-        'd.type      AS type',
-        'd.createdAt AS uploadedAt',
-    ]);
 
-    const rows: {
-        clientId: number;
-        clientName: string;
-        docId: number;
-        type: string;
-        uploadedAt: Date;
-    }[] = await qb.getRawMany();
 
-    // 4 · Agrupar por cliente
-    const map = new Map<number, {
-        clientId: number;
-        clientName: string;
-        totalDocs: number;
-        byType: Record<string, number>;
-        documents: { docId: number; type: string; uploadedAt: Date }[];
-    }>();
 
-    for (const r of rows) {
-        let blk = map.get(r.clientId);
-        if (!blk) {
-        blk = {
-            clientId: r.clientId,
-            clientName: r.clientName,
-            totalDocs: 0,
-            byType: {},
-            documents: [],
-        };
-        map.set(r.clientId, blk);
-        }
-
-        const typeKey = r.type ?? 'UNKNOWN';
-        blk.totalDocs += 1;
-        blk.byType[typeKey] = (blk.byType[typeKey] ?? 0) + 1;
-        blk.documents.push({
-        docId: r.docId,
-        type: typeKey,
-        uploadedAt: r.uploadedAt,
-        });
-    }
-
-    // 5 · Totales globales
-    const totalDocuments = Array.from(map.values())
-        .reduce((sum, b) => sum + b.totalDocs, 0);
-
-    // 6 · Payload
-    return {
-        meta: {
-        startDate: start.format('YYYY-MM-DD'),
-        endDate: end.format('YYYY-MM-DD'),
-        docType: docType ?? 'all',
-        clientId: clientId ?? null,
-        view: caller.role,
-        generatedAt: new Date().toISOString(),
-        },
-        totals: { totalDocuments },
-        blocks: Array.from(map.values()).sort((a, b) => b.totalDocs - a.totalDocs),
-    };
-    }
 
 
 

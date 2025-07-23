@@ -124,14 +124,15 @@ export class ReportsController {
         @Query('branchId') branchId?: string,
         @Query('agentId') agentId?: string,
     ) {
-        if (!userId) throw new BadRequestException('userId is required');
+    if (!userId) throw new BadRequestException('userId is required');
 
         return this.reports.getClientsActiveInactive(
             userId,
-            branchId ? +branchId : undefined,
-            agentId ? +agentId : undefined,
+            branchId ? Number(branchId) : undefined,
+            agentId ? Number(agentId) : undefined
         );
     }
+
 
 
     /* ------------------------------------------------------------------

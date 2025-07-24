@@ -256,13 +256,16 @@ async documentsByClient(
     * ---------------------------------------------------------------- */
     @Get('agent-activity')
     async agentActivity(
-        @Query('userId')    userId:    string,
+        @Query('userId') userId: string,
         @Query('startDate') startDate?: string,
-        @Query('endDate')   endDate?:   string,
+        @Query('endDate') endDate?: string,
+        @Query('branchId') branchId?: string,
+        @Query('agentId') agentId?: string,
     ) {
         if (!userId) throw new BadRequestException('userId is required');
-        return this.reports.getAgentActivity(userId, startDate, endDate);
+        return this.reports.getAgentActivity(userId, startDate, endDate, branchId, agentId);
     }
+
 
 
     

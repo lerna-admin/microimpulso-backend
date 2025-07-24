@@ -10,6 +10,7 @@ import { LoanRequest } from 'src/entities/loan-request.entity';
 import { Client } from 'src/entities/client.entity';
 import { TransactionType } from 'src/entities/transaction.entity';
 import { Document } from 'src/entities/document.entity';
+import { Branch } from 'src/entities/branch.entity';
 
 @Injectable()
 export class ReportsService {
@@ -24,6 +25,9 @@ export class ReportsService {
         private readonly clientRepo: Repository<Client>,
         @InjectRepository(Document)
         private readonly docRepo: Repository<Document>,
+        @InjectRepository(Branch)
+        private readonly branchRepo: Repository<Branch>,
+        
         
         
     ) {}
@@ -2210,105 +2214,181 @@ async getDailyRenewals(userId: string, date?: string) {
         };
     }
     
-
+    
     async getCashFlowReport(
+        userId: number,
+        startDate?: string,
+        endDate?: string
+    ) {
+        const caller = await this.userRepo.findOne({ where: { id: userId } });
+        if (!caller) throw new NotFoundException('User not found');
+        if (caller.role !== 'MANAGER') {
+            throw new ForbiddenException('Only MANAGER may access this report');
+        }
+        
+        const start = startDate
+        ? dayjs(startDate).startOf('day')
+        : dayjs().subtract(30, 'day').startOf('day');
+        
+        const end = endDate
+        ? dayjs(endDate).endOf('day')
+        : dayjs().endOf('day');
+        
+        // Traer todas las transacciones dentro del rango
+        const transactions = await this.txRepo.find({
+            where: {
+                date: Between(start.toDate(), end.toDate())
+            }
+        });
+        
+        // Agrupar por fecha
+        const dayMap = new Map<string, {
+            disbursed: number;
+            repayments: number;
+            penalties: number;
+        }>();
+        
+        for (const tx of transactions) {
+            const day = dayjs(tx.date).format('YYYY-MM-DD');
+            
+            if (!dayMap.has(day)) {
+                dayMap.set(day, {
+                    disbursed: 0,
+                    repayments: 0,
+                    penalties: 0
+                });
+            }
+            
+            const entry = dayMap.get(day)!;
+            const amount = Number(tx.amount);
+            
+            switch (tx.Transactiontype) {
+                case 'disbursement':
+                entry.disbursed += amount;
+                break;
+                case 'repayment':
+                entry.repayments += amount;
+                break;
+                case 'penalty':
+                entry.penalties += amount;
+                break;
+            }
+        }
+        
+        // Convertir a arreglo ordenado por fecha
+        const dailyBreakdown = Array.from(dayMap.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([date, entry]) => ({
+            date,
+            disbursed: entry.disbursed,
+            repayments: entry.repayments,
+            penalties: entry.penalties,
+            netFlow: entry.repayments + entry.penalties - entry.disbursed
+        }));
+        
+        // Sumar totales
+        const summary = dailyBreakdown.reduce(
+            (acc, d) => {
+                acc.disbursed += d.disbursed;
+                acc.repayments += d.repayments;
+                acc.penalties += d.penalties;
+                return acc;
+            },
+            { disbursed: 0, repayments: 0, penalties: 0 }
+        );
+        
+        const netFlow = summary.repayments + summary.penalties - summary.disbursed;
+        
+        return {
+            meta: {
+                view: caller.role,
+                startDate: start.format('YYYY-MM-DD'),
+                endDate: end.format('YYYY-MM-DD')
+            },
+            summary: {
+                ...summary,
+                netFlow
+            },
+            dailyBreakdown
+        };
+    }
+    
+    
+async getTransactionsDetail(
   userId: number,
   startDate?: string,
-  endDate?: string
+  endDate?: string,
+  branchId?: string,
+  agentId?: string,
 ) {
   const caller = await this.userRepo.findOne({ where: { id: userId } });
   if (!caller) throw new NotFoundException('User not found');
-  if (caller.role !== 'MANAGER') {
-    throw new ForbiddenException('Only MANAGER may access this report');
+  if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
+    throw new ForbiddenException('Only ADMIN or MANAGER may call this');
   }
 
-  const start = startDate
-    ? dayjs(startDate).startOf('day')
-    : dayjs().subtract(30, 'day').startOf('day');
+  const start = startDate ? dayjs(startDate).startOf('day') : null;
+  const end   = endDate   ? dayjs(endDate).endOf('day')     : null;
 
-  const end = endDate
-    ? dayjs(endDate).endOf('day')
-    : dayjs().endOf('day');
+  const qb = this.txRepo
+    .createQueryBuilder('tx')
+    .innerJoinAndSelect('tx.loanRequest', 'loanRequest')
+    .innerJoinAndSelect('loanRequest.client', 'client')
+    .innerJoinAndSelect('loanRequest.agent', 'agent')
+    .innerJoinAndSelect('agent.branch', 'branch');
 
-  // Traer todas las transacciones dentro del rango
-  const transactions = await this.txRepo.find({
-    where: {
-      date: Between(start.toDate(), end.toDate())
-    }
-  });
+  if (start)   qb.andWhere('tx.date >= :startDate', { startDate: start.toDate() });
+  if (end)     qb.andWhere('tx.date <= :endDate', { endDate: end.toDate() });
+  if (agentId) qb.andWhere('agent.id = :agentId',   { agentId: +agentId });
+  if (branchId)qb.andWhere('branch.id = :branchId', { branchId: +branchId });
 
-  // Agrupar por fecha
-  const dayMap = new Map<string, {
-    disbursed: number;
-    repayments: number;
-    penalties: number;
-  }>();
-
-  for (const tx of transactions) {
-    const day = dayjs(tx.date).format('YYYY-MM-DD');
-
-    if (!dayMap.has(day)) {
-      dayMap.set(day, {
-        disbursed: 0,
-        repayments: 0,
-        penalties: 0
-      });
-    }
-
-    const entry = dayMap.get(day)!;
-    const amount = Number(tx.amount);
-
-    switch (tx.Transactiontype) {
-      case 'disbursement':
-        entry.disbursed += amount;
-        break;
-      case 'repayment':
-        entry.repayments += amount;
-        break;
-      case 'penalty':
-        entry.penalties += amount;
-        break;
-    }
+  if (caller.role === 'ADMIN' && !branchId) {
+    qb.andWhere('branch.id = :adminBranch', { adminBranch: caller.branchId });
   }
 
-  // Convertir a arreglo ordenado por fecha
-  const dailyBreakdown = Array.from(dayMap.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, entry]) => ({
-      date,
-      disbursed: entry.disbursed,
-      repayments: entry.repayments,
-      penalties: entry.penalties,
-      netFlow: entry.repayments + entry.penalties - entry.disbursed
-    }));
+  const rows = await qb.orderBy('tx.date', 'DESC').getMany();
 
-  // Sumar totales
-  const summary = dailyBreakdown.reduce(
-    (acc, d) => {
-      acc.disbursed += d.disbursed;
-      acc.repayments += d.repayments;
-      acc.penalties += d.penalties;
-      return acc;
-    },
-    { disbursed: 0, repayments: 0, penalties: 0 }
-  );
+  let skipped = 0;
+  const transactionsOut: any[] = [];
 
-  const netFlow = summary.repayments + summary.penalties - summary.disbursed;
+  for (const tx of rows) {
+    const lr = tx.loanRequest;
+    const cl = lr?.client;
+    const ag = lr?.agent;
+    const br = ag?.branch;
+
+    if (!lr || !cl || !ag || !br) {
+      skipped++;
+      continue;
+    }
+
+    transactionsOut.push({
+      id: tx.id,
+      type: tx.Transactiontype,
+      amount: tx.amount,
+      date: tx.date,
+      client: { id: cl.id, name: cl.name },
+      agent:  { id: ag.id, name: ag.name },
+      branch: { id: br.id, name: br.name },
+    });
+  }
 
   return {
     meta: {
       view: caller.role,
-      startDate: start.format('YYYY-MM-DD'),
-      endDate: end.format('YYYY-MM-DD')
+      startDate: start ? start.format('YYYY-MM-DD') : null,
+      endDate:   end   ? end.format('YYYY-MM-DD')   : null,
+      branchId:  branchId ? +branchId : (caller.role === 'ADMIN' ? caller.branchId : null),
+      agentId:   agentId ? +agentId : null,
+      total:     transactionsOut.length,
+      skipped,
     },
-    summary: {
-      ...summary,
-      netFlow
-    },
-    dailyBreakdown
+    transactions: transactionsOut,
   };
 }
 
+
+    
     
     
 }

@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
-import { Repository } from 'typeorm';
+import { Between, Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as dayjs from 'dayjs';
 import 'dayjs/plugin/timezone';
@@ -2098,6 +2098,106 @@ async getDailyRenewals(userId: string, date?: string) {
             blocks: Array.from(branchMap.values()),
         };
     }
+    
+  async getApprovalTimeReport(
+  userId: number,
+  startDate?: string,
+  endDate?: string,
+  branchId?: number,
+  agentId?: number
+) {
+  const caller = await this.userRepo.findOne({ where: { id: userId } });
+  if (!caller) throw new NotFoundException('User not found');
+
+  const isManager = caller.role === 'MANAGER';
+  const isAdmin   = caller.role === 'ADMIN';
+
+  if (!isManager && !isAdmin) {
+    throw new ForbiddenException('Only MANAGER or ADMIN may access this report');
+  }
+
+  const start = startDate ? dayjs(startDate).startOf('day') : dayjs().subtract(30, 'day').startOf('day');
+  const end   = endDate   ? dayjs(endDate).endOf('day')     : dayjs().endOf('day');
+
+  // Buscar loans dentro del rango y relaciones necesarias
+  const loans = await this.loanRepo.find({
+    where: {
+      createdAt: Between(start.toDate(), end.toDate()),
+      ...(agentId ? { agent: { id: agentId } } : {})
+    },
+    relations: ['agent', 'agent.branch', 'client', 'transactions']
+  });
+
+  // Filtrar por disbursement y branch (solo si aplica)
+  const filtered = loans.filter(loan => {
+    const hasDisbursement = loan.transactions?.some(tx => tx.Transactiontype === 'disbursement');
+    const belongsToBranch = isAdmin
+      ? loan.agent.branch.id === caller.branchId
+      : (!branchId || loan.agent.branch.id === branchId);
+    return hasDisbursement && belongsToBranch;
+  });
+
+  const byAgent = new Map<number, {
+    agentId: number;
+    agentName: string;
+    branchId: number;
+    branchName: string;
+    durations: number[];
+  }>();
+
+  for (const loan of filtered) {
+    const disbursement = loan.transactions
+      .filter(t => t.Transactiontype === 'disbursement')
+      .sort((a, b) => +a.date - +b.date)[0];
+
+    if (!disbursement) continue;
+
+    const timeInMs = disbursement.date.getTime() - loan.createdAt.getTime();
+    const timeInDays = timeInMs / (1000 * 60 * 60 * 24);
+
+    if (timeInDays < 0) continue; // Ignorar inconsistencias
+
+    const agentId = loan.agent.id;
+    if (!byAgent.has(agentId)) {
+      byAgent.set(agentId, {
+        agentId,
+        agentName: loan.agent.name,
+        branchId: loan.agent.branch.id,
+        branchName: loan.agent.branch.name,
+        durations: []
+      });
+    }
+
+    byAgent.get(agentId)!.durations.push(timeInDays);
+  }
+
+  const details = Array.from(byAgent.values()).map(entry => ({
+    agentId: entry.agentId,
+    agentName: entry.agentName,
+    branchId: entry.branchId,
+    branchName: entry.branchName,
+    loansCount: entry.durations.length,
+    averageTime: `${(entry.durations.reduce((a, b) => a + b, 0) / entry.durations.length).toFixed(1)} días`
+  }));
+
+  const allDurations = details.flatMap(d => byAgent.get(d.agentId)?.durations ?? []);
+  const totalAvg = allDurations.length > 0
+    ? `${(allDurations.reduce((a, b) => a + b, 0) / allDurations.length).toFixed(1)} días`
+    : 'N/A';
+
+  return {
+    meta: {
+      view: caller.role,
+      startDate: start.format('YYYY-MM-DD'),
+      endDate: end.format('YYYY-MM-DD'),
+      branchId: isAdmin ? caller.branchId : (branchId ?? null),
+      agentId: agentId ?? null
+    },
+    averageDisbursementTime: totalAvg,
+    details
+  };
+}
+
     
     
 }

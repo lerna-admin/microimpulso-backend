@@ -267,6 +267,36 @@ async documentsByClient(
     }
 
 
+    /* ------------------------------------------------------------------
+    * Tiempo Promedio de Aprobación
+    *   GET /reports/approval-time
+    *   Parámetros:
+    *     userId     (number, obligatorio)
+    *     startDate  (YYYY-MM-DD, opcional)
+    *     endDate    (YYYY-MM-DD, opcional)
+    *     branchId   (number, opcional)
+    *     agentId    (number, opcional)
+    * ---------------------------------------------------------------- */
+    @Get('approval-time')
+    async approvalTime(
+        @Query('userId')    userId:    string,
+        @Query('startDate') startDate?: string,
+        @Query('endDate')   endDate?:   string,
+        @Query('branchId')  branchId?:  string,
+        @Query('agentId')   agentId?:   string,
+    ) {
+        if (!userId) throw new BadRequestException('userId is required');
+        return this.reports.getApprovalTimeReport(
+            +userId,
+            startDate,
+            endDate,
+            branchId ? +branchId : undefined,
+            agentId ? +agentId : undefined
+        );
+    }
+
+
+
 
     
 }

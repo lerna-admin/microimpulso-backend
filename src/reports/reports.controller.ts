@@ -297,6 +297,16 @@ async documentsByClient(
         );
     }
 
+    @Get('cash-flow')
+async cashFlow(
+  @Query('userId') userId: string,
+  @Query('startDate') startDate?: string,
+  @Query('endDate') endDate?: string,
+) {
+  if (!userId) throw new BadRequestException('userId is required');
+  return this.reports.getCashFlowReport(+userId, startDate, endDate);
+}
+
 
 
 

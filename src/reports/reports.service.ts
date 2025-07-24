@@ -2210,6 +2210,105 @@ async getDailyRenewals(userId: string, date?: string) {
         };
     }
     
+
+    async getCashFlowReport(
+  userId: number,
+  startDate?: string,
+  endDate?: string
+) {
+  const caller = await this.userRepo.findOne({ where: { id: userId } });
+  if (!caller) throw new NotFoundException('User not found');
+  if (caller.role !== 'MANAGER') {
+    throw new ForbiddenException('Only MANAGER may access this report');
+  }
+
+  const start = startDate
+    ? dayjs(startDate).startOf('day')
+    : dayjs().subtract(30, 'day').startOf('day');
+
+  const end = endDate
+    ? dayjs(endDate).endOf('day')
+    : dayjs().endOf('day');
+
+  // Traer todas las transacciones dentro del rango
+  const transactions = await this.txRepo.find({
+    where: {
+      date: Between(start.toDate(), end.toDate())
+    }
+  });
+
+  // Agrupar por fecha
+  const dayMap = new Map<string, {
+    disbursed: number;
+    repayments: number;
+    penalties: number;
+  }>();
+
+  for (const tx of transactions) {
+    const day = dayjs(tx.date).format('YYYY-MM-DD');
+
+    if (!dayMap.has(day)) {
+      dayMap.set(day, {
+        disbursed: 0,
+        repayments: 0,
+        penalties: 0
+      });
+    }
+
+    const entry = dayMap.get(day)!;
+    const amount = Number(tx.amount);
+
+    switch (tx.Transactiontype) {
+      case 'disbursement':
+        entry.disbursed += amount;
+        break;
+      case 'repayment':
+        entry.repayments += amount;
+        break;
+      case 'penalty':
+        entry.penalties += amount;
+        break;
+    }
+  }
+
+  // Convertir a arreglo ordenado por fecha
+  const dailyBreakdown = Array.from(dayMap.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, entry]) => ({
+      date,
+      disbursed: entry.disbursed,
+      repayments: entry.repayments,
+      penalties: entry.penalties,
+      netFlow: entry.repayments + entry.penalties - entry.disbursed
+    }));
+
+  // Sumar totales
+  const summary = dailyBreakdown.reduce(
+    (acc, d) => {
+      acc.disbursed += d.disbursed;
+      acc.repayments += d.repayments;
+      acc.penalties += d.penalties;
+      return acc;
+    },
+    { disbursed: 0, repayments: 0, penalties: 0 }
+  );
+
+  const netFlow = summary.repayments + summary.penalties - summary.disbursed;
+
+  return {
+    meta: {
+      view: caller.role,
+      startDate: start.format('YYYY-MM-DD'),
+      endDate: end.format('YYYY-MM-DD')
+    },
+    summary: {
+      ...summary,
+      netFlow
+    },
+    dailyBreakdown
+  };
+}
+
     
     
 }

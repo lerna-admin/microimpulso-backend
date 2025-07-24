@@ -174,13 +174,15 @@ export class ReportsController {
     * ---------------------------------------------------------------- */
     @Get('total-loaned')
     async totalLoaned(
-        @Query('userId') userId: string,
+        @Query('userId')    userId: string,
         @Query('startDate') startDate?: string,
-        @Query('endDate') endDate?: string,
+        @Query('endDate')   endDate?: string,
+        @Query('branchId')  branchId?: string,
     ) {
         if (!userId) throw new BadRequestException('userId is required');
-        return this.reports.getTotalLoaned(userId, startDate, endDate);
+        return this.reports.getTotalLoaned(userId, startDate, endDate, branchId ? branchId : undefined);
     }
+
 
     /* ------------------------------------------------------------------
     * Recaudo Total (Pagos Recibidos)

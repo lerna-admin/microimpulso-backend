@@ -1564,6 +1564,7 @@ async getDailyRenewals(userId: string, date?: string) {
         userId: string,
         startDate?: string,
         endDate?: string,
+        branchId?: string
     ) {
         /* 1 · Validar usuario y rol ------------------------------------------- */
         const caller = await this.userRepo.findOne({ where: { id: +userId } });
@@ -1581,23 +1582,32 @@ async getDailyRenewals(userId: string, date?: string) {
         : dayjs('1970-01-01').startOf('day');  // todo el historial
         
         /* 3 · Consulta SQL: sumar lr.amount solo para funded ------------------ */
-        const sql = `
-            SELECT
-            branch.id      AS branchId,
-            branch.name    AS branchName,
-            agent.id       AS agentId,
-            agent.name     AS agentName,
-            SUM(lr.amount) AS totalLoaned
-            FROM loan_request lr
-            INNER JOIN user   agent  ON agent.id  = lr.agentId
-            INNER JOIN branch        ON branch.id = agent.branchId
-            WHERE lr.status = 'funded'
-            AND DATE(lr.createdAt) BETWEEN DATE(?) AND DATE(?)
-            GROUP BY branch.id, branch.name, agent.id, agent.name
-            ORDER BY branch.id, totalLoaned DESC
-        `;
+        let sql = `
+    SELECT
+      branch.id      AS branchId,
+      branch.name    AS branchName,
+      agent.id       AS agentId,
+      agent.name     AS agentName,
+      SUM(lr.amount) AS totalLoaned
+    FROM loan_request lr
+    INNER JOIN user   agent  ON agent.id  = lr.agentId
+    INNER JOIN branch        ON branch.id = agent.branchId
+    WHERE lr.status = 'funded'
+      AND DATE(lr.createdAt) BETWEEN DATE(?) AND DATE(?)
+  `;
         
-        const params = [ start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD') ];
+        const params = [start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD')];
+        
+        if (branchId) {
+            sql += ` AND branch.id = ?`;
+            params.push(branchId);
+        }
+        
+        sql += `
+    GROUP BY branch.id, branch.name, agent.id, agent.name
+    ORDER BY branch.id, totalLoaned DESC
+  `;
+        
         const rows: {
             branchId: number;
             branchName: string;
@@ -1643,6 +1653,7 @@ async getDailyRenewals(userId: string, date?: string) {
             meta: {
                 startDate: start.format('YYYY-MM-DD'),
                 endDate:   end.format('YYYY-MM-DD'),
+                branchId:  branchId ?? null,
                 view:      caller.role,
                 generatedAt: new Date().toISOString(),
             },
@@ -1657,6 +1668,7 @@ async getDailyRenewals(userId: string, date?: string) {
             })),
         };
     }
+    
     
     /* ---------------------------------------------------------------------------
     * TOTAL COLLECTED (pagos recibidos)
@@ -2099,105 +2111,105 @@ async getDailyRenewals(userId: string, date?: string) {
         };
     }
     
-  async getApprovalTimeReport(
-  userId: number,
-  startDate?: string,
-  endDate?: string,
-  branchId?: number,
-  agentId?: number
-) {
-  const caller = await this.userRepo.findOne({ where: { id: userId } });
-  if (!caller) throw new NotFoundException('User not found');
-
-  const isManager = caller.role === 'MANAGER';
-  const isAdmin   = caller.role === 'ADMIN';
-
-  if (!isManager && !isAdmin) {
-    throw new ForbiddenException('Only MANAGER or ADMIN may access this report');
-  }
-
-  const start = startDate ? dayjs(startDate).startOf('day') : dayjs().subtract(30, 'day').startOf('day');
-  const end   = endDate   ? dayjs(endDate).endOf('day')     : dayjs().endOf('day');
-
-  // Buscar loans dentro del rango y relaciones necesarias
-  const loans = await this.loanRepo.find({
-    where: {
-      createdAt: Between(start.toDate(), end.toDate()),
-      ...(agentId ? { agent: { id: agentId } } : {})
-    },
-    relations: ['agent', 'agent.branch', 'client', 'transactions']
-  });
-
-  // Filtrar por disbursement y branch (solo si aplica)
-  const filtered = loans.filter(loan => {
-    const hasDisbursement = loan.transactions?.some(tx => tx.Transactiontype === 'disbursement');
-    const belongsToBranch = isAdmin
-      ? loan.agent.branch.id === caller.branchId
-      : (!branchId || loan.agent.branch.id === branchId);
-    return hasDisbursement && belongsToBranch;
-  });
-
-  const byAgent = new Map<number, {
-    agentId: number;
-    agentName: string;
-    branchId: number;
-    branchName: string;
-    durations: number[];
-  }>();
-
-  for (const loan of filtered) {
-    const disbursement = loan.transactions
-      .filter(t => t.Transactiontype === 'disbursement')
-      .sort((a, b) => +a.date - +b.date)[0];
-
-    if (!disbursement) continue;
-
-    const timeInMs = disbursement.date.getTime() - loan.createdAt.getTime();
-    const timeInDays = timeInMs / (1000 * 60 * 60 * 24);
-
-    if (timeInDays < 0) continue; // Ignorar inconsistencias
-
-    const agentId = loan.agent.id;
-    if (!byAgent.has(agentId)) {
-      byAgent.set(agentId, {
-        agentId,
-        agentName: loan.agent.name,
-        branchId: loan.agent.branch.id,
-        branchName: loan.agent.branch.name,
-        durations: []
-      });
+    async getApprovalTimeReport(
+        userId: number,
+        startDate?: string,
+        endDate?: string,
+        branchId?: number,
+        agentId?: number
+    ) {
+        const caller = await this.userRepo.findOne({ where: { id: userId } });
+        if (!caller) throw new NotFoundException('User not found');
+        
+        const isManager = caller.role === 'MANAGER';
+        const isAdmin   = caller.role === 'ADMIN';
+        
+        if (!isManager && !isAdmin) {
+            throw new ForbiddenException('Only MANAGER or ADMIN may access this report');
+        }
+        
+        const start = startDate ? dayjs(startDate).startOf('day') : dayjs().subtract(30, 'day').startOf('day');
+        const end   = endDate   ? dayjs(endDate).endOf('day')     : dayjs().endOf('day');
+        
+        // Buscar loans dentro del rango y relaciones necesarias
+        const loans = await this.loanRepo.find({
+            where: {
+                createdAt: Between(start.toDate(), end.toDate()),
+                ...(agentId ? { agent: { id: agentId } } : {})
+            },
+            relations: ['agent', 'agent.branch', 'client', 'transactions']
+        });
+        
+        // Filtrar por disbursement y branch (solo si aplica)
+        const filtered = loans.filter(loan => {
+            const hasDisbursement = loan.transactions?.some(tx => tx.Transactiontype === 'disbursement');
+            const belongsToBranch = isAdmin
+            ? loan.agent.branch.id === caller.branchId
+            : (!branchId || loan.agent.branch.id === branchId);
+            return hasDisbursement && belongsToBranch;
+        });
+        
+        const byAgent = new Map<number, {
+            agentId: number;
+            agentName: string;
+            branchId: number;
+            branchName: string;
+            durations: number[];
+        }>();
+        
+        for (const loan of filtered) {
+            const disbursement = loan.transactions
+            .filter(t => t.Transactiontype === 'disbursement')
+            .sort((a, b) => +a.date - +b.date)[0];
+            
+            if (!disbursement) continue;
+            
+            const timeInMs = disbursement.date.getTime() - loan.createdAt.getTime();
+            const timeInDays = timeInMs / (1000 * 60 * 60 * 24);
+            
+            if (timeInDays < 0) continue; // Ignorar inconsistencias
+            
+            const agentId = loan.agent.id;
+            if (!byAgent.has(agentId)) {
+                byAgent.set(agentId, {
+                    agentId,
+                    agentName: loan.agent.name,
+                    branchId: loan.agent.branch.id,
+                    branchName: loan.agent.branch.name,
+                    durations: []
+                });
+            }
+            
+            byAgent.get(agentId)!.durations.push(timeInDays);
+        }
+        
+        const details = Array.from(byAgent.values()).map(entry => ({
+            agentId: entry.agentId,
+            agentName: entry.agentName,
+            branchId: entry.branchId,
+            branchName: entry.branchName,
+            loansCount: entry.durations.length,
+            averageTime: `${(entry.durations.reduce((a, b) => a + b, 0) / entry.durations.length).toFixed(1)} días`
+        }));
+        
+        const allDurations = details.flatMap(d => byAgent.get(d.agentId)?.durations ?? []);
+        const totalAvg = allDurations.length > 0
+        ? `${(allDurations.reduce((a, b) => a + b, 0) / allDurations.length).toFixed(1)} días`
+        : 'N/A';
+        
+        return {
+            meta: {
+                view: caller.role,
+                startDate: start.format('YYYY-MM-DD'),
+                endDate: end.format('YYYY-MM-DD'),
+                branchId: isAdmin ? caller.branchId : (branchId ?? null),
+                agentId: agentId ?? null
+            },
+            averageDisbursementTime: totalAvg,
+            details
+        };
     }
-
-    byAgent.get(agentId)!.durations.push(timeInDays);
-  }
-
-  const details = Array.from(byAgent.values()).map(entry => ({
-    agentId: entry.agentId,
-    agentName: entry.agentName,
-    branchId: entry.branchId,
-    branchName: entry.branchName,
-    loansCount: entry.durations.length,
-    averageTime: `${(entry.durations.reduce((a, b) => a + b, 0) / entry.durations.length).toFixed(1)} días`
-  }));
-
-  const allDurations = details.flatMap(d => byAgent.get(d.agentId)?.durations ?? []);
-  const totalAvg = allDurations.length > 0
-    ? `${(allDurations.reduce((a, b) => a + b, 0) / allDurations.length).toFixed(1)} días`
-    : 'N/A';
-
-  return {
-    meta: {
-      view: caller.role,
-      startDate: start.format('YYYY-MM-DD'),
-      endDate: end.format('YYYY-MM-DD'),
-      branchId: isAdmin ? caller.branchId : (branchId ?? null),
-      agentId: agentId ?? null
-    },
-    averageDisbursementTime: totalAvg,
-    details
-  };
-}
-
+    
     
     
 }

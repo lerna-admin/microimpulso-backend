@@ -2198,7 +2198,7 @@ async getDailyRenewals(userId: string, date?: string) {
             branchId: entry.branchId,
             branchName: entry.branchName,
             loansCount: entry.durations.length,
-            averageTime: `${(entry.durations.reduce((a, b) => a + b, 0) / entry.durations.length).toFixed(1)} días`
+            averageTime: parseInt((entry.durations.reduce((a, b) => a + b, 0) / entry.durations.length).toFixed(1))
         }));
         
         const allDurations = details.flatMap(d => byAgent.get(d.agentId)?.durations ?? []);
@@ -2214,7 +2214,7 @@ async getDailyRenewals(userId: string, date?: string) {
                 branchId: isAdmin ? caller.branchId : (branchId ?? null),
                 agentId: agentId ?? null
             },
-            averageDisbursementTime: totalAvg,
+            averageDisbursementTime:totalAvg,
             details
         };
     }

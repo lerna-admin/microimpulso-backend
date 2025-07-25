@@ -746,10 +746,7 @@ async getOverdueLoans(userId: string) {
     
     /* 3 · Raw SQL: list every loan past due and still outstanding -------- */
     const ACTIVE_STATUSES = [
-        "'new'",
-        "'under_review'",
-        "'approved'",
-        "'funded'",
+        "'funded'"
     ].join(',');
     
     const sql = caller.role === 'ADMIN'

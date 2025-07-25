@@ -2523,6 +2523,7 @@ for (const tx of filteredTx) {
     acc.activeClients += b.activeClients;
     acc.overdueAmount += b.overdueAmount;
     acc.overdueLoans += b.overdueLoans;
+    acc.netFlow += b.netFlow;
     return acc;
   }, {
     totalLoaned: 0,
@@ -2533,6 +2534,7 @@ for (const tx of filteredTx) {
     activeClients: 0,
     overdueAmount: 0,
     overdueLoans: 0,
+    netFlow :0
   });
 
   return {

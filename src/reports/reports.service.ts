@@ -2390,147 +2390,139 @@ async getTransactionsDetail(
 }
 
 
-    async getBranchStatsReport(
+async getBranchStatsReport(
   userId: number,
   startDate?: string,
   endDate?: string,
-  branchId?: string,
-  agentId?: string,
 ) {
   const caller = await this.userRepo.findOne({ where: { id: userId } });
   if (!caller) throw new NotFoundException('User not found');
+
   if (caller.role !== 'MANAGER' && caller.role !== 'ADMIN') {
     throw new ForbiddenException('Only MANAGER or ADMIN may access this report');
   }
 
   const start = startDate ? dayjs(startDate).startOf('day') : dayjs().subtract(30, 'day').startOf('day');
-  const end   = endDate   ? dayjs(endDate).endOf('day')     : dayjs().endOf('day');
+  const end = endDate ? dayjs(endDate).endOf('day') : dayjs().endOf('day');
 
-  // Filtro de branch/agent opcional
-  const branchFilterId = branchId ? +branchId : null;
-  const agentFilterId  = agentId  ? +agentId  : null;
+  // ADMIN: limitar solo a su sede
+  const adminBranchId = caller.role === 'ADMIN' ? caller.branchId : null;
 
-  // Admin: si no manda branchId, lo limito a su propia sede
-  if (caller.role === 'ADMIN' && !branchFilterId) {
-    branchId = String(caller.branchId);
-  }
-
-  // 1) Traer LOANS en el rango de fechas (creación)
+  // 1) Obtener préstamos
   const loans = await this.loanRepo.find({
     where: {
       createdAt: Between(start.toDate(), end.toDate()),
-      ...(agentFilterId ? { agent: { id: agentFilterId } } : {}),
     },
     relations: ['agent', 'agent.branch', 'client'],
   });
 
-  // Aplicar branch filter en memoria (porque branch se obtiene por agent.branch)
-  const filteredLoans = loans.filter(l => !branchFilterId || l.agent.branch.id === branchFilterId);
+  const filteredLoans = adminBranchId
+    ? loans.filter(l => l.agent.branch.id === adminBranchId)
+    : loans;
 
-  // 2) Traer TRANSACCIONES (repayment, penalty, disbursement) en el rango
+  // 2) Obtener transacciones
   const transactions = await this.txRepo.find({
     where: {
       date: Between(start.toDate(), end.toDate()),
-      ...(agentFilterId ? { loanRequest: { agent: { id: agentFilterId } } } : {}),
     },
     relations: ['loanRequest', 'loanRequest.agent', 'loanRequest.agent.branch'],
   });
 
-  const filteredTx = transactions.filter(tx =>
-    (!branchFilterId || tx.loanRequest.agent.branch.id === branchFilterId)
-  );
+  const filteredTx = adminBranchId
+    ? transactions.filter(tx => tx.loanRequest.agent.branch.id === adminBranchId)
+    : transactions;
 
-  // 3) Mapear por branch
   const branchMap: Map<number, any> = new Map();
 
-  // Helper para obtener/crear registro por branch
   function getBranchEntry(bId: number, bName: string) {
     let entry = branchMap.get(bId);
     if (!entry) {
       entry = {
         branchId: bId,
         branchName: bName,
-        totalLoaned: 0,        // Suma del monto de los préstamos (lr.amount)
-        totalDisbursed: 0,     // Suma de tx disbursement
-        totalCollected: 0,     // Suma de tx repayment + penalty
-        penalties: 0,          // Suma de tx penalty
-        repayments: 0,         // Suma de tx repayment
-        activeClients: 0,      // Distinct clientes con préstamos activos
-        overdueAmount: 0,      // Monto en mora (si puedes calcularlo)
-        overdueLoans: 0,       // Cant de préstamos en mora
-        clientsSet: new Set<number>(), // Para contar únicos
+        totalLoaned: 0,
+        totalDisbursed: 0,
+        totalCollected: 0,
+        penalties: 0,
+        repayments: 0,
+        activeClients: 0,
+        overdueAmount: 0,
+        overdueLoans: 0,
+        clientsSet: new Set<number>(),
       };
       branchMap.set(bId, entry);
     }
     return entry;
   }
 
-  // 3.a) Procesar LOANS
+  // 3.a) Procesar préstamos
   for (const lr of filteredLoans) {
     const bId = lr.agent.branch.id;
     const bName = lr.agent.branch.name;
     const entry = getBranchEntry(bId, bName);
 
-    // Suma de monto prestado total
     entry.totalLoaned += Number(lr.amount);
 
-    // Cliente activo: definimos "activo" si el préstamo está en estado funded o approved (ajusta a tus definiciones)
     const isActive = ['funded', 'approved'].includes((lr.status || '').toLowerCase());
     if (isActive && lr.client?.id) {
       entry.clientsSet.add(lr.client.id);
     }
 
-    // Mora (opcional) si tienes campos como endDate o pendingAmount.
-    // Ejemplo (ajusta a tu modelo):
-    // if (lr.endDate && dayjs(lr.endDate).isBefore(end) && lr.pendingAmount > 0) {
-    //   entry.overdueAmount += Number(lr.pendingAmount);
-    //   entry.overdueLoans += 1;
-    // }
-  }
+    const txsForLoan = filteredTx.filter(
+      tx => tx.loanRequest?.id === lr.id && tx.Transactiontype === 'repayment'
+    );
 
-  // 3.b) Procesar TRANSACCIONES
-  for (const tx of filteredTx) {
-    const bId = tx.loanRequest.agent.branch.id;
-    const bName = tx.loanRequest.agent.branch.name;
-    const entry = getBranchEntry(bId, bName);
+    const totalPaid = txsForLoan.reduce((sum, tx) => sum + Number(tx.amount), 0);
+    const pendingAmount = Number(lr.amount) - totalPaid;
 
-    const amount = Number(tx.amount);
-    switch (tx.Transactiontype) {
-      case 'disbursement':
-        entry.totalDisbursed += amount;
-        break;
-      case 'repayment':
-        entry.repayments += amount;
-        entry.totalCollected += amount;
-        break;
-      case 'penalty':
-        entry.penalties += amount;
-        entry.totalCollected += amount;
-        break;
+    if (lr.endDateAt && dayjs(lr.endDateAt).isBefore(end) && pendingAmount > 0) {
+      entry.overdueAmount += pendingAmount;
+      entry.overdueLoans += 1;
     }
   }
+// 3.b) Procesar transacciones
+for (const tx of filteredTx) {
+  if (!tx.loanRequest?.agent?.branch) continue; // Seguridad ante datos incompletos
 
-  // 4) Convertir a arreglo
-  const blocks = Array.from(branchMap.values()).map(b => {
+  const bId = tx.loanRequest.agent.branch.id;
+  const bName = tx.loanRequest.agent.branch.name;
+  const entry = getBranchEntry(bId, bName);
+
+  const amount = Number(tx.amount);
+  switch (tx.Transactiontype) {
+    case 'disbursement':
+      entry.totalDisbursed += amount;
+      break;
+    case 'repayment':
+      entry.repayments += amount;
+      entry.totalCollected += amount;
+      break;
+    case 'penalty':
+      entry.penalties += amount;
+      entry.totalCollected += amount;
+      break;
+  }
+}
+
+
+  // 4) Construir bloques
+  const branches = Array.from(branchMap.values()).map(b => {
     b.activeClients = b.clientsSet.size;
     delete b.clientsSet;
-
-    // Si quieres calcular un "netFlow" aquí, podrías: (repayments + penalties) - disbursed
     b.netFlow = (b.repayments + b.penalties) - b.totalDisbursed;
-
     return b;
   });
 
-  // Totales generales
-  const totals = blocks.reduce((acc, b) => {
-    acc.totalLoaned     += b.totalLoaned;
-    acc.totalDisbursed  += b.totalDisbursed;
-    acc.totalCollected  += b.totalCollected;
-    acc.repayments      += b.repayments;
-    acc.penalties       += b.penalties;
-    acc.activeClients   += b.activeClients;
-    acc.overdueAmount   += b.overdueAmount;
-    acc.overdueLoans    += b.overdueLoans;
+  // 5) Totales globales
+  const totals = branches.reduce((acc, b) => {
+    acc.totalLoaned += b.totalLoaned;
+    acc.totalDisbursed += b.totalDisbursed;
+    acc.totalCollected += b.totalCollected;
+    acc.repayments += b.repayments;
+    acc.penalties += b.penalties;
+    acc.activeClients += b.activeClients;
+    acc.overdueAmount += b.overdueAmount;
+    acc.overdueLoans += b.overdueLoans;
     return acc;
   }, {
     totalLoaned: 0,
@@ -2548,14 +2540,13 @@ async getTransactionsDetail(
       view: caller.role,
       startDate: start.format('YYYY-MM-DD'),
       endDate: end.format('YYYY-MM-DD'),
-      branchId: branchFilterId,
-      agentId: agentFilterId,
       generatedAt: new Date().toISOString(),
     },
     totals,
-    branches: blocks.sort((a, b) => a.branchId - b.branchId),
+    branches: branches.sort((a, b) => a.branchId - b.branchId),
   };
 }
+
 
     
     

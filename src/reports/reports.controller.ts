@@ -335,11 +335,9 @@ async branchStats(
   @Query('userId')    userId: string,
   @Query('startDate') startDate?: string,
   @Query('endDate')   endDate?: string,
-  @Query('branchId')  branchId?: string,
-  @Query('agentId')   agentId?: string,
 ) {
   if (!userId) throw new BadRequestException('userId is required');
-  return this.reports.getBranchStatsReport(+userId, startDate, endDate, branchId, agentId);
+  return this.reports.getBranchStatsReport(+userId, startDate, endDate);
 }
 
     

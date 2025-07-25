@@ -2067,7 +2067,7 @@ async getDailyRenewals(userId: string, date?: string) {
     LEFT JOIN (${txSub}) tx ON tx.agentId = agent.id
     LEFT JOIN (${clientSub}) cl ON cl.agentId = agent.id
     LEFT JOIN (${docSub}) doc ON doc.agentId = agent.id
-    ${where}
+    ${where} and role = 'AGENT'
     ORDER BY branch.name, agent.name
   `;
         

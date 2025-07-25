@@ -2173,10 +2173,11 @@ async getDailyRenewals(userId: string, date?: string) {
             if (!disbursement) continue;
             
             const timeInMs = disbursement.date.getTime() - loan.createdAt.getTime();
-            const timeInDays = timeInMs / (1000 * 60 * 60 * 24);
+            let timeInDays = timeInMs / (1000 * 60 * 60 * 24);
             
-            if (timeInDays < 0) continue; // Ignorar inconsistencias
-            
+            if (timeInDays < 0) {
+                timeInDays = 1;
+            }            
             const agentId = loan.agent.id;
             if (!byAgent.has(agentId)) {
                 byAgent.set(agentId, {

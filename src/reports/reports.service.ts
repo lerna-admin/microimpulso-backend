@@ -2203,8 +2203,8 @@ async getDailyRenewals(userId: string, date?: string) {
         
         const allDurations = details.flatMap(d => byAgent.get(d.agentId)?.durations ?? []);
         const totalAvg = allDurations.length > 0
-        ? `${(allDurations.reduce((a, b) => a + b, 0) / allDurations.length).toFixed(1)} días`
-        : 'N/A';
+        ? (allDurations.reduce((a, b) => a + b, 0) / allDurations.length).toFixed(1)
+        : 0;
         
         return {
             meta: {

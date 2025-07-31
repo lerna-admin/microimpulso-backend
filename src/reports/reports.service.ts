@@ -174,6 +174,7 @@ export class ReportsService {
     *  - Cartera (monto aún adeudado)
     *  - Repayments / Disbursements / Penalties del día
     * ------------------------------------------------------------------------ */
+    
     async getDailyCashCountByAgent(
         userId: string,
         opts?: { date?: string; branchId?: string; agentId?: string },
@@ -191,10 +192,10 @@ export class ReportsService {
         }
         
         /* ───────────────────────── 2. DYNAMIC FILTERS */
-        const whereCartera: string[] = [];
+        const whereCartera: string[] = ['agent.role = "AGENT"']; // ← AGENT-only
         const paramsCartera: any[] = [];
         
-        const whereMov: string[] = ['DATE(t.date) = ?'];
+        const whereMov: string[] = ['DATE(t.date) = ?', 'agent.role = "AGENT"']; // ← AGENT-only
         const paramsMov: any[] = [businessDate];
         
         // Branch restrictions
@@ -225,47 +226,47 @@ export class ReportsService {
         
         /* ───────────────────────── 3. PORTFOLIO (outstanding loans) */
         const carteraSql = `
-        SELECT
-        agent.id                       AS agentId,
-        agent.name                     AS agentName,
-        branch.id                      AS branchId,
-        branch.name                    AS branchName,
-        IFNULL(SUM(lr.amount), 0)      AS totalLoaned,
-        IFNULL(SUM(rep.repaid), 0)     AS totalRepaid
-        FROM user agent
-        INNER JOIN branch              ON branch.id = agent.branchId
-        LEFT JOIN loan_request lr      ON lr.agentId = agent.id
-        LEFT JOIN (
-            SELECT loanRequestId, SUM(amount) AS repaid
-            FROM   loan_transaction
-            WHERE  Transactiontype = 'repayment'
-            GROUP  BY loanRequestId
-        ) rep                          ON rep.loanRequestId = lr.id
-        ${whereCarteraSql}
-        GROUP BY agent.id, agent.name, branch.id, branch.name
-    `;
+    SELECT
+      agent.id                       AS agentId,
+      agent.name                     AS agentName,
+      branch.id                      AS branchId,
+      branch.name                    AS branchName,
+      IFNULL(SUM(lr.amount), 0)      AS totalLoaned,
+      IFNULL(SUM(rep.repaid), 0)     AS totalRepaid
+    FROM user agent
+      INNER JOIN branch              ON branch.id = agent.branchId
+      LEFT JOIN loan_request lr      ON lr.agentId = agent.id
+      LEFT JOIN (
+        SELECT loanRequestId, SUM(amount) AS repaid
+        FROM   loan_transaction
+        WHERE  Transactiontype = 'repayment'
+        GROUP  BY loanRequestId
+      ) rep                          ON rep.loanRequestId = lr.id
+    ${whereCarteraSql}
+    GROUP BY agent.id, agent.name, branch.id, branch.name
+  `;
         const carteraRows = await this.txRepo.query(carteraSql, paramsCartera);
         
         /* ───────────────────────── 4. MOVEMENTS OF THE DAY */
         const movSql = `
-        SELECT
-        agent.id            AS agentId,
-        t.Transactiontype   AS type,
-        COUNT(*)            AS cnt,
-        SUM(t.amount)       AS amt
-        FROM loan_transaction t
-        INNER JOIN loan_request lr ON lr.id = t.loanRequestId
-        INNER JOIN user   agent    ON agent.id = lr.agentId
-        INNER JOIN branch          ON branch.id = agent.branchId
-        ${whereMovSql}
-        GROUP BY agent.id, t.Transactiontype
-    `;
+    SELECT
+      agent.id            AS agentId,
+      t.Transactiontype   AS type,
+      COUNT(*)            AS cnt,
+      SUM(t.amount)       AS amt
+    FROM loan_transaction t
+      INNER JOIN loan_request lr ON lr.id = t.loanRequestId
+      INNER JOIN user   agent    ON agent.id = lr.agentId
+      INNER JOIN branch          ON branch.id = agent.branchId
+    ${whereMovSql}
+    GROUP BY agent.id, t.Transactiontype
+  `;
         const movRows = await this.txRepo.query(movSql, paramsMov);
         
         /* ───────────────────────── 5. MERGE RESULTS */
         type Block = {
-            id: number;        // agentId
-            label: string;     // "AgentName (BranchName)"
+            id: number;
+            label: string;
             branch: { id: number; name: string };
             metrics: {
                 outstanding: number;
@@ -277,7 +278,6 @@ export class ReportsService {
         
         const blocks: Record<number, Block> = {};
         
-        // Outstanding per agent
         for (const r of carteraRows) {
             const outstanding = +r.totalLoaned - +r.totalRepaid;
             blocks[r.agentId] = {
@@ -293,11 +293,9 @@ export class ReportsService {
             };
         }
         
-        // Movements per agent
         for (const m of movRows) {
             const blk =
             blocks[m.agentId] ??
-            // Agent had movements but no outstanding (rare but possible)
             {
                 id: m.agentId,
                 label: `Agent ${m.agentId}`,
@@ -347,16 +345,15 @@ export class ReportsService {
         return {
             meta: {
                 date: businessDate,
-                view: caller.role, // ADMIN or MANAGER
+                view: caller.role,
                 generatedAt: new Date().toISOString(),
                 branchFilter: branchId ?? null,
                 agentFilter: agentId ?? null,
             },
             totals,
-            blocks: Object.values(blocks), // one block per agent
+            blocks: Object.values(blocks),
         };
     }
-    
     
     /* ---------------------------------------------------------------------------
     * ACTIVE LOANS BY STATUS REPORT

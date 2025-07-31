@@ -35,24 +35,24 @@ export class TransactionsService {
     
     @InjectRepository(CashMovement)
     private readonly cashMovementRepo: Repository<CashMovement>,
-
+    
     @InjectRepository(PaymentAccount)
     private readonly paymentAccountRepo: Repository<PaymentAccount>,
     
     private readonly chatService: ChatService,
   ) { }
-
+  
   async findRepaymentAccountForLoan(requestedAmount: number): Promise<PaymentAccount | null> {
-  const now = new Date();
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-
-  const accounts = await this.paymentAccountRepo.find({
-    where: { isActive: true },
-    order: { isPrimary: 'DESC' },
-  });
-
-  for (const account of accounts) {
-    const totalReceived = await this.transactionRepo
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    
+    const accounts = await this.paymentAccountRepo.find({
+      where: { isActive: true },
+      order: { isPrimary: 'DESC' },
+    });
+    
+    for (const account of accounts) {
+      const totalReceived = await this.transactionRepo
       .createQueryBuilder('tx')
       .leftJoin('tx.loanRequest', 'loan')
       .where('tx.Transactiontype = :type', { type: TransactionType.REPAYMENT })
@@ -63,18 +63,18 @@ export class TransactionsService {
       })
       .select('SUM(tx.amount)', 'sum')
       .getRawOne();
-
-    const currentTotal = Number(totalReceived?.sum ?? 0);
-    const projected = currentTotal + requestedAmount;
-
-    if (projected <= Number(account.limit)) {
-      return account;
+      
+      const currentTotal = Number(totalReceived?.sum ?? 0);
+      const projected = currentTotal + requestedAmount;
+      
+      if (projected <= Number(account.limit)) {
+        return account;
+      }
     }
+    
+    return null;
   }
-
-  return null;
-}
-
+  
   
   async create(data: any): Promise<LoanTransaction> {
     const { loanRequestId, transactionType, amount, reference } = data;
@@ -167,21 +167,22 @@ export class TransactionsService {
       const pngBuffer = await sharp(svgBuffer).png().toBuffer();
       try {
         
-      await this.chatService.sendMessageToClient(client.id, message);
-      
-      await this.chatService.sendSimulationToClient(client.id, {
-        fieldname: 'file',
-        originalname: 'desembolso.png',
-        encoding: '7bit',
-        mimetype: 'image/png',
-        size: pngBuffer.length,
-        destination: '',
-        filename: 'desembolso.png',
-        path: '',
-        buffer: pngBuffer,
-        stream: Readable.from(pngBuffer),
-      });
+        await this.chatService.sendMessageToClient(client.id, message);
+        
+        await this.chatService.sendSimulationToClient(client.id, {
+          fieldname: 'file',
+          originalname: 'desembolso.png',
+          encoding: '7bit',
+          mimetype: 'image/png',
+          size: pngBuffer.length,
+          destination: '',
+          filename: 'desembolso.png',
+          path: '',
+          buffer: pngBuffer,
+          stream: Readable.from(pngBuffer),
+        });
       } catch (error) {
+        console.log("FALLO DESEMBOLSANDO")
         console.log(error)
       }
       

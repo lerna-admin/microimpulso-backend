@@ -25,13 +25,14 @@ export class ReportsController {
         @Query('userId') userId: string,
         @Query('date') date?: string,
         @Query('branchId') branchId?: string,
-
+        @Query('branchId') agentId?: string
 
     ) {
         if (!userId) {
             throw new BadRequestException('userId is required');
         }
-        return this.reports.getDailyCashCountByAgent(userId, date, branchId);
+        let opts = {date, branchId, agentId};
+        return this.reports.getDailyCashCountByAgent(userId, opts);
     }
     
     /* ------------------------------------------------------------------

@@ -175,84 +175,79 @@ export class ReportsService {
     *  - Repayments / Disbursements / Penalties del día
     * ------------------------------------------------------------------------ */
     async getDailyCashCountByAgent(
-    userId: string,
-    opts?: { date?: string; branchId?: string; agentId?: string },
+        userId: string,
+        opts?: { date?: string; branchId?: string; agentId?: string },
     ) {
-    /* ─────────────────────────────────────────────── 0. INPUTS */
-    const { date, branchId, agentId } = opts ?? {};
-    const businessDate = date ?? dayjs().format('YYYY-MM-DD');
-
-    /* ─────────────────────────────────────────────── 1. CALLER  */
-    const caller = await this.userRepo.findOne({ where: { id: +userId } });
-    if (!caller) throw new NotFoundException('User not found');
-
-    if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
-        throw new ForbiddenException('Only ADMIN or MANAGER may call this');
-    }
-
-    /* ─────────────────────────────────────────────── 2. QUERIES */
-    /**
-     * Common WHERE fragments — appended dynamically so we can
-     * reuse the same SQL for both roles.
-     */
-    const whereCartera: string[] = [];
-    const paramsCartera: any[] = [];
-
-    const whereMov: string[] = ['DATE(t.date) = ?'];
-    const paramsMov: any[] = [businessDate];
-
-    // Role-specific restrictions
-    if (caller.role === 'ADMIN') {
-        whereCartera.push('branch.id = ?');
-        whereMov.push('branch.id = ?');
-        paramsCartera.push(caller.branchId);
-        paramsMov.push(caller.branchId);
-    } else if (branchId) {
-        whereCartera.push('branch.id = ?');
-        whereMov.push('branch.id = ?');
-        paramsCartera.push(branchId);
-        paramsMov.push(branchId);
-    }
-
-    // Optional agent filter
-    if (agentId) {
-        whereCartera.push('agent.id = ?');
-        whereMov.push('agent.id = ?');
-        paramsCartera.push(agentId);
-        paramsMov.push(agentId);
-    }
-
-    // Final WHERE clauses
-    const whereCarteraSql =
-        whereCartera.length > 0 ? `WHERE ${whereCartera.join(' AND ')}` : '';
-    const whereMovSql =
-        whereMov.length > 0 ? `WHERE ${whereMov.join(' AND ')}` : '';
-
-    // ── Portfolio (outstanding) ──────────────────────────────
-    const carteraSql = `
+        /* ───────────────────────── 0. INPUTS */
+        const { date, branchId, agentId } = opts ?? {};
+        const businessDate = date ?? dayjs().format('YYYY-MM-DD');
+        
+        /* ───────────────────────── 1. CALLER  */
+        const caller = await this.userRepo.findOne({ where: { id: +userId } });
+        if (!caller) throw new NotFoundException('User not found');
+        
+        if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
+            throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+        }
+        
+        /* ───────────────────────── 2. DYNAMIC FILTERS */
+        const whereCartera: string[] = [];
+        const paramsCartera: any[] = [];
+        
+        const whereMov: string[] = ['DATE(t.date) = ?'];
+        const paramsMov: any[] = [businessDate];
+        
+        // Branch restrictions
+        if (caller.role === 'ADMIN') {
+            whereCartera.push('branch.id = ?');
+            whereMov.push('branch.id = ?');
+            paramsCartera.push(caller.branchId);
+            paramsMov.push(caller.branchId);
+        } else if (branchId) {
+            whereCartera.push('branch.id = ?');
+            whereMov.push('branch.id = ?');
+            paramsCartera.push(branchId);
+            paramsMov.push(branchId);
+        }
+        
+        // Optional agent filter
+        if (agentId) {
+            whereCartera.push('agent.id = ?');
+            whereMov.push('agent.id = ?');
+            paramsCartera.push(agentId);
+            paramsMov.push(agentId);
+        }
+        
+        const whereCarteraSql =
+        whereCartera.length ? `WHERE ${whereCartera.join(' AND ')}` : '';
+        const whereMovSql =
+        whereMov.length ? `WHERE ${whereMov.join(' AND ')}` : '';
+        
+        /* ───────────────────────── 3. PORTFOLIO (outstanding loans) */
+        const carteraSql = `
         SELECT
-        agent.id             AS agentId,
-        agent.name           AS agentName,
-        branch.id            AS branchId,
-        branch.name          AS branchName,
-        SUM(lr.amount)              AS totalLoaned,
-        IFNULL(SUM(rep.repaid), 0)  AS totalRepaid
-        FROM loan_request lr
-        INNER JOIN user   agent  ON agent.id   = lr.agentId
-        INNER JOIN branch        ON branch.id  = agent.branchId
+        agent.id                       AS agentId,
+        agent.name                     AS agentName,
+        branch.id                      AS branchId,
+        branch.name                    AS branchName,
+        IFNULL(SUM(lr.amount), 0)      AS totalLoaned,
+        IFNULL(SUM(rep.repaid), 0)     AS totalRepaid
+        FROM user agent
+        INNER JOIN branch              ON branch.id = agent.branchId
+        LEFT JOIN loan_request lr      ON lr.agentId = agent.id
         LEFT JOIN (
             SELECT loanRequestId, SUM(amount) AS repaid
             FROM   loan_transaction
             WHERE  Transactiontype = 'repayment'
             GROUP  BY loanRequestId
-        ) rep ON rep.loanRequestId = lr.id
+        ) rep                          ON rep.loanRequestId = lr.id
         ${whereCarteraSql}
         GROUP BY agent.id, agent.name, branch.id, branch.name
     `;
-    const carteraRows = await this.txRepo.query(carteraSql, paramsCartera);
-
-    // ── Movements of the day ────────────────────────────────
-    const movSql = `
+        const carteraRows = await this.txRepo.query(carteraSql, paramsCartera);
+        
+        /* ───────────────────────── 4. MOVEMENTS OF THE DAY */
+        const movSql = `
         SELECT
         agent.id            AS agentId,
         t.Transactiontype   AS type,
@@ -260,109 +255,109 @@ export class ReportsService {
         SUM(t.amount)       AS amt
         FROM loan_transaction t
         INNER JOIN loan_request lr ON lr.id = t.loanRequestId
-        INNER JOIN user   agent     ON agent.id = lr.agentId
-        INNER JOIN branch           ON branch.id = agent.branchId
+        INNER JOIN user   agent    ON agent.id = lr.agentId
+        INNER JOIN branch          ON branch.id = agent.branchId
         ${whereMovSql}
         GROUP BY agent.id, t.Transactiontype
     `;
-    const movRows = await this.txRepo.query(movSql, paramsMov);
-
-    /* ─────────────────────────────────────────────── 3. MERGE  */
-    type Block = {
-        id: number;                // agentId
-        label: string;             // "AgentName (BranchName)"
-        branch: { id: number; name: string };
-        metrics: {
-        outstanding: number;
-        repayments: { count: number; amount: number };
-        disbursements: { count: number; amount: number };
-        penalties: { count: number };
-        };
-    };
-
-    const blocks: Record<number, Block> = {};
-
-    // Outstanding per agent
-    for (const r of carteraRows) {
-        const outstanding = +r.totalLoaned - +r.totalRepaid;
-        blocks[r.agentId] = {
-        id: r.agentId,
-        label: `${r.agentName} (${r.branchName})`,
-        branch: { id: r.branchId, name: r.branchName },
-        metrics: {
-            outstanding,
-            repayments: { count: 0, amount: 0 },
-            disbursements: { count: 0, amount: 0 },
-            penalties: { count: 0 },
-        },
-        };
-    }
-
-    // Movements per agent
-    for (const m of movRows) {
-        const blk =
-        blocks[m.agentId] ??
-        // This only happens if the agent had movements but no outstanding
-        {
-            id: m.agentId,
-            label: `Agent ${m.agentId}`,
-            branch: { id: 0, name: '' },
+        const movRows = await this.txRepo.query(movSql, paramsMov);
+        
+        /* ───────────────────────── 5. MERGE RESULTS */
+        type Block = {
+            id: number;        // agentId
+            label: string;     // "AgentName (BranchName)"
+            branch: { id: number; name: string };
             metrics: {
+                outstanding: number;
+                repayments: { count: number; amount: number };
+                disbursements: { count: number; amount: number };
+                penalties: { count: number };
+            };
+        };
+        
+        const blocks: Record<number, Block> = {};
+        
+        // Outstanding per agent
+        for (const r of carteraRows) {
+            const outstanding = +r.totalLoaned - +r.totalRepaid;
+            blocks[r.agentId] = {
+                id: r.agentId,
+                label: `${r.agentName} (${r.branchName})`,
+                branch: { id: r.branchId, name: r.branchName },
+                metrics: {
+                    outstanding,
+                    repayments: { count: 0, amount: 0 },
+                    disbursements: { count: 0, amount: 0 },
+                    penalties: { count: 0 },
+                },
+            };
+        }
+        
+        // Movements per agent
+        for (const m of movRows) {
+            const blk =
+            blocks[m.agentId] ??
+            // Agent had movements but no outstanding (rare but possible)
+            {
+                id: m.agentId,
+                label: `Agent ${m.agentId}`,
+                branch: { id: 0, name: '' },
+                metrics: {
+                    outstanding: 0,
+                    repayments: { count: 0, amount: 0 },
+                    disbursements: { count: 0, amount: 0 },
+                    penalties: { count: 0 },
+                },
+            };
+            
+            switch (m.type) {
+                case 'repayment':
+                blk.metrics.repayments.count += +m.cnt;
+                blk.metrics.repayments.amount += +m.amt;
+                break;
+                case 'disbursement':
+                blk.metrics.disbursements.count += +m.cnt;
+                blk.metrics.disbursements.amount += +m.amt;
+                break;
+                case 'penalty':
+                blk.metrics.penalties.count += +m.cnt;
+                break;
+            }
+            blocks[m.agentId] = blk;
+        }
+        
+        /* ───────────────────────── 6. GLOBAL TOTALS */
+        const totals = {
             outstanding: 0,
             repayments: { count: 0, amount: 0 },
             disbursements: { count: 0, amount: 0 },
             penalties: { count: 0 },
-            },
         };
-
-        switch (m.type) {
-        case 'repayment':
-            blk.metrics.repayments.count += +m.cnt;
-            blk.metrics.repayments.amount += +m.amt;
-            break;
-        case 'disbursement':
-            blk.metrics.disbursements.count += +m.cnt;
-            blk.metrics.disbursements.amount += +m.amt;
-            break;
-        case 'penalty':
-            blk.metrics.penalties.count += +m.cnt;
-            break;
+        
+        for (const blk of Object.values(blocks)) {
+            totals.outstanding += blk.metrics.outstanding;
+            totals.repayments.count += blk.metrics.repayments.count;
+            totals.repayments.amount += blk.metrics.repayments.amount;
+            totals.disbursements.count += blk.metrics.disbursements.count;
+            totals.disbursements.amount += blk.metrics.disbursements.amount;
+            totals.penalties.count += blk.metrics.penalties.count;
         }
-        blocks[m.agentId] = blk;
+        
+        /* ───────────────────────── 7. OUTPUT */
+        return {
+            meta: {
+                date: businessDate,
+                view: caller.role, // ADMIN or MANAGER
+                generatedAt: new Date().toISOString(),
+                branchFilter: branchId ?? null,
+                agentFilter: agentId ?? null,
+            },
+            totals,
+            blocks: Object.values(blocks), // one block per agent
+        };
     }
-
-    /* ─────────────────────────────────────────────── 4. TOTALS */
-    const totals = {
-        outstanding: 0,
-        repayments: { count: 0, amount: 0 },
-        disbursements: { count: 0, amount: 0 },
-        penalties: { count: 0 },
-    };
-
-    for (const blk of Object.values(blocks)) {
-        totals.outstanding += blk.metrics.outstanding;
-        totals.repayments.count += blk.metrics.repayments.count;
-        totals.repayments.amount += blk.metrics.repayments.amount;
-        totals.disbursements.count += blk.metrics.disbursements.count;
-        totals.disbursements.amount += blk.metrics.disbursements.amount;
-        totals.penalties.count += blk.metrics.penalties.count;
-    }
-
-    /* ─────────────────────────────────────────────── 5. OUTPUT */
-    return {
-        meta: {
-        date: businessDate,
-        view: caller.role, // ADMIN or MANAGER
-        generatedAt: new Date().toISOString(),
-        branchFilter: branchId ?? null,
-        agentFilter: agentId ?? null,
-        },
-        totals,
-        blocks: Object.values(blocks), // one block per agent
-    };
-    }
-
-
+    
+    
     /* ---------------------------------------------------------------------------
     * ACTIVE LOANS BY STATUS REPORT
     *   - ADMIN   → shows only loans in caller's branch
@@ -2275,240 +2270,240 @@ async getDailyRenewals(userId: string, date?: string) {
     }
     
     
-async getTransactionsDetail(
-  userId: number,
-  startDate?: string,
-  endDate?: string,
-  branchId?: string,
-  agentId?: string,
-) {
-  const caller = await this.userRepo.findOne({ where: { id: userId } });
-  if (!caller) throw new NotFoundException('User not found');
-  if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
-    throw new ForbiddenException('Only ADMIN or MANAGER may call this');
-  }
-
-  const start = startDate ? dayjs(startDate).startOf('day') : null;
-  const end   = endDate   ? dayjs(endDate).endOf('day')     : null;
-
-  const qb = this.txRepo
-    .createQueryBuilder('tx')
-    .innerJoinAndSelect('tx.loanRequest', 'loanRequest')
-    .innerJoinAndSelect('loanRequest.client', 'client')
-    .innerJoinAndSelect('loanRequest.agent', 'agent')
-    .innerJoinAndSelect('agent.branch', 'branch');
-
-  if (start)   qb.andWhere('tx.date >= :startDate', { startDate: start.toDate() });
-  if (end)     qb.andWhere('tx.date <= :endDate', { endDate: end.toDate() });
-  if (agentId) qb.andWhere('agent.id = :agentId',   { agentId: +agentId });
-  if (branchId)qb.andWhere('branch.id = :branchId', { branchId: +branchId });
-
-  if (caller.role === 'ADMIN' && !branchId) {
-    qb.andWhere('branch.id = :adminBranch', { adminBranch: caller.branchId });
-  }
-
-  const rows = await qb.orderBy('tx.date', 'DESC').getMany();
-
-  let skipped = 0;
-  const transactionsOut: any[] = [];
-
-  for (const tx of rows) {
-    const lr = tx.loanRequest;
-    const cl = lr?.client;
-    const ag = lr?.agent;
-    const br = ag?.branch;
-
-    if (!lr || !cl || !ag || !br) {
-      skipped++;
-      continue;
+    async getTransactionsDetail(
+        userId: number,
+        startDate?: string,
+        endDate?: string,
+        branchId?: string,
+        agentId?: string,
+    ) {
+        const caller = await this.userRepo.findOne({ where: { id: userId } });
+        if (!caller) throw new NotFoundException('User not found');
+        if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
+            throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+        }
+        
+        const start = startDate ? dayjs(startDate).startOf('day') : null;
+        const end   = endDate   ? dayjs(endDate).endOf('day')     : null;
+        
+        const qb = this.txRepo
+        .createQueryBuilder('tx')
+        .innerJoinAndSelect('tx.loanRequest', 'loanRequest')
+        .innerJoinAndSelect('loanRequest.client', 'client')
+        .innerJoinAndSelect('loanRequest.agent', 'agent')
+        .innerJoinAndSelect('agent.branch', 'branch');
+        
+        if (start)   qb.andWhere('tx.date >= :startDate', { startDate: start.toDate() });
+        if (end)     qb.andWhere('tx.date <= :endDate', { endDate: end.toDate() });
+        if (agentId) qb.andWhere('agent.id = :agentId',   { agentId: +agentId });
+        if (branchId)qb.andWhere('branch.id = :branchId', { branchId: +branchId });
+        
+        if (caller.role === 'ADMIN' && !branchId) {
+            qb.andWhere('branch.id = :adminBranch', { adminBranch: caller.branchId });
+        }
+        
+        const rows = await qb.orderBy('tx.date', 'DESC').getMany();
+        
+        let skipped = 0;
+        const transactionsOut: any[] = [];
+        
+        for (const tx of rows) {
+            const lr = tx.loanRequest;
+            const cl = lr?.client;
+            const ag = lr?.agent;
+            const br = ag?.branch;
+            
+            if (!lr || !cl || !ag || !br) {
+                skipped++;
+                continue;
+            }
+            
+            transactionsOut.push({
+                id: tx.id,
+                type: tx.Transactiontype,
+                amount: tx.amount,
+                date: tx.date,
+                client: { id: cl.id, name: cl.name },
+                agent:  { id: ag.id, name: ag.name },
+                branch: { id: br.id, name: br.name },
+            });
+        }
+        
+        return {
+            meta: {
+                view: caller.role,
+                startDate: start ? start.format('YYYY-MM-DD') : null,
+                endDate:   end   ? end.format('YYYY-MM-DD')   : null,
+                branchId:  branchId ? +branchId : (caller.role === 'ADMIN' ? caller.branchId : null),
+                agentId:   agentId ? +agentId : null,
+                total:     transactionsOut.length,
+                skipped,
+            },
+            transactions: transactionsOut,
+        };
     }
-
-    transactionsOut.push({
-      id: tx.id,
-      type: tx.Transactiontype,
-      amount: tx.amount,
-      date: tx.date,
-      client: { id: cl.id, name: cl.name },
-      agent:  { id: ag.id, name: ag.name },
-      branch: { id: br.id, name: br.name },
-    });
-  }
-
-  return {
-    meta: {
-      view: caller.role,
-      startDate: start ? start.format('YYYY-MM-DD') : null,
-      endDate:   end   ? end.format('YYYY-MM-DD')   : null,
-      branchId:  branchId ? +branchId : (caller.role === 'ADMIN' ? caller.branchId : null),
-      agentId:   agentId ? +agentId : null,
-      total:     transactionsOut.length,
-      skipped,
-    },
-    transactions: transactionsOut,
-  };
-}
-
-
-async getBranchStatsReport(
-  userId: number,
-  startDate?: string,
-  endDate?: string,
-) {
-  const caller = await this.userRepo.findOne({ where: { id: userId } });
-  if (!caller) throw new NotFoundException('User not found');
-
-  if (caller.role !== 'MANAGER' && caller.role !== 'ADMIN') {
-    throw new ForbiddenException('Only MANAGER or ADMIN may access this report');
-  }
-
-  const start = startDate ? dayjs(startDate).startOf('day') : dayjs().subtract(30, 'day').startOf('day');
-  const end = endDate ? dayjs(endDate).endOf('day') : dayjs().endOf('day');
-
-  // ADMIN: limitar solo a su sede
-  const adminBranchId = caller.role === 'ADMIN' ? caller.branchId : null;
-
-  // 1) Obtener préstamos
-  const loans = await this.loanRepo.find({
-    where: {
-      createdAt: Between(start.toDate(), end.toDate()),
-    },
-    relations: ['agent', 'agent.branch', 'client'],
-  });
-
-  const filteredLoans = adminBranchId
-    ? loans.filter(l => l.agent.branch.id === adminBranchId)
-    : loans;
-
-  // 2) Obtener transacciones
-  const transactions = await this.txRepo.find({
-    where: {
-      date: Between(start.toDate(), end.toDate()),
-    },
-    relations: ['loanRequest', 'loanRequest.agent', 'loanRequest.agent.branch'],
-  });
-
-  const filteredTx = adminBranchId
-    ? transactions.filter(tx => tx.loanRequest.agent.branch.id === adminBranchId)
-    : transactions;
-
-  const branchMap: Map<number, any> = new Map();
-
-  function getBranchEntry(bId: number, bName: string) {
-    let entry = branchMap.get(bId);
-    if (!entry) {
-      entry = {
-        branchId: bId,
-        branchName: bName,
-        totalLoaned: 0,
-        totalDisbursed: 0,
-        totalCollected: 0,
-        penalties: 0,
-        repayments: 0,
-        activeClients: 0,
-        overdueAmount: 0,
-        overdueLoans: 0,
-        clientsSet: new Set<number>(),
-      };
-      branchMap.set(bId, entry);
+    
+    
+    async getBranchStatsReport(
+        userId: number,
+        startDate?: string,
+        endDate?: string,
+    ) {
+        const caller = await this.userRepo.findOne({ where: { id: userId } });
+        if (!caller) throw new NotFoundException('User not found');
+        
+        if (caller.role !== 'MANAGER' && caller.role !== 'ADMIN') {
+            throw new ForbiddenException('Only MANAGER or ADMIN may access this report');
+        }
+        
+        const start = startDate ? dayjs(startDate).startOf('day') : dayjs().subtract(30, 'day').startOf('day');
+        const end = endDate ? dayjs(endDate).endOf('day') : dayjs().endOf('day');
+        
+        // ADMIN: limitar solo a su sede
+        const adminBranchId = caller.role === 'ADMIN' ? caller.branchId : null;
+        
+        // 1) Obtener préstamos
+        const loans = await this.loanRepo.find({
+            where: {
+                createdAt: Between(start.toDate(), end.toDate()),
+            },
+            relations: ['agent', 'agent.branch', 'client'],
+        });
+        
+        const filteredLoans = adminBranchId
+        ? loans.filter(l => l.agent.branch.id === adminBranchId)
+        : loans;
+        
+        // 2) Obtener transacciones
+        const transactions = await this.txRepo.find({
+            where: {
+                date: Between(start.toDate(), end.toDate()),
+            },
+            relations: ['loanRequest', 'loanRequest.agent', 'loanRequest.agent.branch'],
+        });
+        
+        const filteredTx = adminBranchId
+        ? transactions.filter(tx => tx.loanRequest.agent.branch.id === adminBranchId)
+        : transactions;
+        
+        const branchMap: Map<number, any> = new Map();
+        
+        function getBranchEntry(bId: number, bName: string) {
+            let entry = branchMap.get(bId);
+            if (!entry) {
+                entry = {
+                    branchId: bId,
+                    branchName: bName,
+                    totalLoaned: 0,
+                    totalDisbursed: 0,
+                    totalCollected: 0,
+                    penalties: 0,
+                    repayments: 0,
+                    activeClients: 0,
+                    overdueAmount: 0,
+                    overdueLoans: 0,
+                    clientsSet: new Set<number>(),
+                };
+                branchMap.set(bId, entry);
+            }
+            return entry;
+        }
+        
+        // 3.a) Procesar préstamos
+        for (const lr of filteredLoans) {
+            const bId = lr.agent.branch.id;
+            const bName = lr.agent.branch.name;
+            const entry = getBranchEntry(bId, bName);
+            
+            entry.totalLoaned += Number(lr.amount);
+            
+            const isActive = ['funded', 'approved'].includes((lr.status || '').toLowerCase());
+            if (isActive && lr.client?.id) {
+                entry.clientsSet.add(lr.client.id);
+            }
+            
+            const txsForLoan = filteredTx.filter(
+                tx => tx.loanRequest?.id === lr.id && tx.Transactiontype === 'repayment'
+            );
+            
+            const totalPaid = txsForLoan.reduce((sum, tx) => sum + Number(tx.amount), 0);
+            const pendingAmount = Number(lr.amount) - totalPaid;
+            
+            if (lr.endDateAt && dayjs(lr.endDateAt).isBefore(end) && pendingAmount > 0) {
+                entry.overdueAmount += pendingAmount;
+                entry.overdueLoans += 1;
+            }
+        }
+        // 3.b) Procesar transacciones
+        for (const tx of filteredTx) {
+            if (!tx.loanRequest?.agent?.branch) continue; // Seguridad ante datos incompletos
+            
+            const bId = tx.loanRequest.agent.branch.id;
+            const bName = tx.loanRequest.agent.branch.name;
+            const entry = getBranchEntry(bId, bName);
+            
+            const amount = Number(tx.amount);
+            switch (tx.Transactiontype) {
+                case 'disbursement':
+                entry.totalDisbursed += amount;
+                break;
+                case 'repayment':
+                entry.repayments += amount;
+                entry.totalCollected += amount;
+                break;
+                case 'penalty':
+                entry.penalties += amount;
+                entry.totalCollected += amount;
+                break;
+            }
+        }
+        
+        
+        // 4) Construir bloques
+        const branches = Array.from(branchMap.values()).map(b => {
+            b.activeClients = b.clientsSet.size;
+            delete b.clientsSet;
+            b.netFlow = (b.repayments + b.penalties) - b.totalDisbursed;
+            return b;
+        });
+        
+        // 5) Totales globales
+        const totals = branches.reduce((acc, b) => {
+            acc.totalLoaned += b.totalLoaned;
+            acc.totalDisbursed += b.totalDisbursed;
+            acc.totalCollected += b.totalCollected;
+            acc.repayments += b.repayments;
+            acc.penalties += b.penalties;
+            acc.activeClients += b.activeClients;
+            acc.overdueAmount += b.overdueAmount;
+            acc.overdueLoans += b.overdueLoans;
+            acc.netFlow += b.netFlow;
+            return acc;
+        }, {
+            totalLoaned: 0,
+            totalDisbursed: 0,
+            totalCollected: 0,
+            repayments: 0,
+            penalties: 0,
+            activeClients: 0,
+            overdueAmount: 0,
+            overdueLoans: 0,
+            netFlow :0
+        });
+        
+        return {
+            meta: {
+                view: caller.role,
+                startDate: start.format('YYYY-MM-DD'),
+                endDate: end.format('YYYY-MM-DD'),
+                generatedAt: new Date().toISOString(),
+            },
+            totals,
+            branches: branches.sort((a, b) => a.branchId - b.branchId),
+        };
     }
-    return entry;
-  }
-
-  // 3.a) Procesar préstamos
-  for (const lr of filteredLoans) {
-    const bId = lr.agent.branch.id;
-    const bName = lr.agent.branch.name;
-    const entry = getBranchEntry(bId, bName);
-
-    entry.totalLoaned += Number(lr.amount);
-
-    const isActive = ['funded', 'approved'].includes((lr.status || '').toLowerCase());
-    if (isActive && lr.client?.id) {
-      entry.clientsSet.add(lr.client.id);
-    }
-
-    const txsForLoan = filteredTx.filter(
-      tx => tx.loanRequest?.id === lr.id && tx.Transactiontype === 'repayment'
-    );
-
-    const totalPaid = txsForLoan.reduce((sum, tx) => sum + Number(tx.amount), 0);
-    const pendingAmount = Number(lr.amount) - totalPaid;
-
-    if (lr.endDateAt && dayjs(lr.endDateAt).isBefore(end) && pendingAmount > 0) {
-      entry.overdueAmount += pendingAmount;
-      entry.overdueLoans += 1;
-    }
-  }
-// 3.b) Procesar transacciones
-for (const tx of filteredTx) {
-  if (!tx.loanRequest?.agent?.branch) continue; // Seguridad ante datos incompletos
-
-  const bId = tx.loanRequest.agent.branch.id;
-  const bName = tx.loanRequest.agent.branch.name;
-  const entry = getBranchEntry(bId, bName);
-
-  const amount = Number(tx.amount);
-  switch (tx.Transactiontype) {
-    case 'disbursement':
-      entry.totalDisbursed += amount;
-      break;
-    case 'repayment':
-      entry.repayments += amount;
-      entry.totalCollected += amount;
-      break;
-    case 'penalty':
-      entry.penalties += amount;
-      entry.totalCollected += amount;
-      break;
-  }
-}
-
-
-  // 4) Construir bloques
-  const branches = Array.from(branchMap.values()).map(b => {
-    b.activeClients = b.clientsSet.size;
-    delete b.clientsSet;
-    b.netFlow = (b.repayments + b.penalties) - b.totalDisbursed;
-    return b;
-  });
-
-  // 5) Totales globales
-  const totals = branches.reduce((acc, b) => {
-    acc.totalLoaned += b.totalLoaned;
-    acc.totalDisbursed += b.totalDisbursed;
-    acc.totalCollected += b.totalCollected;
-    acc.repayments += b.repayments;
-    acc.penalties += b.penalties;
-    acc.activeClients += b.activeClients;
-    acc.overdueAmount += b.overdueAmount;
-    acc.overdueLoans += b.overdueLoans;
-    acc.netFlow += b.netFlow;
-    return acc;
-  }, {
-    totalLoaned: 0,
-    totalDisbursed: 0,
-    totalCollected: 0,
-    repayments: 0,
-    penalties: 0,
-    activeClients: 0,
-    overdueAmount: 0,
-    overdueLoans: 0,
-    netFlow :0
-  });
-
-  return {
-    meta: {
-      view: caller.role,
-      startDate: start.format('YYYY-MM-DD'),
-      endDate: end.format('YYYY-MM-DD'),
-      generatedAt: new Date().toISOString(),
-    },
-    totals,
-    branches: branches.sort((a, b) => a.branchId - b.branchId),
-  };
-}
-
-
+    
+    
     
     
 }

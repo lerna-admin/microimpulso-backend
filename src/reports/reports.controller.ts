@@ -25,7 +25,7 @@ export class ReportsController {
         @Query('userId') userId: string,
         @Query('date') date?: string,
         @Query('branchId') branchId?: string,
-        @Query('branchId') agentId?: string
+        @Query('agentId') agentId?: string
 
     ) {
         if (!userId) {

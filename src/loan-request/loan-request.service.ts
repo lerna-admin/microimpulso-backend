@@ -343,14 +343,22 @@ export class LoanRequestService {
     return await this.loanRequestRepository.save(updated);
   }
   
-  async getClosingSummary(agentId: number) {
-  // 1) Rango de "hoy" en America/Bogota, en UTC para la DB
-  const tzName = 'America/Bogota';
-  const start = dayjs().tz(tzName).startOf('day').utc().toDate();
-  const end   = dayjs().tz(tzName).endOf('day').utc().toDate();
 
-  // 2) Cartera (opción SQL agregada, evita traer todas las transacciones)
-  //    Ajusta columnas: loan.amount (desembolsado?) y tx.Transactiontype, tx.amount
+async getClosingSummary(agentId: number) {
+  /** 
+   * Compute today's range in local time and format EXACTLY like SQLite stores it.
+   * Your DB rows look like "YYYY-MM-DD HH:mm:ss" (no 'T' or 'Z'); 
+   * comparisons are textual in SQLite if stored as TEXT, so formats must match.
+   */
+  const TZ = 'America/Bogota';
+  const SQL_TS = 'YYYY-MM-DD HH:mm:ss';
+  const start = dayjs().tz(TZ).startOf('day').format(SQL_TS);
+  const end   = dayjs().tz(TZ).endOf('day').format(SQL_TS);
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // 1) Cartera = SUM(desembolsado) - SUM(repagos) for this agent (lifecycle-wide)
+  //    Keep business logic: funded/ completed repayments reduce saldo.
+  // ────────────────────────────────────────────────────────────────────────────
   const { totalAmount } = await this.loanRequestRepository
     .createQueryBuilder('loan')
     .select('COALESCE(SUM(loan.amount), 0)', 'totalAmount')
@@ -361,7 +369,7 @@ export class LoanRequestService {
   const { totalRepaid } = await this.transactionRepository
     .createQueryBuilder('tx')
     .innerJoin('tx.loanRequest', 'loan')
-    .select(`COALESCE(SUM(CASE WHEN tx.Transactiontype = :rep THEN tx.amount ELSE 0 END), 0)`, 'totalRepaid')
+    .select('COALESCE(SUM(CASE WHEN tx.Transactiontype = :rep THEN tx.amount ELSE 0 END), 0)', 'totalRepaid')
     .where('loan.status IN (:...st)', { st: [LoanRequestStatus.FUNDED, LoanRequestStatus.COMPLETED] })
     .andWhere('loan.agentId = :agentId', { agentId })
     .setParameters({ rep: TransactionType.REPAYMENT })
@@ -369,8 +377,11 @@ export class LoanRequestService {
 
   const cartera = Number(totalAmount ?? 0) - Number(totalRepaid ?? 0);
 
-  // 3) Cobrado hoy (todas las REPAYMENT hoy, incluso COMPLETED), con filtro de rango
-  const cobradoRows = await this.transactionRepository
+  // ────────────────────────────────────────────────────────────────────────────
+  // 2) Cobrado hoy: all REPAYMENT today for this agent (status-agnostic)
+  //    Use BETWEEN with the same string format as DB.
+  // ────────────────────────────────────────────────────────────────────────────
+  const cobradoRow = await this.transactionRepository
     .createQueryBuilder('tx')
     .innerJoin('tx.loanRequest', 'loan')
     .innerJoin('loan.agent', 'agent')
@@ -380,14 +391,16 @@ export class LoanRequestService {
     .andWhere('agent.id = :agentId', { agentId })
     .getRawOne<{ sum: string }>();
 
-  const cobrado = Number(cobradoRows?.sum ?? 0);
+  const cobrado = Number(cobradoRow?.sum ?? 0);
 
-  // 4) Renovados hoy (compara renewedAt por rango)
+  // ────────────────────────────────────────────────────────────────────────────
+  // 3) Renovados hoy: renewals whose renewedAt falls within today's range
+  // ────────────────────────────────────────────────────────────────────────────
   const renewedToday = await this.loanRequestRepository
     .createQueryBuilder('loan')
     .select([
-      'COUNT(*)::int AS count',              // ajusta a tu SQL dialect
-      'COALESCE(SUM(loan.requestedAmount),0) AS total',
+      'COUNT(*) AS count', // no Postgres ::int cast; cast in JS below
+      'COALESCE(SUM(loan.requestedAmount), 0) AS total',
     ])
     .where('loan.agentId = :agentId', { agentId })
     .andWhere('loan.isRenewed = :r', { r: true })
@@ -397,13 +410,16 @@ export class LoanRequestService {
   const renovados = Number(renewedToday?.count ?? 0);
   const valorRenovados = Number(renewedToday?.total ?? 0);
 
-  // 5) Nuevos hoy (DISBURSEMENT con filtro por agente en SQL)
+  // ────────────────────────────────────────────────────────────────────────────
+  // 4) Nuevos hoy: disbursements today for this agent (count + amount)
+  //    SUM prefers loan.requestedAmount, fallback to tx.amount if needed.
+  // ────────────────────────────────────────────────────────────────────────────
   const newRows = await this.transactionRepository
     .createQueryBuilder('tx')
     .innerJoin('tx.loanRequest', 'loan')
     .innerJoin('loan.agent', 'agent')
     .select([
-      'COUNT(*)::int AS count',
+      'COUNT(*) AS count',
       'COALESCE(SUM(COALESCE(loan.requestedAmount, tx.amount)), 0) AS total',
     ])
     .where('tx.Transactiontype = :type', { type: TransactionType.DISBURSEMENT })
@@ -414,7 +430,9 @@ export class LoanRequestService {
   const nuevos = Number(newRows?.count ?? 0);
   const valorNuevos = Number(newRows?.total ?? 0);
 
-  // 6) Clientes únicos (si realmente quieres “clientes” y no “préstamos”)
+  // ────────────────────────────────────────────────────────────────────────────
+  // 5) Clientes únicos con loans FUNDED del agente (stock metric)
+  // ────────────────────────────────────────────────────────────────────────────
   const clientsRow = await this.loanRequestRepository
     .createQueryBuilder('loan')
     .innerJoin('loan.client', 'c')
@@ -428,7 +446,7 @@ export class LoanRequestService {
   return {
     cartera,
     cobrado,
-    clientes,        // ahora sí, clientes únicos con loans funded del agente
+    clientes,       // unique clients with FUNDED loans for this agent
     renovados,
     valorRenovados,
     nuevos,

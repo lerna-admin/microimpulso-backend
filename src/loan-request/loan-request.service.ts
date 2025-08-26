@@ -344,28 +344,22 @@ export class LoanRequestService {
   }
   
 
-  
 async getClosingSummary(agentId: number) {
-  /**
-   * SQLite-friendly day filtering:
-   *  - We compare the DATE portion as text: substr('YYYY-MM-DD HH:mm:ss', 1, 10) = 'YYYY-MM-DD'
-   *  - This avoids timezone pitfalls and format mismatches for TEXT datetime columns.
-   */
+  // 1) Local "today" for Bogota, compare DATE portion in SQLite
   const TZ = 'America/Bogota';
-  const today = dayjs().tz(TZ).format('YYYY-MM-DD'); // e.g. '2025-08-25'
+  const today = dayjs().tz(TZ).format('YYYY-MM-DD'); // e.g., "2025-08-25"
 
   // ────────────────────────────────────────────────────────────────────────────
-  // 1) Cartera = SUM(disbursed) - SUM(repayments) for this agent
-  //    Keep business logic per your previous definition.
+  // Cartera = SUM(disbursed) - SUM(repayments) for this agent
   // ────────────────────────────────────────────────────────────────────────────
-  const { totalAmount } = await this.loanRequestRepository
+  const totalAmountRow = await this.loanRequestRepository
     .createQueryBuilder('loan')
     .select('COALESCE(SUM(loan.amount), 0)', 'totalAmount')
     .where('loan.status = :status', { status: LoanRequestStatus.FUNDED })
     .andWhere('loan.agentId = :agentId', { agentId })
     .getRawOne<{ totalAmount: string }>();
 
-  const { totalRepaid } = await this.transactionRepository
+  const totalRepaidRow = await this.transactionRepository
     .createQueryBuilder('tx')
     .innerJoin('tx.loanRequest', 'loan')
     .select(
@@ -376,11 +370,12 @@ async getClosingSummary(agentId: number) {
     .andWhere('loan.agentId = :agentId', { agentId })
     .getRawOne<{ totalRepaid: string }>();
 
-  const cartera = Number(totalAmount ?? 0) - Number(totalRepaid ?? 0);
+  const totalAmount = Number(totalAmountRow?.totalAmount ?? 0);
+  const totalRepaid = Number(totalRepaidRow?.totalRepaid ?? 0);
+  const cartera = totalAmount - totalRepaid;
 
   // ────────────────────────────────────────────────────────────────────────────
-  // 2) Cobrado hoy: all REPAYMENT rows whose DATE(tx.date) = today for this agent
-  //    Use LOWER(type) to avoid case mismatches and substr(date,1,10) for SQLite.
+  // Cobrado hoy: all REPAYMENT rows for this agent where DATE(tx.date) = today
   // ────────────────────────────────────────────────────────────────────────────
   const cobradoRow = await this.transactionRepository
     .createQueryBuilder('tx')
@@ -395,12 +390,12 @@ async getClosingSummary(agentId: number) {
   const cobrado = Number(cobradoRow?.sum ?? 0);
 
   // ────────────────────────────────────────────────────────────────────────────
-  // 3) Renovados hoy: loans renewed where DATE(renewedAt) = today
+  // Renovados hoy: loans with isRenewed = true and DATE(renewedAt) = today
   // ────────────────────────────────────────────────────────────────────────────
-  const renewedToday = await this.loanRequestRepository
+  const renewedTodayRow = await this.loanRequestRepository
     .createQueryBuilder('loan')
     .select([
-      'COUNT(*) AS count', // cast later in JS
+      'COUNT(*) AS count', // cast in JS
       'COALESCE(SUM(loan.requestedAmount), 0) AS total',
     ])
     .where('loan.agentId = :agentId', { agentId })
@@ -408,12 +403,12 @@ async getClosingSummary(agentId: number) {
     .andWhere(`substr(loan.renewedAt, 1, 10) = :today`, { today })
     .getRawOne<{ count: string; total: string }>();
 
-  const renovados = Number(renewedToday?.count ?? 0);
-  const valorRenovados = Number(renewedToday?.total ?? 0);
+  const renovados = Number(renewedTodayRow?.count ?? 0);
+  const valorRenovados = Number(renewedTodayRow?.total ?? 0);
 
   // ────────────────────────────────────────────────────────────────────────────
-  // 4) Nuevos hoy: disbursements today for this agent (count + amount)
-  //    Prefer loan.requestedAmount, fallback to tx.amount if needed.
+  // Nuevos hoy: disbursements today for this agent
+  // Prefer loan.requestedAmount, fallback to tx.amount
   // ────────────────────────────────────────────────────────────────────────────
   const newRows = await this.transactionRepository
     .createQueryBuilder('tx')
@@ -432,7 +427,7 @@ async getClosingSummary(agentId: number) {
   const valorNuevos = Number(newRows?.total ?? 0);
 
   // ────────────────────────────────────────────────────────────────────────────
-  // 5) Unique clients with FUNDED loans (stock metric)
+  // Unique clients with FUNDED loans (stock metric)
   // ────────────────────────────────────────────────────────────────────────────
   const clientsRow = await this.loanRequestRepository
     .createQueryBuilder('loan')
@@ -446,12 +441,13 @@ async getClosingSummary(agentId: number) {
 
   return {
     cartera,
-    cobrado,        // should be 240000 + 200000 = 440000 with your sample
-    clientes,       // 2 with your sample
+    cobrado,        // expected 440000 with your sample rows
+    clientes,       // expected 2 with your sample
     renovados,
     valorRenovados,
-    nuevos,         // should be 2 with your sample
-    valorNuevos,    // should be 200000 + 300000 = 500000 with your sample
+    nuevos,         // expected 2 with your sample
+    valorNuevos,    // expected 500000 with your sample
   };
 }
+
 }

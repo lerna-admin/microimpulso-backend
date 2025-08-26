@@ -344,20 +344,19 @@ export class LoanRequestService {
   }
   
 
+  
 async getClosingSummary(agentId: number) {
-  /** 
-   * Compute today's range in local time and format EXACTLY like SQLite stores it.
-   * Your DB rows look like "YYYY-MM-DD HH:mm:ss" (no 'T' or 'Z'); 
-   * comparisons are textual in SQLite if stored as TEXT, so formats must match.
+  /**
+   * SQLite-friendly day filtering:
+   *  - We compare the DATE portion as text: substr('YYYY-MM-DD HH:mm:ss', 1, 10) = 'YYYY-MM-DD'
+   *  - This avoids timezone pitfalls and format mismatches for TEXT datetime columns.
    */
   const TZ = 'America/Bogota';
-  const SQL_TS = 'YYYY-MM-DD HH:mm:ss';
-  const start = dayjs().tz(TZ).startOf('day').format(SQL_TS);
-  const end   = dayjs().tz(TZ).endOf('day').format(SQL_TS);
+  const today = dayjs().tz(TZ).format('YYYY-MM-DD'); // e.g. '2025-08-25'
 
   // ────────────────────────────────────────────────────────────────────────────
-  // 1) Cartera = SUM(desembolsado) - SUM(repagos) for this agent (lifecycle-wide)
-  //    Keep business logic: funded/ completed repayments reduce saldo.
+  // 1) Cartera = SUM(disbursed) - SUM(repayments) for this agent
+  //    Keep business logic per your previous definition.
   // ────────────────────────────────────────────────────────────────────────────
   const { totalAmount } = await this.loanRequestRepository
     .createQueryBuilder('loan')
@@ -369,42 +368,44 @@ async getClosingSummary(agentId: number) {
   const { totalRepaid } = await this.transactionRepository
     .createQueryBuilder('tx')
     .innerJoin('tx.loanRequest', 'loan')
-    .select('COALESCE(SUM(CASE WHEN tx.Transactiontype = :rep THEN tx.amount ELSE 0 END), 0)', 'totalRepaid')
+    .select(
+      `COALESCE(SUM(CASE WHEN LOWER(tx.Transactiontype) = 'repayment' THEN tx.amount ELSE 0 END), 0)`,
+      'totalRepaid'
+    )
     .where('loan.status IN (:...st)', { st: [LoanRequestStatus.FUNDED, LoanRequestStatus.COMPLETED] })
     .andWhere('loan.agentId = :agentId', { agentId })
-    .setParameters({ rep: TransactionType.REPAYMENT })
     .getRawOne<{ totalRepaid: string }>();
 
   const cartera = Number(totalAmount ?? 0) - Number(totalRepaid ?? 0);
 
   // ────────────────────────────────────────────────────────────────────────────
-  // 2) Cobrado hoy: all REPAYMENT today for this agent (status-agnostic)
-  //    Use BETWEEN with the same string format as DB.
+  // 2) Cobrado hoy: all REPAYMENT rows whose DATE(tx.date) = today for this agent
+  //    Use LOWER(type) to avoid case mismatches and substr(date,1,10) for SQLite.
   // ────────────────────────────────────────────────────────────────────────────
   const cobradoRow = await this.transactionRepository
     .createQueryBuilder('tx')
     .innerJoin('tx.loanRequest', 'loan')
     .innerJoin('loan.agent', 'agent')
     .select('COALESCE(SUM(tx.amount), 0)', 'sum')
-    .where('tx.Transactiontype = :type', { type: TransactionType.REPAYMENT })
-    .andWhere('tx.date BETWEEN :start AND :end', { start, end })
+    .where(`LOWER(tx.Transactiontype) = 'repayment'`)
+    .andWhere(`substr(tx.date, 1, 10) = :today`, { today })
     .andWhere('agent.id = :agentId', { agentId })
     .getRawOne<{ sum: string }>();
 
   const cobrado = Number(cobradoRow?.sum ?? 0);
 
   // ────────────────────────────────────────────────────────────────────────────
-  // 3) Renovados hoy: renewals whose renewedAt falls within today's range
+  // 3) Renovados hoy: loans renewed where DATE(renewedAt) = today
   // ────────────────────────────────────────────────────────────────────────────
   const renewedToday = await this.loanRequestRepository
     .createQueryBuilder('loan')
     .select([
-      'COUNT(*) AS count', // no Postgres ::int cast; cast in JS below
+      'COUNT(*) AS count', // cast later in JS
       'COALESCE(SUM(loan.requestedAmount), 0) AS total',
     ])
     .where('loan.agentId = :agentId', { agentId })
     .andWhere('loan.isRenewed = :r', { r: true })
-    .andWhere('loan.renewedAt BETWEEN :start AND :end', { start, end })
+    .andWhere(`substr(loan.renewedAt, 1, 10) = :today`, { today })
     .getRawOne<{ count: string; total: string }>();
 
   const renovados = Number(renewedToday?.count ?? 0);
@@ -412,7 +413,7 @@ async getClosingSummary(agentId: number) {
 
   // ────────────────────────────────────────────────────────────────────────────
   // 4) Nuevos hoy: disbursements today for this agent (count + amount)
-  //    SUM prefers loan.requestedAmount, fallback to tx.amount if needed.
+  //    Prefer loan.requestedAmount, fallback to tx.amount if needed.
   // ────────────────────────────────────────────────────────────────────────────
   const newRows = await this.transactionRepository
     .createQueryBuilder('tx')
@@ -422,8 +423,8 @@ async getClosingSummary(agentId: number) {
       'COUNT(*) AS count',
       'COALESCE(SUM(COALESCE(loan.requestedAmount, tx.amount)), 0) AS total',
     ])
-    .where('tx.Transactiontype = :type', { type: TransactionType.DISBURSEMENT })
-    .andWhere('tx.date BETWEEN :start AND :end', { start, end })
+    .where(`LOWER(tx.Transactiontype) = 'disbursement'`)
+    .andWhere(`substr(tx.date, 1, 10) = :today`, { today })
     .andWhere('agent.id = :agentId', { agentId })
     .getRawOne<{ count: string; total: string }>();
 
@@ -431,7 +432,7 @@ async getClosingSummary(agentId: number) {
   const valorNuevos = Number(newRows?.total ?? 0);
 
   // ────────────────────────────────────────────────────────────────────────────
-  // 5) Clientes únicos con loans FUNDED del agente (stock metric)
+  // 5) Unique clients with FUNDED loans (stock metric)
   // ────────────────────────────────────────────────────────────────────────────
   const clientsRow = await this.loanRequestRepository
     .createQueryBuilder('loan')
@@ -445,16 +446,12 @@ async getClosingSummary(agentId: number) {
 
   return {
     cartera,
-    cobrado,
-    clientes,       // unique clients with FUNDED loans for this agent
+    cobrado,        // should be 240000 + 200000 = 440000 with your sample
+    clientes,       // 2 with your sample
     renovados,
     valorRenovados,
-    nuevos,
-    valorNuevos,
+    nuevos,         // should be 2 with your sample
+    valorNuevos,    // should be 200000 + 300000 = 500000 with your sample
   };
 }
-  
-  
-  
-  
 }

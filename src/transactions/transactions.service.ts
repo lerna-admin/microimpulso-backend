@@ -186,11 +186,9 @@ export class TransactionsService {
         console.log("FALLO DESEMBOLSANDO")
         console.log(error)
       }
+        */
       
     }
-      TODO: DESCOMENTAR CUANDO SE AJUSTE EL TEMA DE META
-
-    */
     
     if (transactionType === TransactionType.REPAYMENT) {
       const allTransactions = await this.transactionRepo.find({

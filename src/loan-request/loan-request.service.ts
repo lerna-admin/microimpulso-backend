@@ -343,7 +343,7 @@ export class LoanRequestService {
 
 // ────────────────────────────────────────────────────────────────────────────
 // Closing Summary SIN dayjs (no cambia tsconfig, ni otros archivos)
-// ────────────────────────────────────────────────────────────────────────────
+
 async getClosingSummary(agentId: number) {
   // Get 'YYYY-MM-DD' for today's date in America/Bogota using only Intl.
   const getBogotaToday = (): string => {
@@ -362,7 +362,7 @@ async getClosingSummary(agentId: number) {
   const today = getBogotaToday();
 
   // ──────────────────────────────────────────────────────────────────────────
-  // Cartera = SUM(disbursed) - SUM(repayments) for this agent
+  // Cartera = SUM(disbursed FUNDED) - SUM(repayments de esos FUNDED)
   // ──────────────────────────────────────────────────────────────────────────
   const totalAmountRow = await this.loanRequestRepository
     .createQueryBuilder('loan')
@@ -378,7 +378,8 @@ async getClosingSummary(agentId: number) {
       `COALESCE(SUM(CASE WHEN LOWER(tx.Transactiontype) = 'repayment' THEN tx.amount ELSE 0 END), 0)`,
       'totalRepaid'
     )
-    .where('loan.status IN (:...st)', { st: [LoanRequestStatus.FUNDED, LoanRequestStatus.COMPLETED] })
+    // 👇 SOLO FUNDED para que coincida con los montos sumados arriba
+    .where('loan.status = :status', { status: LoanRequestStatus.FUNDED })
     .andWhere('loan.agentId = :agentId', { agentId })
     .getRawOne<{ totalRepaid?: string }>();
 
@@ -451,14 +452,15 @@ async getClosingSummary(agentId: number) {
   const clientes = Number(clientsRow?.clients ?? 0);
 
   return {
-    cartera,
-    cobrado,        // con tus datos: 440000
-    clientes,       // con tus datos: 2
-    renovados,
-    valorRenovados,
-    nuevos,         // con tus datos: 2
-    valorNuevos,    // con tus datos: 500000
+    cartera,         // esperado con tus datos: 160000
+    cobrado,         // 440000
+    clientes,        // 2
+    renovados,       // 0
+    valorRenovados,  // 0
+    nuevos,          // 2
+    valorNuevos,     // 500000
   };
 }
+
 
 }

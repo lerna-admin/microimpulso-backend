@@ -1912,52 +1912,52 @@ async getDailyRenewals(userId: string, date?: string) {
     *   ADMIN   → solo sus agentes de sucursal
     *   MANAGER → todos los agentes
     * ------------------------------------------------------------------------ */
-    async getAgentActivity(
-        userId: string,
-        startDate?: string,
-        endDate?: string,
-        branchId?: string,
-        agentId?: string,
-    ) {
-        const caller = await this.userRepo.findOne({ where: { id: +userId } });
-        if (!caller) throw new NotFoundException('User not found');
-        if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
-            throw new ForbiddenException('Only ADMIN or MANAGER may call this');
-        }
-        
-        const end = endDate ? dayjs(endDate).endOf('day') : dayjs().endOf('day');
-        const start = startDate ? dayjs(startDate).startOf('day') : end.startOf('month');
-        
-        const lrSub = `
+async getAgentActivity(
+  userId: string,
+  startDate?: string,
+  endDate?: string,
+  branchId?: string,
+  agentId?: string,
+) {
+  const caller = await this.userRepo.findOne({ where: { id: +userId } });
+  if (!caller) throw new NotFoundException('User not found');
+  if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
+    throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+  }
+
+  const end = endDate ? dayjs(endDate).endOf('day') : dayjs().endOf('day');
+  const start = startDate ? dayjs(startDate).startOf('day') : end.startOf('month');
+
+  const lrSub = `
     SELECT agentId, COUNT(*) AS loanRequestsCount
     FROM loan_request
     WHERE DATE(createdAt) BETWEEN DATE(?) AND DATE(?)
     GROUP BY agentId
   `;
-        const fundedSub = `
+  const fundedSub = `
     SELECT agentId, COUNT(*) AS fundedCount
     FROM loan_request
     WHERE status = 'funded'
-    AND DATE(createdAt) BETWEEN DATE(?) AND DATE(?)
+      AND DATE(createdAt) BETWEEN DATE(?) AND DATE(?)
     GROUP BY agentId
   `;
-        const txSub = `
+  const txSub = `
     SELECT lr.agentId AS agentId,
       SUM(CASE WHEN t.Transactiontype='disbursement' THEN 1 ELSE 0 END) AS disbursementCount,
-      SUM(CASE WHEN t.Transactiontype='repayment' THEN 1 ELSE 0 END) AS repaymentCount,
-      SUM(CASE WHEN t.Transactiontype='penalty' THEN 1 ELSE 0 END) AS penaltyCount
+      SUM(CASE WHEN t.Transactiontype='repayment' THEN 1 ELSE 0 END)         AS repaymentCount,
+      SUM(CASE WHEN t.Transactiontype='penalty' THEN 1 ELSE 0 END)           AS penaltyCount
     FROM loan_transaction t
     JOIN loan_request lr ON lr.id = t.loanRequestId
     WHERE DATE(t.date) BETWEEN DATE(?) AND DATE(?)
     GROUP BY lr.agentId
   `;
-        const clientSub = `
+  const clientSub = `
     SELECT agentId, COUNT(*) AS clientOnboardCount
     FROM client
     WHERE DATE(createdAt) BETWEEN DATE(?) AND DATE(?)
     GROUP BY agentId
   `;
-        const docSub = `
+  const docSub = `
     SELECT c.agentId AS agentId,
       COUNT(*) AS documentUploadCount
     FROM document d
@@ -1965,107 +1965,143 @@ async getDailyRenewals(userId: string, date?: string) {
     WHERE DATE(d.createdAt) BETWEEN DATE(?) AND DATE(?)
     GROUP BY c.agentId
   `;
-        
-        let where = 'WHERE 1=1';
-        const sqlParams = [
-            start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD'), // lrSub
-            start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD'), // fundedSub
-            start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD'), // txSub
-            start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD'), // clientSub
-            start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD'), // docSub
-        ];
-        
-        if (caller.role === 'ADMIN') {
-            where += ' AND branch.id = ?';
-            sqlParams.push(caller.branchId.toString());
-            if (agentId) {
-                where += ' AND agent.id = ?';
-                sqlParams.push(agentId);
-            }
-        }
-        
-        if (caller.role === 'MANAGER') {
-            if (branchId) {
-                where += ' AND branch.id = ?';
-                sqlParams.push(branchId);
-            }
-            if (agentId) {
-                where += ' AND agent.id = ?';
-                sqlParams.push(agentId);
-            }
-        }
-        
-        const mainSql = `
+
+  let where = 'WHERE 1=1';
+  const sqlParams = [
+    start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD'), // lrSub
+    start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD'), // fundedSub
+    start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD'), // txSub
+    start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD'), // clientSub
+    start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD'), // docSub
+  ];
+
+  // NOTE: Admin is constrained to own branch (as per your current rule).
+  if (caller.role === 'ADMIN') {
+    where += ' AND branch.id = ?';
+    sqlParams.push(caller.branchId.toString());
+    if (agentId) {
+      where += ' AND agent.id = ?';
+      sqlParams.push(agentId);
+    }
+  }
+
+  if (caller.role === 'MANAGER') {
+    if (branchId) {
+      where += ' AND branch.id = ?';
+      sqlParams.push(branchId);
+    }
+    if (agentId) {
+      where += ' AND agent.id = ?';
+      sqlParams.push(agentId);
+    }
+  }
+
+  const mainSql = `
     SELECT
-      agent.id AS agentId,
+      agent.id   AS agentId,
       agent.name AS agentName,
-      branch.id AS branchId,
+      branch.id  AS branchId,
       branch.name AS branchName,
-      IFNULL(lr.loanRequestsCount, 0) AS loanRequestsCount,
-      IFNULL(fu.fundedCount, 0) AS fundedCount,
-      IFNULL(tx.disbursementCount, 0) AS disbursementCount,
-      IFNULL(tx.repaymentCount, 0) AS repaymentCount,
-      IFNULL(tx.penaltyCount, 0) AS penaltyCount,
-      IFNULL(cl.clientOnboardCount, 0) AS clientOnboardCount,
+      IFNULL(lr.loanRequestsCount, 0)   AS loanRequestsCount,
+      IFNULL(fu.fundedCount, 0)         AS fundedCount,
+      IFNULL(tx.disbursementCount, 0)   AS disbursementCount,
+      IFNULL(tx.repaymentCount, 0)      AS repaymentCount,
+      IFNULL(tx.penaltyCount, 0)        AS penaltyCount,
+      IFNULL(cl.clientOnboardCount, 0)  AS clientOnboardCount,
       IFNULL(doc.documentUploadCount, 0) AS documentUploadCount
     FROM user agent
     JOIN branch ON branch.id = agent.branchId
-    LEFT JOIN (${lrSub}) lr ON lr.agentId = agent.id
-    LEFT JOIN (${fundedSub}) fu ON fu.agentId = agent.id
-    LEFT JOIN (${txSub}) tx ON tx.agentId = agent.id
-    LEFT JOIN (${clientSub}) cl ON cl.agentId = agent.id
-    LEFT JOIN (${docSub}) doc ON doc.agentId = agent.id
-    ${where} and role = 'AGENT'
+    LEFT JOIN (${lrSub})    lr  ON lr.agentId  = agent.id
+    LEFT JOIN (${fundedSub}) fu  ON fu.agentId  = agent.id
+    LEFT JOIN (${txSub})     tx  ON tx.agentId  = agent.id
+    LEFT JOIN (${clientSub}) cl  ON cl.agentId  = agent.id
+    LEFT JOIN (${docSub})    doc ON doc.agentId = agent.id
+    ${where} AND agent.role = 'AGENT'
     ORDER BY branch.name, agent.name
   `;
-        
-        const rows = await this.userRepo.query(mainSql, sqlParams);
-        
-        // Agrupar por branch
-        const branchMap = new Map<number, {
-            branchId: number;
-            branchName: string;
-            agents: any[];
-        }>();
-        
-        for (const row of rows) {
-            if (!branchMap.has(row.branchId)) {
-                branchMap.set(row.branchId, {
-                    branchId: row.branchId,
-                    branchName: row.branchName,
-                    agents: [],
-                });
-            }
-            
-            branchMap.get(row.branchId)!.agents.push({
-                agentId: row.agentId,
-                agentName: row.agentName,
-                metrics: {
-                    loanRequestsCount: row.loanRequestsCount,
-                    fundedCount: row.fundedCount,
-                    disbursementCount: row.disbursementCount,
-                    repaymentCount: row.repaymentCount,
-                    penaltyCount: row.penaltyCount,
-                    clientOnboardCount: row.clientOnboardCount,
-                    documentUploadCount: row.documentUploadCount,
-                },
-            });
-        }
-        
-        return {
-            meta: {
-                view: caller.role,
-                startDate: start.format('YYYY-MM-DD'),
-                endDate: end.format('YYYY-MM-DD'),
-                filters: {
-                    branchId: branchId ? +branchId : undefined,
-                    agentId: agentId ? +agentId : undefined,
-                },
-                generatedAt: new Date().toISOString(),
-            },
-            blocks: Array.from(branchMap.values()),
-        };
+
+  const rows = await this.userRepo.query(mainSql, sqlParams);
+
+  // Group by branch
+  const branchMap = new Map<number, {
+    branchId: number;
+    branchName: string;
+    agents: any[];
+  }>();
+
+  for (const row of rows) {
+    if (!branchMap.has(row.branchId)) {
+      branchMap.set(row.branchId, {
+        branchId: row.branchId,
+        branchName: row.branchName,
+        agents: [],
+      });
     }
+
+    branchMap.get(row.branchId)!.agents.push({
+      agentId: row.agentId,
+      agentName: row.agentName,
+      metrics: {
+        loanRequestsCount: row.loanRequestsCount,
+        fundedCount: row.fundedCount,
+        disbursementCount: row.disbursementCount,
+        repaymentCount: row.repaymentCount,
+        penaltyCount: row.penaltyCount,
+        clientOnboardCount: row.clientOnboardCount,
+        documentUploadCount: row.documentUploadCount,
+      },
+    });
+  }
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // totals: sum across all returned agents (respecting the applied filters)
+  // ────────────────────────────────────────────────────────────────────────────
+  const totals = {
+    /** Total number of loan requests created in range */
+    loanRequestsCount: 0,
+    /** Total number of funded loan requests created in range */
+    fundedCount: 0,
+    /** Total number of disbursement transactions in range */
+    disbursementCount: 0,
+    /** Total number of repayment transactions in range */
+    repaymentCount: 0,
+    /** Total number of penalty transactions in range */
+    penaltyCount: 0,
+    /** Total number of newly onboarded clients in range */
+    clientOnboardCount: 0,
+    /** Total number of uploaded documents in range */
+    documentUploadCount: 0,
+    /** Optional useful aggregates */
+    branches: branchMap.size,
+    agents: rows.length,
+  };
+
+  for (const r of rows) {
+    totals.loanRequestsCount     += Number(r.loanRequestsCount) || 0;
+    totals.fundedCount           += Number(r.fundedCount) || 0;
+    totals.disbursementCount     += Number(r.disbursementCount) || 0;
+    totals.repaymentCount        += Number(r.repaymentCount) || 0;
+    totals.penaltyCount          += Number(r.penaltyCount) || 0;
+    totals.clientOnboardCount    += Number(r.clientOnboardCount) || 0;
+    totals.documentUploadCount   += Number(r.documentUploadCount) || 0;
+  }
+
+  return {
+    meta: {
+      view: caller.role,
+      startDate: start.format('YYYY-MM-DD'),
+      endDate: end.format('YYYY-MM-DD'),
+      filters: {
+        branchId: branchId ? +branchId : undefined,
+        agentId: agentId ? +agentId : undefined,
+      },
+      generatedAt: new Date().toISOString(),
+    },
+    totals,                         // ← agregado al mismo nivel de blocks
+    blocks: Array.from(branchMap.values()),
+  };
+}
+
     
     async getApprovalTimeReport(
         userId: number,

@@ -344,110 +344,97 @@ export class LoanRequestService {
   }
   
 
-async getClosingSummary(agentId: number) {
-  // 1) Local "today" for Bogota, compare DATE portion in SQLite
-  const TZ = 'America/Bogota';
-  const today = dayjs().tz(TZ).format('YYYY-MM-DD'); // e.g., "2025-08-25"
 
   // ────────────────────────────────────────────────────────────────────────────
-  // Cartera = SUM(disbursed) - SUM(repayments) for this agent
+  // Closing Summary (SQLite-friendly)
   // ────────────────────────────────────────────────────────────────────────────
-  const totalAmountRow = await this.loanRequestRepository
-    .createQueryBuilder('loan')
-    .select('COALESCE(SUM(loan.amount), 0)', 'totalAmount')
-    .where('loan.status = :status', { status: LoanRequestStatus.FUNDED })
-    .andWhere('loan.agentId = :agentId', { agentId })
-    .getRawOne<{ totalAmount: string }>();
+  async getClosingSummary(agentId: number) {
+    /**
+     * For SQLite TEXT datetime columns, compare the DATE portion as text.
+     * We normalize "today" in America/Bogota and compare with substr(col,1,10).
+     */
+    const TZ = 'America/Bogota';
+    const today = dayjs().tz(TZ).format('YYYY-MM-DD'); // e.g., "2025-08-25"
 
-  const totalRepaidRow = await this.transactionRepository
-    .createQueryBuilder('tx')
-    .innerJoin('tx.loanRequest', 'loan')
-    .select(
-      `COALESCE(SUM(CASE WHEN LOWER(tx.Transactiontype) = 'repayment' THEN tx.amount ELSE 0 END), 0)`,
-      'totalRepaid'
-    )
-    .where('loan.status IN (:...st)', { st: [LoanRequestStatus.FUNDED, LoanRequestStatus.COMPLETED] })
-    .andWhere('loan.agentId = :agentId', { agentId })
-    .getRawOne<{ totalRepaid: string }>();
+    // Cartera = SUM(disbursed) - SUM(repayments) for this agent
+    const totalAmountRow = await this.loanRequestRepository
+      .createQueryBuilder('loan')
+      .select('COALESCE(SUM(loan.amount), 0)', 'totalAmount')
+      .where('loan.status = :status', { status: LoanRequestStatus.FUNDED })
+      .andWhere('loan.agentId = :agentId', { agentId })
+      .getRawOne<{ totalAmount: string }>();
+    const totalAmount = Number(totalAmountRow?.totalAmount ?? 0);
 
-  const totalAmount = Number(totalAmountRow?.totalAmount ?? 0);
-  const totalRepaid = Number(totalRepaidRow?.totalRepaid ?? 0);
-  const cartera = totalAmount - totalRepaid;
+    const totalRepaidRow = await this.transactionRepository
+      .createQueryBuilder('tx')
+      .innerJoin('tx.loanRequest', 'loan')
+      .select(
+        `COALESCE(SUM(CASE WHEN LOWER(tx.Transactiontype) = 'repayment' THEN tx.amount ELSE 0 END), 0)`,
+        'totalRepaid',
+      )
+      .where('loan.status IN (:...st)', { st: [LoanRequestStatus.FUNDED, LoanRequestStatus.COMPLETED] })
+      .andWhere('loan.agentId = :agentId', { agentId })
+      .getRawOne<{ totalRepaid: string }>();
+    const totalRepaid = Number(totalRepaidRow?.totalRepaid ?? 0);
 
-  // ────────────────────────────────────────────────────────────────────────────
-  // Cobrado hoy: all REPAYMENT rows for this agent where DATE(tx.date) = today
-  // ────────────────────────────────────────────────────────────────────────────
-  const cobradoRow = await this.transactionRepository
-    .createQueryBuilder('tx')
-    .innerJoin('tx.loanRequest', 'loan')
-    .innerJoin('loan.agent', 'agent')
-    .select('COALESCE(SUM(tx.amount), 0)', 'sum')
-    .where(`LOWER(tx.Transactiontype) = 'repayment'`)
-    .andWhere(`substr(tx.date, 1, 10) = :today`, { today })
-    .andWhere('agent.id = :agentId', { agentId })
-    .getRawOne<{ sum: string }>();
+    const cartera = totalAmount - totalRepaid;
 
-  const cobrado = Number(cobradoRow?.sum ?? 0);
+    // Cobrado hoy: all repayments dated today for this agent
+    const cobradoRow = await this.transactionRepository
+      .createQueryBuilder('tx')
+      .innerJoin('tx.loanRequest', 'loan')
+      .innerJoin('loan.agent', 'agent')
+      .select('COALESCE(SUM(tx.amount), 0)', 'sum')
+      .where(`LOWER(tx.Transactiontype) = 'repayment'`)
+      .andWhere(`substr(tx.date, 1, 10) = :today`, { today })
+      .andWhere('agent.id = :agentId', { agentId })
+      .getRawOne<{ sum: string }>();
+    const cobrado = Number(cobradoRow?.sum ?? 0);
 
-  // ────────────────────────────────────────────────────────────────────────────
-  // Renovados hoy: loans with isRenewed = true and DATE(renewedAt) = today
-  // ────────────────────────────────────────────────────────────────────────────
-  const renewedTodayRow = await this.loanRequestRepository
-    .createQueryBuilder('loan')
-    .select([
-      'COUNT(*) AS count', // cast in JS
-      'COALESCE(SUM(loan.requestedAmount), 0) AS total',
-    ])
-    .where('loan.agentId = :agentId', { agentId })
-    .andWhere('loan.isRenewed = :r', { r: true })
-    .andWhere(`substr(loan.renewedAt, 1, 10) = :today`, { today })
-    .getRawOne<{ count: string; total: string }>();
+    // Renovados hoy: loans renewed whose renewedAt falls today
+    const renewedTodayRow = await this.loanRequestRepository
+      .createQueryBuilder('loan')
+      .select(['COUNT(*) AS count', 'COALESCE(SUM(loan.requestedAmount), 0) AS total'])
+      .where('loan.agentId = :agentId', { agentId })
+      .andWhere('loan.isRenewed = :r', { r: true })
+      .andWhere(`substr(loan.renewedAt, 1, 10) = :today`, { today })
+      .getRawOne<{ count: string; total: string }>();
+    const renovados = Number(renewedTodayRow?.count ?? 0);
+    const valorRenovados = Number(renewedTodayRow?.total ?? 0);
 
-  const renovados = Number(renewedTodayRow?.count ?? 0);
-  const valorRenovados = Number(renewedTodayRow?.total ?? 0);
+    // Nuevos hoy: disbursements today for this agent
+    const newRows = await this.transactionRepository
+      .createQueryBuilder('tx')
+      .innerJoin('tx.loanRequest', 'loan')
+      .innerJoin('loan.agent', 'agent')
+      .select(['COUNT(*) AS count', 'COALESCE(SUM(COALESCE(loan.requestedAmount, tx.amount)), 0) AS total'])
+      .where(`LOWER(tx.Transactiontype) = 'disbursement'`)
+      .andWhere(`substr(tx.date, 1, 10) = :today`, { today })
+      .andWhere('agent.id = :agentId', { agentId })
+      .getRawOne<{ count: string; total: string }>();
+    const nuevos = Number(newRows?.count ?? 0);
+    const valorNuevos = Number(newRows?.total ?? 0);
 
-  // ────────────────────────────────────────────────────────────────────────────
-  // Nuevos hoy: disbursements today for this agent
-  // Prefer loan.requestedAmount, fallback to tx.amount
-  // ────────────────────────────────────────────────────────────────────────────
-  const newRows = await this.transactionRepository
-    .createQueryBuilder('tx')
-    .innerJoin('tx.loanRequest', 'loan')
-    .innerJoin('loan.agent', 'agent')
-    .select([
-      'COUNT(*) AS count',
-      'COALESCE(SUM(COALESCE(loan.requestedAmount, tx.amount)), 0) AS total',
-    ])
-    .where(`LOWER(tx.Transactiontype) = 'disbursement'`)
-    .andWhere(`substr(tx.date, 1, 10) = :today`, { today })
-    .andWhere('agent.id = :agentId', { agentId })
-    .getRawOne<{ count: string; total: string }>();
+    // Unique clients with FUNDED loans (stock metric)
+    const clientsRow = await this.loanRequestRepository
+      .createQueryBuilder('loan')
+      .innerJoin('loan.client', 'c')
+      .select('COUNT(DISTINCT c.id)', 'clients')
+      .where('loan.status = :status', { status: LoanRequestStatus.FUNDED })
+      .andWhere('loan.agentId = :agentId', { agentId })
+      .getRawOne<{ clients: string }>();
+    const clientes = Number(clientsRow?.clients ?? 0);
 
-  const nuevos = Number(newRows?.count ?? 0);
-  const valorNuevos = Number(newRows?.total ?? 0);
+    return {
+      cartera,
+      cobrado,        // expected 440000 with your latest sample
+      clientes,       // expected 2 with your latest sample
+      renovados,
+      valorRenovados,
+      nuevos,         // expected 2
+      valorNuevos,    // expected 500000
+    };
+  }
 
-  // ────────────────────────────────────────────────────────────────────────────
-  // Unique clients with FUNDED loans (stock metric)
-  // ────────────────────────────────────────────────────────────────────────────
-  const clientsRow = await this.loanRequestRepository
-    .createQueryBuilder('loan')
-    .innerJoin('loan.client', 'c')
-    .select('COUNT(DISTINCT c.id)', 'clients')
-    .where('loan.status = :status', { status: LoanRequestStatus.FUNDED })
-    .andWhere('loan.agentId = :agentId', { agentId })
-    .getRawOne<{ clients: string }>();
-
-  const clientes = Number(clientsRow?.clients ?? 0);
-
-  return {
-    cartera,
-    cobrado,        // expected 440000 with your sample rows
-    clientes,       // expected 2 with your sample
-    renovados,
-    valorRenovados,
-    nuevos,         // expected 2 with your sample
-    valorNuevos,    // expected 500000 with your sample
-  };
-}
 
 }

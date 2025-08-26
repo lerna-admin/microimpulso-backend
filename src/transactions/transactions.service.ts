@@ -42,17 +42,17 @@ export class TransactionsService {
     private readonly chatService: ChatService,
   ) { }
   
-  async findRepaymentAccountForLoan(requestedAmount: number): Promise<PaymentAccount | null> {
-    const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    
-    const accounts = await this.paymentAccountRepo.find({
-      where: { isActive: true },
-      order: { isPrimary: 'DESC' },
-    });
-    
-    for (const account of accounts) {
-      const totalReceived = await this.transactionRepo
+async findRepaymentAccountForLoan(requestedAmount: number): Promise<PaymentAccount | null> {
+  const now = new Date();
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  const accounts = await this.paymentAccountRepo.find({
+    where: { isActive: true },
+    order: { isPrimary: 'DESC' }, // Primary accounts come first
+  });
+
+  for (const account of accounts) {
+    const totalReceived = await this.transactionRepo
       .createQueryBuilder('tx')
       .leftJoin('tx.loanRequest', 'loan')
       .where('tx.Transactiontype = :type', { type: TransactionType.REPAYMENT })
@@ -63,18 +63,21 @@ export class TransactionsService {
       })
       .select('SUM(tx.amount)', 'sum')
       .getRawOne();
-      
-      const currentTotal = Number(totalReceived?.sum ?? 0);
-      const projected = currentTotal + requestedAmount;
-      
-      if (projected <= Number(account.limit)) {
-        return account;
-      }
+
+    const currentTotal = Number(totalReceived?.sum ?? 0);
+    const projected = currentTotal + requestedAmount;
+
+    if (projected <= Number(account.limit)) {
+      return account; // Found a suitable account
     }
-    
-    return null;
   }
-  
+
+  // ────────────────────────────────
+  // Fallback: return a default account (first active, ideally primary)
+  // ────────────────────────────────
+  return accounts.length > 0 ? accounts[0] : null;
+}
+
   
   async create(data: any): Promise<LoanTransaction> {
     const { loanRequestId, transactionType, amount, reference } = data;

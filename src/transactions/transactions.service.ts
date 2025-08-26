@@ -165,6 +165,7 @@ export class TransactionsService {
       
       const svgBuffer = Buffer.from(svgContent, 'utf-8');
       const pngBuffer = await sharp(svgBuffer).png().toBuffer();
+      /**
       try {
         
         await this.chatService.sendMessageToClient(client.id, message);
@@ -187,6 +188,9 @@ export class TransactionsService {
       }
       
     }
+      TODO: DESCOMENTAR CUANDO SE AJUSTE EL TEMA DE META
+
+    */
     
     if (transactionType === TransactionType.REPAYMENT) {
       const allTransactions = await this.transactionRepo.find({

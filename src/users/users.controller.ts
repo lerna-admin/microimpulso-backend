@@ -60,4 +60,15 @@ async findAll(
     if (!updated) throw new NotFoundException('User not found');
     return updated;
   }
+
+   /* ---------- PATCH /users/:id/unblock  (set status ACTIVE) -------- */
+  @Patch(':id/unblock')
+  async unblock(
+    @Param('id', ParseIntPipe) id: number,
+  ): Promise<User> {
+    /** @brief Unblock a user: sets status to ACTIVE. Idempotent. */
+    const updated = await this.usersService.unblock(id);
+    if (!updated) throw new NotFoundException('User not found');
+    return updated;
+  }
 }

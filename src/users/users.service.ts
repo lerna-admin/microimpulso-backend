@@ -1,7 +1,7 @@
 import { ConsoleLogger, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { User, UserRole} from '../entities/user.entity';
+import { User, UserRole, UserStatus} from '../entities/user.entity';
 import { truncate } from 'fs';
 import { Permission } from 'src/entities/permissions.entity';
 import { Branch } from 'src/entities/branch.entity';
@@ -170,6 +170,30 @@ export class UsersService {
   async update(id: number, data: Partial<User>): Promise<User | null> {
     await this.userRepository.update(id, data);
     return this.userRepository.findOne({ where: { id } });
+  }
+
+  /** ----------------------------------------------------------------
+   *  Unblock a user: sets status to ACTIVE (idempotent).
+   *  - Returns null if user doesn't exist.
+   *  - If already ACTIVE, just returns the current user.
+   *  ---------------------------------------------------------------- */
+  async unblock(id: number): Promise<User | null> {
+    // 1) Load the user by id
+    const user = await this.userRepository.findOne({ where: { id } });
+    if (!user) return null;
+
+    // 2) If already ACTIVE, return as-is (idempotent)
+    if (user.status === UserStatus.ACTIVE) {
+      return user;
+    }
+
+    // 3) Set status to ACTIVE and persist
+    user.status = UserStatus.ACTIVE;
+
+    // (Optional future) If you later add lock-related fields,
+    // reset them here, e.g. failedLoginAttempts = 0, lockedUntil = null.
+
+    return this.userRepository.save(user);
   }
 
 }

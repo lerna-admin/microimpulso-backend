@@ -3,6 +3,8 @@ import { JwtService } from '@nestjs/jwt';
 import { UsersService } from '../users/users.service';
 import * as bcrypt from 'bcrypt';
 import { ClosingService } from '../agent-closing/agent-closing.service';
+import { User, UserStatus } from '../entities/user.entity'; // ⬅️ add this
+
 
 @Injectable()
 export class AuthService {
@@ -12,43 +14,78 @@ export class AuthService {
     private readonly agentClosingService: ClosingService
   ) {}
 
-  /**
+
+ /**
    * Validates the user by document and password, and generates a JWT token.
-   * Also checks if the agent has already submitted the daily closing.
+   * Rules:
+   *  - BLOCKED users cannot log in even with correct credentials.
+   *  - Wrong password increments failedLoginAttempts; on 3rd failure → set status=BLOCKED (regardless of previous status).
+   *  - Successful login (when not BLOCKED) resets failedLoginAttempts to 0.
    */
   async validateUserAndGenerateToken(
     document: string,
     password: string
-  ): Promise<{ token: string; role: string; branch:any, closedRoute: boolean, permission:any } | null> {
-    	console.log(document);
-	console.log(password);
-	  const user = await this.usersService.findByDocument(document);
+  ): Promise<{ token: string; role: string; branch: any; closedRoute: boolean; permission: any } | null> {
+    const user = await this.usersService.findByDocument(document);
+    if (!user) return null; // do not leak enumeration info
 
-	  console.log(user);
-    // Basic password validation (replace with bcrypt.compare if using hashes)
-    if (!user || user.password !== password) {
+    // If BLOCKED (or INACTIVE, if you keep this restriction), deny login immediately.
+    if (user.status === UserStatus.BLOCKED || user.status === UserStatus.INACTIVE) {
       return null;
     }
 
-    // Check if the user has already submitted a closing today
+    // Password check (prefer bcrypt if hash-like; else legacy strict equality)
+    const looksHashed = typeof user.password === 'string' && /^\$2[aby]\$/.test(user.password);
+    let passwordOk = false;
+    try {
+      passwordOk = looksHashed ? await bcrypt.compare(password, user.password) : user.password === password;
+    } catch {
+      passwordOk = false;
+    }
+
+    if (!passwordOk) {
+      // Wrong password → increase counter and block on threshold (3)
+      const current = user.failedLoginAttempts ?? 0;
+      const next = current + 1;
+      const MAX_FAILED = 3;
+
+      const updates: Partial<User> = { failedLoginAttempts: next };
+      if (next >= MAX_FAILED) {
+        // Force BLOCKED regardless of previous status, per your requirement
+        updates.status = UserStatus.BLOCKED;
+      }
+
+      await this.usersService.update(user.id, updates);
+      return null;
+    }
+
+    // Correct password:
+    // Re-check: even with correct password, a BLOCKED user must NOT pass (paranoia guard).
+    if (user.status !== UserStatus.ACTIVE) {
+      return null;
+    }
+
+
+    // Reset failed attempts on successful login (only if not BLOCKED)
+    if ((user.failedLoginAttempts ?? 0) > 0) {
+      await this.usersService.update(user.id, { failedLoginAttempts: 0 } as Partial<User>);
+    }
+
+    // Daily closing check
     const closedRoute = await this.agentClosingService.hasClosedToday(user.id);
 
-    // Remove password before embedding user into token payload
+    // Remove password before signing
     user.password = '';
 
-    // Generate JWT token with user payload (expires in 15 minutes)
-    const token = await this.jwtService.signAsync(
-      { user },
-      { expiresIn: '15m' }
-    );
+    // Short-lived token (15 minutes)
+    const token = await this.jwtService.signAsync({ user }, { expiresIn: '15m' });
 
-    // Return token, user role, and closing status
     return {
       token,
       role: user.role,
       branch: user.branch,
       closedRoute,
-      permission : user.permissions,
+      permission: user.permissions,
     };
   }
 }

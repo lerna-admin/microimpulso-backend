@@ -60,7 +60,7 @@ export class User {
 
   /** @brief Overall account status (ACTIVE, INACTIVE, BLOCKED). Defaults to ACTIVE. */
   @Column({ type: 'text', default: UserStatus.ACTIVE })
-  status: UserStatus;
+  status: UserStatus;   // 👈 tipo = enum completo (NO el literal)
 
   @CreateDateColumn()
   createdAt: Date;
@@ -118,4 +118,8 @@ export class User {
   @ManyToMany(() => Permission, { eager: true })
   @JoinTable()
   permissions: Permission[];
+
+  /** @brief Count of consecutive failed login attempts. Reset on successful login. */
+  @Column({ type: 'int', default: 0 })
+  failedLoginAttempts: number;
 }

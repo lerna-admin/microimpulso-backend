@@ -40,14 +40,7 @@ async search(
     .orWhere(like('c.phone'))
     .orWhere(like('c.email'))
     .orWhere(like('c.document'))
-    .orWhere(like('c.documentType'))
-    .orWhere(like('c.address'))
-    .orWhere(like('c.notes'))
-    .orWhere(like('c.status'))
     .setParameter('term', term);
-
-  if (looksNumeric) qb.orWhere('c.id = :id', { id: numericId });
-
   if (digits.length >= 3) {
     qb.orWhere(
       `REPLACE(REPLACE(REPLACE(c.phone, ' ', ''), '-', ''), '+', '') LIKE :digits`,

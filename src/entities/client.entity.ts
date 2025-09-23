@@ -89,4 +89,11 @@ export class Client {
   @Column({ type: 'boolean', default: false })
   notEligible: boolean;
 
+   /**
+   * Lead flag — true = imported from external systems; false = created in our platform.
+   * Default is false to keep existing records as "platform-created" unless explicitly set.
+   */
+  @Column({ type: 'boolean', default: false })
+  lead: boolean;
+
 }

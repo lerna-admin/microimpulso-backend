@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Client } from '../entities/client.entity';
@@ -7,6 +7,77 @@ import { filter } from 'rxjs';
 
 @Injectable()
 export class ClientsService {
+/**
+   * Free-text search across multiple Client fields.
+   * - Case-insensitive using LOWER(..) LIKE :term (portable across SQLite/MySQL/Postgres).
+   * - Matches: name, phone, email, document, documentType, address, notes, status.
+   * - If `q` is numeric, also tries exact `id` match.
+   * - Optional filter by `lead` (true/false) to separate imported vs platform-created.
+   */
+async search(
+  q: string,
+  opts: { limit?: number; offset?: number; lead?: boolean } = {},
+): Promise<{ total: number; limit: number; offset: number; items: Client[] }> {
+  if (!q || !q.trim()) throw new BadRequestException('Missing required search string "q".');
+
+  const limit = Math.min(Math.max(opts.limit ?? 25, 1), 100);
+  const offset = Math.max(opts.offset ?? 0, 0);
+  const leadFilter = typeof opts.lead === 'boolean' ? opts.lead : undefined;
+
+  const qTrim = q.trim();
+  const term = `%${qTrim.toLowerCase()}%`;
+  const digits = qTrim.replace(/\D/g, '');
+  const numericId = Number(qTrim);
+  const looksNumeric = !Number.isNaN(numericId);
+
+  //console.log(`[ClientsService.search] q="${qTrim}", limit=${limit}, offset=${offset}, lead=${leadFilter}`);
+  //console.log(`[ClientsService.search] term="${term}", digits="${digits}", looksNumeric=${looksNumeric}`);
+
+  const qb = this.clientRepository.createQueryBuilder('c');
+  const like = (col: string) => `LOWER(${col}) LIKE :term`;
+
+  qb.where(like('c.name'))
+    .orWhere(like('c.phone'))
+    .orWhere(like('c.email'))
+    .orWhere(like('c.document'))
+    .orWhere(like('c.documentType'))
+    .orWhere(like('c.address'))
+    .orWhere(like('c.notes'))
+    .orWhere(like('c.status'))
+    .setParameter('term', term);
+
+  if (looksNumeric) qb.orWhere('c.id = :id', { id: numericId });
+
+  if (digits.length >= 3) {
+    qb.orWhere(
+      `REPLACE(REPLACE(REPLACE(c.phone, ' ', ''), '-', ''), '+', '') LIKE :digits`,
+      { digits: `%${digits}%` },
+    );
+  }
+
+  if (typeof leadFilter === 'boolean') qb.andWhere('c.lead = :lead', { lead: leadFilter });
+
+  qb.leftJoinAndSelect('c.agent', 'agent')
+    .orderBy('c.updatedAt', 'DESC')
+    .take(limit)
+    .skip(offset);
+
+  const [sql, parameters] = qb.getQueryAndParameters();
+  //console.log(`[ClientsService.search] SQL:\n${sql}`);
+  //console.log(`[ClientsService.search] PARAMS: ${JSON.stringify(parameters)}`);
+
+  const started = Date.now();
+  const [items, total] = await qb.getManyAndCount();
+  const ms = Date.now() - started;
+
+  //console.log(`[ClientsService.search] rows=${items.length}, total=${total}, time=${ms}ms`);
+  if (items.length) console.log(`[ClientsService.search] first ids=${items.slice(0, 5).map(i => i.id).join(', ')}`);
+
+  return { total, limit, offset, items };
+}
+
+
+  
   async update(id: number, data: any): Promise<Client> {
     const client = await this.clientRepository.findOne({
       where: { id },
@@ -430,5 +501,7 @@ async findAll(
       
       return this.clientRepository.save(client);
     }
+
+    
   }
   

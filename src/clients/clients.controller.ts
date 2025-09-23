@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Param, Body, Patch, Query } from '@nestjs/common';
+import { Controller, Get, Post, Param, Body, Patch, Query, ParseIntPipe, BadRequestException } from '@nestjs/common';
 import { ClientsService } from './clients.service';
 import { Client } from 'src/entities/client.entity';
 
@@ -67,12 +67,6 @@ export class ClientsController {
     );
   }
   
-  // GET /clients/:id → return a specific client by ID
-  @Get(':id')
-  findOne(@Param('id') id: number) {
-    return this.clientsService.findOne(id);
-  }
-  
   // POST /clients → create a new client
   @Post()
   create(@Body() body: any) {
@@ -83,4 +77,31 @@ export class ClientsController {
   update(@Param('id') id: number, @Body() body: any) {
     return this.clientsService.update(+id, body);
   }
+
+  /**
+   * Search clients by a free-text query across multiple fields.
+   * q: search string (required)
+   * limit/offset: optional pagination
+   */
+  @Get('query')
+  async search(
+    @Query('q') q?: string,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit?: number,
+    @Query('offset', new ParseIntPipe({ optional: true })) offset?: number,
+  ) {
+    console.log("entro a query")
+    if (!q || !q.trim()) {
+      throw new BadRequestException('Missing required query param "q".');
+    }
+    return this.clientsService.search(q.trim(), { limit, offset });
+  }
+
+  
+@Get(':id')
+findOne(@Param('id', ParseIntPipe) id: number) {
+  return this.clientsService.findOne(id);
+}
+  
+
+
 }

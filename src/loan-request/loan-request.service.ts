@@ -7,6 +7,7 @@ import { LoanRequest, LoanRequestStatus } from 'src/entities/loan-request.entity
 import { TransactionType, LoanTransaction} from 'src/entities/transaction.entity';
 import { User } from 'src/entities/user.entity'
 import { Notification } from 'src/notifications/notifications.entity';
+import { BadRequestException } from '@nestjs/common';
 
 
 @Injectable()
@@ -27,27 +28,61 @@ export class LoanRequestService {
     ) {}
   
   
-  async create(data: Partial<LoanRequest>): Promise<LoanRequest> {
-    if (!data.agent) {
-      const randomAgent = await this.userRepository
+  
+async create(data: Partial<LoanRequest>): Promise<LoanRequest> {
+  // ---- Require client ----
+  const clientId =
+    (data?.client as any)?.id ??
+    (data as any)?.clientId;
+
+  if (!clientId) {
+    throw new BadRequestException('Client is required to create a loan request');
+  }
+
+  // ---- Prevent multiple open requests for the same client ----
+  const hasOpen = await this.loanRequestRepository.exist({
+    where: {
+      client: { id: clientId },
+      status: Not(In([
+        LoanRequestStatus.COMPLETED,
+        LoanRequestStatus.REJECTED,
+      ])),
+    },
+  });
+
+  if (hasOpen) {
+    throw new BadRequestException(
+      'This client already has a non-completed/non-rejected loan request'
+    );
+  }
+
+  // ---- Ensure client relation is set (by id) ----
+  if (!data.client) {
+    (data as any).client = { id: clientId } as any;
+  }
+
+  // ---- Assign agent if missing (keep your current logic) ----
+  if (!data.agent && !(data as any).agentId) {
+    const randomAgent = await this.userRepository
       .createQueryBuilder('user')
       .where('user.role = :role', { role: 'AGENT' })
       .orderBy('RANDOM()')
       .limit(1)
       .getOne();
 
-      if (!randomAgent) {
-        throw new Error('No available agent to assign');
-      }
-
-      data.agent = randomAgent;
+    if (!randomAgent) {
+      throw new Error('No available agent to assign');
     }
-    console.log(data)
-
-    data.mode = (data.amount ? data.amount / 1000 : 100 ).toString().concat("X1");
-    const loanRequest = this.loanRequestRepository.create(data);
-    return await this.loanRequestRepository.save(loanRequest);
+    data.agent = randomAgent;
   }
+
+  // ---- Compute mode as you already do ----
+  const base = data.amount ?? 0;
+  data.mode = (base ? base / 1000 : 100).toString().concat('X1');
+
+  const loanRequest = this.loanRequestRepository.create(data);
+  return await this.loanRequestRepository.save(loanRequest);
+}
 
   
   async renewLoanRequest(

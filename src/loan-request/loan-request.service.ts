@@ -30,39 +30,27 @@ export class LoanRequestService {
   
   
 async create(data: Partial<LoanRequest>): Promise<LoanRequest> {
-  // ---- Require client ----
+  // === CHECK mínimo: si el cliente ya tiene solicitud abierta, bloquear ===
   const clientId =
-    (data?.client as any)?.id ??
-    (data as any)?.clientId;
+    typeof data.client === 'number'
+      ? data.client
+      : (data.client as any)?.id;
 
-  if (!clientId) {
-    throw new BadRequestException('Client is required to create a loan request');
+  if (clientId) {
+    const hasOpen = await this.loanRequestRepository.exist({
+      where: {
+        client: { id: clientId },
+        status: Not(In([LoanRequestStatus.COMPLETED, LoanRequestStatus.REJECTED])),
+      },
+    });
+
+    if (hasOpen) {
+      throw new BadRequestException('El cliente ya tiene una solicitud abierta (no completed/rejected).');
+    }
   }
 
-  // ---- Prevent multiple open requests for the same client ----
-  const hasOpen = await this.loanRequestRepository.exist({
-    where: {
-      client: { id: clientId },
-      status: Not(In([
-        LoanRequestStatus.COMPLETED,
-        LoanRequestStatus.REJECTED,
-      ])),
-    },
-  });
-
-  if (hasOpen) {
-    throw new BadRequestException(
-      'This client already has a non-completed/non-rejected loan request'
-    );
-  }
-
-  // ---- Ensure client relation is set (by id) ----
-  if (!data.client) {
-    (data as any).client = { id: clientId } as any;
-  }
-
-  // ---- Assign agent if missing (keep your current logic) ----
-  if (!data.agent && !(data as any).agentId) {
+  // === Tu lógica original SIN cambios ===
+  if (!data.agent) {
     const randomAgent = await this.userRepository
       .createQueryBuilder('user')
       .where('user.role = :role', { role: 'AGENT' })
@@ -73,13 +61,13 @@ async create(data: Partial<LoanRequest>): Promise<LoanRequest> {
     if (!randomAgent) {
       throw new Error('No available agent to assign');
     }
+
     data.agent = randomAgent;
   }
 
-  // ---- Compute mode as you already do ----
-  const base = data.amount ?? 0;
-  data.mode = (base ? base / 1000 : 100).toString().concat('X1');
+  console.log(data);
 
+  data.mode = (data.amount ? data.amount / 1000 : 100).toString().concat('X1');
   const loanRequest = this.loanRequestRepository.create(data);
   return await this.loanRequestRepository.save(loanRequest);
 }

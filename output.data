@@ -1,0 +1,162 @@
+.
+├── README.md
+├── clients.json
+├── database.sqlite
+├── eslint.config.mjs
+├── insert-clientes.js
+├── nest-cli.json
+├── output.data
+├── package-lock.json
+├── package.json
+├── prisma
+│   └── schema.prisma
+├── public
+│   └── uploads
+│       └── documents
+│           ├── 0f4f491a-8380-4584-a1e4-0bbb77f9ba6d.png
+│           ├── 324bda63-53e9-432e-b320-467e9c788c67.pdf
+│           ├── 41b6a42f-a709-439d-97d5-79998fcd5e85.jpg
+│           ├── 59ba0ef6-750b-4906-a338-4fe9b62ecb1e.pdf
+│           ├── 5ab529f1-03bb-49c8-8cbb-40540f07a4b5.jpg
+│           ├── 6e6bbad7-73f9-4041-b5dc-e43faa357f9d.jpg
+│           ├── 99877bed-cb17-4f12-9759-327bbc85441d.pdf
+│           ├── bd0599ce-11b3-40b5-9b2c-73eebee6cdd1.jpg
+│           ├── c510ddae-3426-4ea4-a3e7-d30d835b7013.pdf
+│           └── f5dec63f-53f7-4277-aa7a-02b6cfd33a1d.jpg
+├── reports
+├── src
+│   ├── agent-closing
+│   │   ├── agent-closing.controller.ts
+│   │   ├── agent-closing.module.ts
+│   │   └── agent-closing.service.ts
+│   ├── analytics
+│   │   ├── analytics.controller.ts
+│   │   ├── analytics.model.ts
+│   │   ├── analytics.module.ts
+│   │   └── analytics.service.ts
+│   ├── app.controller.spec.ts
+│   ├── app.controller.ts
+│   ├── app.module.ts
+│   ├── app.service.ts
+│   ├── auth
+│   │   ├── auth.controller.spec.ts
+│   │   ├── auth.controller.ts
+│   │   ├── auth.module.ts
+│   │   ├── auth.service.spec.ts
+│   │   ├── auth.service.ts
+│   │   └── jwt.strategy.ts
+│   ├── branch
+│   │   ├── branch.controller.ts
+│   │   ├── branch.module.ts
+│   │   └── branch.service.ts
+│   ├── campaign
+│   │   ├── campaign.controller.ts
+│   │   ├── campaign.module.ts
+│   │   ├── campaign.service.ts
+│   │   └── voximplant.service.ts
+│   ├── cash
+│   │   ├── cash.controller.ts
+│   │   ├── cash.module.ts
+│   │   └── cash.service.ts
+│   ├── chat
+│   │   ├── chat.controller.ts
+│   │   ├── chat.module.ts
+│   │   └── chat.service.ts
+│   ├── clients
+│   │   ├── clients.controller.spec.ts
+│   │   ├── clients.controller.ts
+│   │   ├── clients.module.ts
+│   │   ├── clients.service.spec.ts
+│   │   └── clients.service.ts
+│   ├── config
+│   │   └── ormconfig.ts
+│   ├── config-param
+│   │   ├── config-param.controller.ts
+│   │   ├── config-param.module.ts
+│   │   └── config-param.service.ts
+│   ├── document
+│   │   ├── document.controller.spec.ts
+│   │   ├── document.controller.ts
+│   │   ├── document.module.ts
+│   │   ├── document.service.spec.ts
+│   │   └── document.service.ts
+│   ├── dto
+│   │   ├── create-transaction.dto.ts
+│   │   └── update-transaction.dto.ts
+│   ├── entities
+│   │   ├── agent-closing.entity.ts
+│   │   ├── branch.entity.ts
+│   │   ├── campaign-contact.entity.ts
+│   │   ├── campaign.entity.ts
+│   │   ├── cash-flow.entity.ts
+│   │   ├── cash-movement-category.enum.ts
+│   │   ├── cash-movement.entity.ts
+│   │   ├── chat-message.entity.ts
+│   │   ├── client.entity.ts
+│   │   ├── config-param.entity.ts
+│   │   ├── document.entity.ts
+│   │   ├── dto
+│   │   │   ├── create-user.dto.ts
+│   │   │   └── update-user.dto.ts
+│   │   ├── loan-request.entity.ts
+│   │   ├── permissions.entity.ts
+│   │   ├── transaction.entity.ts
+│   │   ├── user
+│   │   │   ├── dto
+│   │   │   │   ├── create-user.dto.ts
+│   │   │   │   └── update-user.dto.ts
+│   │   │   ├── user.controller.ts
+│   │   │   ├── user.module.ts
+│   │   │   └── user.service.ts
+│   │   ├── user.controller.ts
+│   │   ├── user.entity.ts
+│   │   ├── user.module.ts
+│   │   └── user.service.ts
+│   ├── loan-request
+│   │   ├── dto
+│   │   │   ├── create-loan-request.dto.ts
+│   │   │   └── update-loan-request.dto.ts
+│   │   ├── loan-request.controller.spec.ts
+│   │   ├── loan-request.controller.ts
+│   │   ├── loan-request.module.ts
+│   │   ├── loan-request.service.spec.ts
+│   │   └── loan-request.service.ts
+│   ├── main.ts
+│   ├── notifications
+│   │   ├── notifications.controller.ts
+│   │   ├── notifications.entity.ts
+│   │   ├── notifications.module.ts
+│   │   └── notifications.service.ts
+│   ├── payment-accounts
+│   │   ├── payment-account.entity.ts
+│   │   ├── payment-account.module.ts
+│   │   ├── payment-account.service.ts
+│   │   └── payment-accounts.controller.ts
+│   ├── permissions
+│   │   ├── permissions.controller.ts
+│   │   ├── permissions.module.ts
+│   │   └── permissions.service.ts
+│   ├── prisma
+│   │   ├── prisma.service.ts
+│   │   └── schema.prisma
+│   ├── reports
+│   │   ├── reports.controller.ts
+│   │   ├── reports.module.ts
+│   │   └── reports.service.ts
+│   ├── transactions
+│   │   ├── transactions.controller.ts
+│   │   ├── transactions.module.ts
+│   │   └── transactions.service.ts
+│   └── users
+│       ├── users.controller.spec.ts
+│       ├── users.controller.ts
+│       ├── users.module.ts
+│       ├── users.service.spec.ts
+│       └── users.service.ts
+├── test
+│   ├── app.e2e-spec.ts
+│   └── jest-e2e.json
+├── tsconfig.build.json
+└── tsconfig.json
+
+32 directories, 127 files

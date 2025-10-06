@@ -41,7 +41,7 @@
     "pdf-lib": "^1.17.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "sharp": "^0.34.2",
+    "sharp": "^0.34.3",
     "sqlite": "^5.1.1",
     "sqlite3": "^5.1.7"
   },

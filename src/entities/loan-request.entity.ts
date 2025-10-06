@@ -14,6 +14,7 @@ import { ChatMessage }     from './chat-message.entity';
 import { LoanTransaction } from './transaction.entity';
 import { Document }        from './document.entity';
 import { PaymentAccount } from 'src/payment-accounts/payment-account.entity';
+
 /* ─────────────────────────────────────
    Enum with every possible loan state
    ──────────────────────────────────── */
@@ -45,7 +46,7 @@ export class LoanRequest {
   @OneToMany(() => Document, (doc) => doc.loanRequest, {
     cascade: true,
   })
-  documents: Document[]; // ✅ already present
+  documents: Document[];
 
   @ManyToOne(() => Client, (client) => client.loanRequests)
   @JoinColumn({ name: 'clientId' })
@@ -59,14 +60,14 @@ export class LoanRequest {
       This is the ONLY bank-account reference we keep here. */
   @ManyToOne(() => PaymentAccount, { nullable: true })
   @JoinColumn({ name: 'repaymentAccountId' })
-  repaymentAccount?: PaymentAccount;          // ✅ NEW FIELD
+  repaymentAccount?: PaymentAccount;
 
   /* ──────── Monetary values ────────── */
   @Column('decimal', { precision: 10, scale: 2 })
-  amount: number;                             // Final disbursed amount
+  amount: number;
 
   @Column('decimal', { precision: 10, scale: 2, nullable: true })
-  requestedAmount: number;                    // Amount originally requested
+  requestedAmount: number;
 
   /* ─────────── Status & meta ───────── */
   @Column({ type: 'text' })
@@ -80,23 +81,26 @@ export class LoanRequest {
 
   /* ─────────── Optional info ───────── */
   @Column({ type: 'text', nullable: true })
-  type: string;                               // e.g. “MENSUAL”, “QUINCENAL”
+  type: string;
 
   @Column({ type: 'text', nullable: true })
-  mode: string;                               // Any extra mode descriptor
+  mode: string;
 
   @Column({ type: 'int', nullable: true })
-  mora: number;                               // Days in arrears
+  mora: number;
 
   @Column({ type: 'date', nullable: true })
-  endDateAt: Date;                            // Expected pay-off date
+  endDateAt: Date;
 
   @Column({ default: false })
-  isRenewed: boolean;                         // Flag for renewed loans
+  isRenewed: boolean;
 
   @Column({ type: 'date', nullable: true })
-  renewedAt?: Date;                           // Renewal timestamp
+  renewedAt?: Date;
 
   @Column({ type: 'text', nullable: true })
-  paymentDay?: string;                        // “15-30”, “5-20”, etc.
+  paymentDay?: string;
+
+  @Column({ type: 'text', nullable: true })
+  notes: string; // Guarda un JSON.stringify de tu arreglo de notas
 }

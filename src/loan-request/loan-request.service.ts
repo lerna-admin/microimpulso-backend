@@ -72,36 +72,67 @@ async create(data: Partial<LoanRequest>): Promise<LoanRequest> {
   return await this.loanRequestRepository.save(loanRequest);
 }
 
-  
-  async renewLoanRequest(
-    loanRequestId: number,
-    amount: number,
-    newDate: string,
-    ): Promise<LoanRequest> {
-    const loan = await this.loanRequestRepository.findOne({
-      where: { id: loanRequestId },
-      relations: ['transactions'],   
-    });
-    
-    if (!loan) throw new NotFoundException('Loan request not found');
-    
-    
-    const penaltyTx = this.transactionRepository.create({
-      Transactiontype: TransactionType.PENALTY,
-      amount,
-      reference: 'Renewal penalty',
-      date: new Date(),
-    });
-    
-    loan.transactions.push(penaltyTx);  
-    
-    loan.isRenewed = true;
-    loan.renewedAt = new Date();
-    loan.endDateAt = new Date(newDate);
-    
-    return this.loanRequestRepository.save(loan);
-  }
-  
+async renewLoanRequest(
+  loanRequestId: number,
+  amount?: number,
+  newDate?: string,
+  note?: string
+): Promise<LoanRequest> {
+  // 1. Buscar el préstamo original
+  const originalLoan = await this.loanRequestRepository.findOne({
+    where: { id: loanRequestId },
+    relations: ['client', 'agent'],
+  });
+  if (!originalLoan) throw new Error('Loan request not found');
+
+  // 2. Marcar el préstamo original como completado y renovado
+  originalLoan.status = LoanRequestStatus.COMPLETED;
+  originalLoan.isRenewed = true;
+  originalLoan.renewedAt = new Date();
+
+  // 3. Agregar nota de renovación
+  const prevNotes = originalLoan.notes ? JSON.parse(originalLoan.notes) : [];
+  const renewalNote = note
+    ? note
+    : `Renovado el ${new Date().toISOString()}`;
+  prevNotes.push(renewalNote);
+  originalLoan.notes = JSON.stringify(prevNotes);
+
+  await this.loanRequestRepository.save(originalLoan);
+
+  // 4. Crear el nuevo préstamo renovado
+  const newNotes = [
+    `Renovación desde préstamo ID ${originalLoan.id} el ${new Date().toISOString()}`
+  ];
+  const newLoan = this.loanRequestRepository.create({
+    client: originalLoan.client,
+    agent: originalLoan.agent,
+    amount: amount ?? originalLoan.amount,
+    requestedAmount: amount ?? originalLoan.amount,
+    status: LoanRequestStatus.NEW, // o 'renovado' si tienes ese estado
+    type: originalLoan.type,
+    mode: originalLoan.mode,
+    mora: 0,
+    endDateAt: newDate ? new Date(newDate) : undefined,
+    isRenewed: false,
+    notes: JSON.stringify(newNotes),
+    paymentDay: originalLoan.paymentDay,
+    repaymentAccount: originalLoan.repaymentAccount,
+  });
+
+  const savedNewLoan = await this.loanRequestRepository.save(newLoan);
+
+  // 5. Registrar transacción de desembolso para el nuevo préstamo
+  const disbursement = this.transactionRepository.create({
+  loanRequest: savedNewLoan,
+  Transactiontype: TransactionType.DISBURSEMENT,
+  amount: savedNewLoan.amount,
+  date: new Date(), // si tu entidad usa 'date' en vez de 'createdAt'
+});
+  await this.transactionRepository.save(disbursement);
+
+  return savedNewLoan;
+}
   
   
   async findAll(

@@ -39,62 +39,90 @@ export class CashService {
         
     ) { }
     
-    
-    /** Register one manual movement */
-    async registerMovement(data: any): Promise<CashMovement> {
-        // Prevent array input
-        if (Array.isArray(data)) {
-            throw new BadRequestException('Array input is not supported for this endpoint');
-        }
-        
-        const {
-            typeMovement,
-            amount,
-            category,
-            reference,
-            adminId,
-            branchId,
-            transactionId,
-        } = data;
-        
-        // Validate typeMovement
-        if (typeof typeMovement !== 'string') {
-            throw new BadRequestException('typeMovement must be a string');
-        }
-        
-        if (!['ENTRADA', 'SALIDA'].includes(typeMovement)) {
-            throw new BadRequestException('typeMovement must be "ENTRADA" or "SALIDA"');
-        }
-        
-        // Validate amount
-        if (typeof amount !== 'number' || isNaN(amount) || amount <= 0) {
-            throw new BadRequestException('amount must be a number greater than 0');
-        }
-        
-        // Validate category
-        if (typeof category !== 'string' || !category.trim()) {
-            throw new BadRequestException('category must be a non-empty string');
-        }
-        
-        
-        
-        // Construct the cash movement entity
-        const partialMovement: Partial<CashMovement> = {
-            type: typeMovement as CashMovementType,
-            amount,
-            category: category as CashMovementCategory,
-            reference,
-            adminId,
-            branchId,
-            transaction: transactionId ? ({ id: transactionId } as any) : undefined,
-        };
-        
-        const movement = this.cashRepo.create(partialMovement);
-        
-        // Save to the database
-        return this.cashRepo.save(movement);
+    async registerMovement(data: any): Promise<CashMovement[]> {
+    // Prevent array input
+    if (Array.isArray(data)) {
+        throw new BadRequestException('Array input is not supported for this endpoint');
     }
-    
+
+    const {
+        typeMovement,
+        amount,
+        category,
+        reference,
+        adminId,
+        branchId,
+        transactionId,
+        origenId,
+        destinoId,
+    } = data;
+
+    // Validate typeMovement
+    if (typeof typeMovement !== 'string') {
+        throw new BadRequestException('typeMovement must be a string');
+    }
+
+    if (!['ENTRADA', 'SALIDA', 'TRANSFERENCIA'].includes(typeMovement)) {
+        throw new BadRequestException('typeMovement must be "ENTRADA", "SALIDA" o "TRANSFERENCIA"');
+    }
+
+    // Validate amount
+    if (typeof amount !== 'number' || isNaN(amount) || amount <= 0) {
+        throw new BadRequestException('amount must be a number greater than 0');
+    }
+
+    // Validate category
+    if (typeof category !== 'string' || !category.trim()) {
+        throw new BadRequestException('category must be a non-empty string');
+    }
+
+    // Transferencia: requiere origen y destino
+    if (typeMovement === 'TRANSFERENCIA') {
+        if (!origenId || !destinoId) {
+            throw new BadRequestException('origenId y destinoId son requeridos para transferencias');
+        }
+
+        // Movimiento de salida (origen -> destino)
+    const salida: Partial<CashMovement> = {
+      type: 'SALIDA' as CashMovementType,
+      amount,
+      category: 'TRANSFERENCIA' as CashMovementCategory,
+      reference,
+      branchId,
+      origenId,          // quien envía
+      destinoId,         // quien recibe
+      transaction: transactionId ? ({ id: transactionId } as any) : undefined,
+    };
+
+    // Movimiento de entrada (destino <- origen)
+    const entrada: Partial<CashMovement> = {
+      type: 'ENTRADA' as CashMovementType,
+      amount,
+      category: 'TRANSFERENCIA' as CashMovementCategory,
+      reference,
+      branchId,
+      origenId: destinoId,  // 🔁 invertido correctamente
+      destinoId: origenId,  // 🔁 invertido correctamente
+      transaction: transactionId ? ({ id: transactionId } as any) : undefined,
+    };
+        const salidaMov = await this.cashRepo.save(this.cashRepo.create(salida));
+        const entradaMov = await this.cashRepo.save(this.cashRepo.create(entrada));
+        return [salidaMov, entradaMov];
+    }
+
+    // Movimiento normal
+    const partialMovement: Partial<CashMovement> = {
+        type: typeMovement as CashMovementType,
+        amount,
+        category: category as CashMovementCategory,
+        reference,
+        branchId,
+        transaction: transactionId ? ({ id: transactionId } as any) : undefined,
+    };
+
+    const movement = this.cashRepo.create(partialMovement);
+    return [await this.cashRepo.save(movement)];
+}
     
     
     /** Paginated and filtered list of movements */

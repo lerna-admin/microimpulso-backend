@@ -16,7 +16,7 @@ export class CashController {
     /** Register a manual movement */
     @Post()
     async registerMovement(@Body() body: any) {
-        const { typeMovement, amount, category, description, branchId, userId } = body;
+    const { typeMovement, amount, category, description, branchId, userId, origenId, destinoId } = body;
         console.log('BODY RECIBIDO:', body);
         console.log("SI ES")
 
@@ -25,7 +25,7 @@ export class CashController {
             throw new BadRequestException('typeMovement must be a string');
         }
 
-        if (!['ENTRADA', 'SALIDA'].includes(typeMovement)) {
+        if (!['ENTRADA', 'SALIDA', 'TRANSFERENCIA'].includes(typeMovement)) {
             throw new BadRequestException('typeMovement must be either "ENTRADA" or "SALIDA"');
         }
 
@@ -53,14 +53,15 @@ export class CashController {
 
         
 
-        return this.cashService.registerMovement({
-            typeMovement: typeMovement,
-            amount,
-            category,
-            reference: description,
-            adminId:userId,
-            branchId
-        });
+     return this.cashService.registerMovement({
+        typeMovement: typeMovement,
+        amount,
+        category,
+        reference: description,
+        branchId,
+        origenId,
+        destinoId
+    });
     }
 
     /** Paginated list of movements with optional search */

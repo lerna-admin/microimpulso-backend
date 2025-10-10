@@ -16,6 +16,7 @@ import { toZonedTime } from 'date-fns-tz';
 export enum CashMovementType {
   ENTRADA = 'ENTRADA',
   SALIDA = 'SALIDA',
+  TRANSFERENCIA = 'TRANSFERENCIA',
 }
 
 
@@ -34,7 +35,7 @@ export class CashMovement {
   @ManyToOne(() => User)
   @JoinColumn({ name: 'adminId' })
   admin: User;
-  @Column()                 // ← FK explícita
+  @Column({ nullable: true })
   adminId: number;
 
   @ManyToOne(() => LoanTransaction, { nullable: true })
@@ -60,8 +61,14 @@ export class CashMovement {
    * - Transformer always returns the value in America/Bogota.
    * --------------------------------------------------------------------- */
  @CreateDateColumn({
-  type: 'datetime',
-  default: () => "DATETIME('now','localtime')",
-})
-createdAt: Date;
+    type: 'datetime',
+    default: () => "DATETIME('now','localtime')",
+  })
+  createdAt: Date;
+
+  @Column({ nullable: true })
+  origenId?: number;
+
+  @Column({ nullable: true })
+  destinoId?: number;
 }

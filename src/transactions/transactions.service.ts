@@ -131,10 +131,12 @@ async findRepaymentAccountForLoan(requestedAmount: number): Promise<PaymentAccou
     if (!loanRequest.repaymentAccount) {
       const repaymentAccount = await this.findRepaymentAccountForLoan(loanRequest.requestedAmount);
       if (!repaymentAccount) {
-        throw new BadRequestException('No repayment account available with sufficient limit');
+        //throw new BadRequestException('No repayment account available with sufficient limit');
+      }else {
+         loanRequest.repaymentAccount = repaymentAccount;
+
       }
       
-      loanRequest.repaymentAccount = repaymentAccount;
     }
     if (transactionType === TransactionType.DISBURSEMENT) {
       loanRequest.status = LoanRequestStatus.FUNDED;

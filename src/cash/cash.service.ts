@@ -171,6 +171,8 @@ export class CashService {
                 amount: m.amount,
                 createdAt: m.createdAt,
                 description: m.reference,
+                origen: m.origenId,
+                destino : m.destinoId
             })),
             total,
             page,
@@ -425,4 +427,145 @@ export class CashService {
     /* For AGENT, remove any tile flagged hideForAgent */
     return role === 'AGENT' ? tiles.filter(t => !t.hideForAgent) : tiles;
   }
+
+  /**
+ * Traza diaria por USUARIO:
+ * - baseAnterior (saldo de apertura del usuario)
+ * - desglose de ingresos/egresos del día
+ * - totalFinal
+ * - lista de movimientos del día del usuario (para trazabilidad)
+ */
+async getDailyTraceByUser(userId: number, rawDate: Date | string) {
+  const C = CashMovementCategory;
+  const T = CashMovementType;
+
+  // (Opcional) info del usuario/branch para la respuesta (no se usa para filtrar)
+  const user = await this.userRepository.findOne({
+    where: { id: userId },
+    relations: { branch: true },
+  });
+  const branchId = user?.branch?.id ?? null;
+
+  // 1) Ventana del día local [start, end]
+  const start =
+    typeof rawDate === 'string'
+      ? (() => { const [y, m, d] = rawDate.split('-').map(Number); return new Date(y, m - 1, d, 0, 0, 0, 0); })()
+      : new Date(new Date(rawDate).setHours(0, 0, 0, 0));
+  const end = new Date(start); end.setHours(23, 59, 59, 999);
+
+  // 2) Helper: dueño de un movimiento NO-TRANSFER (por transaction->loanRequest->agent o adminId)
+  const ownerIdForNonTransfer = (m: CashMovement): number | null =>
+    (m as any)?.transaction?.loanRequest?.agent?.id ?? m.adminId ?? null;
+
+  // 3) Qué “afecta” el saldo del usuario:
+  //    - TRANSFER: solo las filas donde el usuario es "origen" (coherente con tu inversión en ENTRADA)
+  //    - NO-TRANSFER: si el "dueño" es el user (agent del request o adminId)
+  const affectsUserForBalance = (m: CashMovement): boolean => {
+    if (m.category === C.TRANSFERENCIA) {
+      return m.origenId === userId; // tanto SALIDA (egreso) como ENTRADA invertida (ingreso)
+    }
+    return ownerIdForNonTransfer(m) === userId;
+  };
+
+  // 4) Cargar histórico y día (globales, sin filtrar por branch) con relaciones para poder resolver agent
+  const [historyAll, todayAll] = await Promise.all([
+    this.cashRepo.find({
+      where: { createdAt: LessThan(start) },
+      relations: { transaction: { loanRequest: { agent: true } } },
+    }),
+    this.cashRepo.find({
+      where: { createdAt: Between(start, end) },
+      relations: { transaction: { loanRequest: { agent: true } } },
+    }),
+  ]);
+
+  const history = historyAll.filter(affectsUserForBalance);
+  const today   = todayAll.filter(affectsUserForBalance);
+
+  // 5) Base anterior (saldo apertura del usuario)
+  const baseAnterior = history.reduce((tot, m) => (m.type === T.ENTRADA ? tot + +m.amount : tot - +m.amount), 0);
+
+  // 6) Sumas del día (solo movimientos que afectan al usuario)
+  const sumWhere = (pred: (m: CashMovement) => boolean) =>
+    today.filter(pred).reduce((s, m) => s + +m.amount, 0);
+
+  // Transferencias:
+  const transferIn  = sumWhere((m) => m.type === T.ENTRADA && m.category === C.TRANSFERENCIA && m.origenId === userId);
+  const transferOut = sumWhere((m) => m.type === T.SALIDA  && m.category === C.TRANSFERENCIA && m.origenId === userId);
+
+  // No-transfer (propietario por transaction->agent o adminId):
+  const ingresosNoTransfer = sumWhere(
+    (m) => m.type === T.ENTRADA && m.category !== C.TRANSFERENCIA && ownerIdForNonTransfer(m) === userId,
+  );
+  const prestamosNuevos = sumWhere(
+    (m) => m.type === T.SALIDA && m.category === C.PRESTAMO && ownerIdForNonTransfer(m) === userId,
+  );
+  const gastos = sumWhere(
+    (m) => m.type === T.SALIDA && m.category === C.GASTO_PROVEEDOR && ownerIdForNonTransfer(m) === userId,
+  );
+  const cobros = sumWhere(
+    (m) => m.type === T.ENTRADA && m.category === C.COBRO_CLIENTE && ownerIdForNonTransfer(m) === userId,
+  );
+
+  // 7) Renovados del día: por AGENTE (usuario), no por branch
+  const penalties = await this.loanTransactionRepo.find({
+    where: {
+      Transactiontype: TransactionType.PENALTY,
+      date: Between(start, end),
+      loanRequest: { agent: { id: userId } },
+    },
+    relations: { loanRequest: true },
+  });
+  const renewed = new Map<number, LoanRequest>();
+  penalties.forEach((p) => renewed.set(p.loanRequest.id, p.loanRequest as LoanRequest));
+  const totalRenovados = [...renewed.values()].reduce(
+    (s, req) => s + +(req.requestedAmount ?? req.amount ?? 0), 0,
+  );
+
+  // 8) Totales del día y saldo final
+  const totalIngresosDia = ingresosNoTransfer + transferIn + cobros;
+  const totalEgresosDia  = transferOut + prestamosNuevos + gastos + totalRenovados;
+  const totalFinal       = baseAnterior + totalIngresosDia - totalEgresosDia;
+
+  // 9) Trazabilidad del día (solo movimientos que afectan al usuario)
+  const movimientosDia = today
+    .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))
+    .map((m) => ({
+      id: m.id,
+      type: m.type,
+      category: m.category,
+      amount: +m.amount,
+      createdAt: m.createdAt,
+      description: m.reference,
+      origen: m.origenId,
+      destino: m.destinoId,
+      agentId: (m as any)?.transaction?.loanRequest?.agent?.id ?? null,
+      adminId: m.adminId ?? null,
+    }));
+
+  return {
+    fecha: start.toISOString().slice(0, 10),
+    usuario: userId,
+    branchId, // informativo
+    baseAnterior,
+    totalIngresosDia,
+    totalEgresosDia,
+    totalFinal,
+    ingresos: { ingresosNoTransfer, transferIn, cobros },
+    egresos:  { transferOut, prestamosNuevos, gastos, renovados: totalRenovados },
+    kpis: {
+      renovados: { monto: totalRenovados, cantidad: renewed.size },
+      nuevos:    {
+        monto: prestamosNuevos,
+        cantidad: today.filter(
+          (m) => m.type === T.SALIDA && m.category === C.PRESTAMO && ownerIdForNonTransfer(m) === userId
+        ).length,
+      },
+    },
+    movimientos: movimientosDia,
+  };
+}
+
+
+
 }

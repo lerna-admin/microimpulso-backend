@@ -6,6 +6,7 @@ import {
     Query,
     BadRequestException,
     ParseIntPipe,
+    Param,
 } from '@nestjs/common';
 import { CashService } from './cash.service';
 
@@ -101,5 +102,12 @@ export class CashController {
     ) {
         return this.cashService.getDailyTotalsByUser(userId, date);
     }
-
+@Get('daily-trace/by-user/:userId')
+async getDailyTraceByUserController(
+  @Param('userId') userId: number,
+  @Query('date') date?: string, // 'YYYY-MM-DD'
+) {
+  const target = date ?? new Date().toISOString().slice(0, 10);
+  return this.cashService.getDailyTraceByUser(+userId, target);
+}
 }

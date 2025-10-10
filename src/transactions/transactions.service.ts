@@ -124,7 +124,6 @@ async findRepaymentAccountForLoan(requestedAmount: number): Promise<PaymentAccou
       amount,
       reference,
       transaction: { id: saved.id },
-      adminId,
       branchId,
       date: new Date(), // Usa hora local del servidor directamente
     });

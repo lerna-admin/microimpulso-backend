@@ -12,6 +12,43 @@ import { LoanTransaction, TransactionType } from 'src/entities/transaction.entit
 import { format } from 'date-fns';
 import { User } from 'src/entities/user.entity';
 
+/** Devuelve el rango [start, end] del día local Bogotá para 'YYYY-MM-DD' o Date */
+function getBogotaDayRange(raw: string | Date) {
+  let y: number, m: number, d: number;
+  if (typeof raw === 'string') {
+    const [yy, mm, dd] = raw.split('-').map(Number);
+    y = yy; m = mm; d = dd;
+  } else {
+    const loc = new Date(raw);
+    y = loc.getFullYear();
+    m = loc.getMonth() + 1;
+    d = loc.getDate();
+  }
+  const start = new Date(y, (m - 1), d, 0, 0, 0, 0);   // 00:00 hora local del servidor
+  const end   = new Date(y, (m - 1), d, 23, 59, 59, 999);
+  return { start, end };
+}
+
+/** YYYY-MM-DD en local (sin UTC) */
+function formatYMDLocal(date: Date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+/** “YYYY-MM-DD HH:mm:ss” en local (útil para mostrar createdAt) */
+function formatLocalDateTime(date: Date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mm = String(date.getMinutes()).padStart(2, '0');
+  const ss = String(date.getSeconds()).padStart(2, '0');
+  return `${y}-${m}-${d} ${hh}:${mm}:${ss}`;
+}
+
+
 function getLocalDayRange(rawDate: string | Date): { start: Date; end: Date } {
     const date = typeof rawDate === 'string' ? new Date(rawDate) : rawDate;
     
@@ -439,6 +476,37 @@ export class CashService {
 async getDailyTraceByUser(userId: number, rawDate: Date | string) {
   const C = CashMovementCategory;
   const T = CashMovementType;
+  const { Raw } = require('typeorm'); // si ya tienes import de Raw arriba, quita esta línea
+
+  // ───────── helpers internos ─────────
+  const fmtYMDHMS = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mi = String(d.getMinutes()).padStart(2, '0');
+    const ss = String(d.getSeconds()).padStart(2, '0');
+    return `${y}-${m}-${dd} ${hh}:${mi}:${ss}`;
+  };
+  const fmtYMD = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${dd}`;
+  };
+  const localDayRange = (raw: string | Date) => {
+    let y: number, m: number, d: number;
+    if (typeof raw === 'string') {
+      const [yy, mm, dd] = raw.split('-').map(Number);
+      y = yy; m = mm; d = dd;
+    } else {
+      const loc = new Date(raw);
+      y = loc.getFullYear(); m = loc.getMonth() + 1; d = loc.getDate();
+    }
+    const start = new Date(y, m - 1, d, 0, 0, 0, 0);         // 00:00:00 local
+    const end   = new Date(y, m - 1, d, 23, 59, 59, 999);    // 23:59:59 local
+    return { start, end, startStr: fmtYMDHMS(start), endStr: fmtYMDHMS(end) };
+  };
 
   // (informativo) branch del usuario
   const user = await this.userRepository.findOne({
@@ -447,31 +515,34 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
   });
   const branchId = user?.branch?.id ?? null;
 
-  // 1) Ventana local del día [start, end]
-  const start =
-    typeof rawDate === 'string'
-      ? (() => { const [y, m, d] = rawDate.split('-').map(Number); return new Date(y, m - 1, d, 0, 0, 0, 0); })()
-      : new Date(new Date(rawDate).setHours(0, 0, 0, 0));
-  const end = new Date(start); end.setHours(23, 59, 59, 999);
+  // 1) Ventana local del sistema (en strings para consultas)
+  const { start, end, startStr, endStr } = localDayRange(rawDate);
 
-  // 2) Atribución NO-TRANSFER: por transaction→loanRequest→agent o adminId
+  // 2) Dueño de NO-TRANSFER (por transaction→loanRequest→agent o adminId)
   const ownerIdForNonTransfer = (m: CashMovement): number | null =>
     (m as any)?.transaction?.loanRequest?.agent?.id ?? m.adminId ?? null;
 
-  // 3) Afecta saldo del usuario
+  // 3) ¿Afecta saldo del agente?
   const affectsUserForBalance = (m: CashMovement): boolean => {
-    if (m.category === C.TRANSFERENCIA) return m.origenId === userId; // SALIDA (egreso) y ENTRADA (ingreso invertido)
+    if (m.category === C.TRANSFERENCIA) return m.origenId === userId; // SALIDA egresa; ENTRADA (invertida) ingresa
     return ownerIdForNonTransfer(m) === userId;
   };
 
-  // 4) Movimientos (globales) con relaciones para agent
+  // 4) Movimientos (histórico y día) — usar Raw con strings locales para evitar desfases
   const [historyAll, todayAll] = await Promise.all([
     this.cashRepo.find({
-      where: { createdAt: LessThan(start) },
+      where: {
+        createdAt: Raw((alias) => `${alias} < :start`, { start: startStr }),
+      },
       relations: { transaction: { loanRequest: { agent: true } } },
     }),
     this.cashRepo.find({
-      where: { createdAt: Between(start, end) },
+      where: {
+        createdAt: Raw((alias) => `${alias} BETWEEN :start AND :end`, {
+          start: startStr,
+          end: endStr,
+        }),
+      },
       relations: { transaction: { loanRequest: { agent: true } } },
     }),
   ]);
@@ -485,15 +556,13 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
     0
   );
 
-  // 6) Sumas del día
+  // 6) Sumas del día (solo con los que afectan saldo)
   const sumWhere = (pred: (m: CashMovement) => boolean) =>
     today.filter(pred).reduce((s, m) => s + +m.amount, 0);
 
-  // Transferencias (usando origenId === userId)
   const transferIn  = sumWhere((m) => m.type === T.ENTRADA && m.category === C.TRANSFERENCIA && m.origenId === userId);
   const transferOut = sumWhere((m) => m.type === T.SALIDA  && m.category === C.TRANSFERENCIA && m.origenId === userId);
 
-  // No-transfer (dueño por transaction→agent o adminId)
   const ingresosNoTransfer = sumWhere(
     (m) => m.type === T.ENTRADA && m.category !== C.TRANSFERENCIA && ownerIdForNonTransfer(m) === userId
   );
@@ -507,11 +576,14 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
     (m) => m.type === T.ENTRADA && m.category === C.COBRO_CLIENTE && ownerIdForNonTransfer(m) === userId
   );
 
-  // 7) Renovados del día: por AGENTE (usuario)
+  // 7) Renovados del día (por agente) — usar Raw con strings locales
   const penalties = await this.loanTransactionRepo.find({
     where: {
       Transactiontype: TransactionType.PENALTY,
-      date: Between(start, end),
+      date: Raw((alias) => `${alias} BETWEEN :start AND :end`, {
+        start: startStr,
+        end: endStr,
+      }),
       loanRequest: { agent: { id: userId } },
     },
     relations: { loanRequest: true },
@@ -528,26 +600,34 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
   const totalEgresosDia  = transferOut + prestamosNuevos + gastos + totalRenovados;
   const totalFinal       = baseAnterior + totalIngresosDia - totalEgresosDia;
 
-  // 9) Lista del día (sólo movimientos del usuario)
-  const movimientosDia = today
+  // 9) LISTA del día (unión: afectan saldo ∪ ligados al loanRequest del agente)
+  const todayAgentTxAll = todayAll.filter(
+    (m) => (m as any)?.transaction?.loanRequest?.agent?.id === userId
+  );
+  const byId = new Map<number, CashMovement>();
+  for (const m of [...today, ...todayAgentTxAll]) byId.set(m.id, m);
+  const todayForList = Array.from(byId.values());
+
+  const movimientosDia = todayForList
     .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))
     .map((m) => ({
       id: m.id,
       type: m.type,
       category: m.category,
       amount: +m.amount,
-      createdAt: m.createdAt,
+      createdAt: m.createdAt,      // Date tal cual
       description: m.reference,
       origen: m.origenId,
       destino: m.destinoId,
       agentId: (m as any)?.transaction?.loanRequest?.agent?.id ?? null,
       adminId: m.adminId ?? null,
+      affectsBalance: affectsUserForBalance(m),
     }));
 
-  // 10) Snapshot de cartera (a fin de día) — usa loan_transaction
+  // 10) Snapshot de cartera (a fin de día) — usar Raw con strings locales
   const txs = await this.loanTransactionRepo.find({
     where: {
-      date: LessThanOrEqual(end),
+      date: Raw((alias) => `${alias} <= :end`, { end: endStr }),
       loanRequest: { agent: { id: userId } },
     },
     relations: { loanRequest: { client: true, agent: true } },
@@ -613,11 +693,11 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
   const clientIds   = new Set(activeLoans.map((l) => l.clientId).filter(Boolean) as number[]);
 
   const portfolio = {
-    asOf: end.toISOString(),
+    asOf: end, // Date fin del día (local)
     agentId: userId,
-    clientsCount: clientIds.size, // clientes con saldo > 0
+    clientsCount: clientIds.size,
     loansCount: activeLoans.length,
-    outstandingTotal: activeLoans.reduce((s, l) => s + l.outstanding, 0), // valor en cartera
+    outstandingTotal: activeLoans.reduce((s, l) => s + l.outstanding, 0),
     loans: activeLoans
       .sort((a, b) => b.outstanding - a.outstanding)
       .map((l) => ({
@@ -634,10 +714,13 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
       })),
   };
 
-  // 11) KPI valorCobradoDia (sólo pagos del día)
+  // 11) KPI cobrado del día (pagos del día) — Raw con strings locales
   const paymentsToday = await this.loanTransactionRepo.find({
     where: {
-      date: Between(start, end),
+      date: Raw((alias) => `${alias} BETWEEN :start AND :end`, {
+        start: startStr,
+        end: endStr,
+      }),
       loanRequest: { agent: { id: userId } },
     },
     relations: { loanRequest: true },
@@ -646,18 +729,20 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
     .filter((t) => isPaymentLike(t.Transactiontype))
     .reduce((s, t) => s + +((t as any).amount ?? 0), 0);
 
-  // 12) KPI clientes nuevos/renovados (por desembolsos del día)
+  // 12) KPI nuevos/renovados (desembolsos del día) — Raw con strings locales
   const disbursalsToday = await this.loanTransactionRepo.find({
     where: {
       Transactiontype: TransactionType.DISBURSEMENT,
-      date: Between(start, end),
+      date: Raw((alias) => `${alias} BETWEEN :start AND :end`, {
+        start: startStr,
+        end: endStr,
+      }),
       loanRequest: { agent: { id: userId } },
     },
     relations: { loanRequest: { client: true } },
   });
 
   const toStatus = (lr?: LoanRequest) => String((lr as any)?.status ?? '').trim().toUpperCase();
-
   const NUEVO_CLIENTES = new Set<number>();
   const RENOV_CLIENTES = new Set<number>();
   let montoPrestadoNuevos = 0;
@@ -678,42 +763,34 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
     }
   }
 
-  const clientesNuevosCantidad    = NUEVO_CLIENTES.size;
-  const clientesRenovadosCantidad = RENOV_CLIENTES.size;
-
-  // 13) Respuesta final
   return {
-    fecha: start.toISOString().slice(0, 10),
+    fecha: fmtYMD(start),  // solo referencia para UI
     usuario: userId,
-    branchId, // informativo
+    branchId,              // informativo
     baseAnterior,
     totalIngresosDia,
     totalEgresosDia,
     totalFinal,
+
     ingresos: { ingresosNoTransfer, transferIn, cobros },
     egresos:  { transferOut, prestamosNuevos, gastos, renovados: totalRenovados },
+
     movimientos: movimientosDia,
 
-    // KPIs solicitados:
     kpis: {
-      valorEnCartera: portfolio.outstandingTotal, // total que le deben
-      clientesEnDeuda: portfolio.clientsCount,    // clientes con saldo > 0
+      valorEnCartera: portfolio.outstandingTotal,
+      clientesEnDeuda: portfolio.clientsCount,
       baseAnterior,
-      valorCobradoDia,                             // pagos del día (loan_transaction)
-      clientesNuevos: {
-        cantidad: clientesNuevosCantidad,
-        montoPrestado: montoPrestadoNuevos,       // suma desembolsado hoy (status != 'RENEW')
-      },
-      clientesRenovados: {
-        cantidad: clientesRenovadosCantidad,
-        montoPrestado: montoPrestadoRenovados,    // suma desembolsado hoy (status == 'RENEW')
-      },
+      valorCobradoDia,
+      clientesNuevos:    { cantidad: NUEVO_CLIENTES.size,  montoPrestado: montoPrestadoNuevos },
+      clientesRenovados: { cantidad: RENOV_CLIENTES.size,  montoPrestado: montoPrestadoRenovados },
     },
 
-    // Extra: cartera a fin de día
     portfolio,
   };
 }
+
+
 
 
 

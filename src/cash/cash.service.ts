@@ -649,7 +649,7 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
 
   const isDisb        = (t: any) => String(t) === String(TransactionType.DISBURSEMENT);
   const isPenalty     = (t: any) => String(t) === String(TransactionType.PENALTY);
-  const isPaymentLike = (t: any) => ['PAYMENT','REPAYMENT'].includes(String(t).toUpperCase());
+  const isPaymentLike = (t: any) => ['repayment','REPAYMENT'].includes(String(t).toUpperCase());
   const isFee         = (t: any) => String(t).toUpperCase() === 'FEE';
   const isDiscount    = (t: any) => String(t).toUpperCase() === 'DISCOUNT';
 

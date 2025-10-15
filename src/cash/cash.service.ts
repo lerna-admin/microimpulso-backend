@@ -662,8 +662,8 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
         loanRequestId: id,
         clientId: (lr as any)?.client?.id ?? null,
         clientName: ((lr as any)?.client?.name ?? (lr as any)?.client?.fullName ?? null),
-        disbursed: 0, repaid: 0, penalties: 0, fees: 0, discounts: 0,
-        lastPaymentAt: null,
+        disbursed: +((lr as any).amount ?? (lr as any).requestedAmount ?? 0),
+        repaid: 0, penalties: 0, fees: 0, discounts: 0,        lastPaymentAt: null,
       });
     }
     const agg = perLoan.get(id)!;

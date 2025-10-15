@@ -532,9 +532,7 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
   // 4) Movimientos (histórico y día) — usar Raw con strings locales para evitar desfases
   const [historyAll, todayAll] = await Promise.all([
     this.cashRepo.find({
-      where: {
-        createdAt: Raw((alias) => `${alias} < :start`, { start: startStr }),
-      },
+      where: { createdAt: Raw((alias) => `${alias} < :start`, { start: startStr }) },
       relations: { transaction: { loanRequest: { agent: true } } },
     }),
     this.cashRepo.find({
@@ -577,7 +575,7 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
     (m) => m.type === T.ENTRADA && m.category === C.COBRO_CLIENTE && ownerIdForNonTransfer(m) === userId
   );
 
-  // 7) Renovados del día (por agente) — usar Raw con strings locales
+  // 7) Renovados del día (antes venía de penalties; ahora lo sobreescribimos con desembolsos del día)
   const penalties = await this.loanTransactionRepo.find({
     where: {
       Transactiontype: TransactionType.PENALTY,
@@ -589,17 +587,13 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
     },
     relations: { loanRequest: true },
   });
-  const renewed = new Map<number, LoanRequest>();
-  penalties.forEach((p) => renewed.set(p.loanRequest.id, p.loanRequest as LoanRequest));
-  const totalRenovados = [...renewed.values()].reduce(
-    (s, req) => s + +(req.requestedAmount ?? req.amount ?? 0),
-    0
-  );
+  // placeholder (no usamos requestedAmount):
+  let totalRenovados = 0;
 
-  // 8) Totales del día y saldo final
+  // 8) Totales del día y saldo final (se recalculan al final cuando definamos totalRenovados real)
   const totalIngresosDia = ingresosNoTransfer + transferIn + cobros;
-  const totalEgresosDia  = transferOut + prestamosNuevos + gastos + totalRenovados;
-  const totalFinal       = baseAnterior + totalIngresosDia - totalEgresosDia;
+  let totalEgresosDia  = transferOut + prestamosNuevos + gastos + totalRenovados;
+  let totalFinal       = baseAnterior + totalIngresosDia - totalEgresosDia;
 
   // 9) LISTA del día (unión: afectan saldo ∪ ligados al loanRequest del agente)
   const todayAgentTxAll = todayAll.filter(
@@ -616,7 +610,7 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
       type: m.type,
       category: m.category,
       amount: +m.amount,
-      createdAt: m.createdAt,      // Date tal cual
+      createdAt: m.createdAt,
       description: m.reference,
       origen: m.origenId,
       destino: m.destinoId,
@@ -625,7 +619,7 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
       affectsBalance: affectsUserForBalance(m),
     }));
 
-  // 10) Snapshot de cartera (a fin de día) — usar Raw con strings locales
+  // 10) Snapshot de cartera (a fin de día)
   const txs = await this.loanTransactionRepo.find({
     where: {
       date: Raw((alias) => `${alias} <= :end`, { end: endStr }),
@@ -639,20 +633,25 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
     loanRequestId: number;
     clientId?: number | null;
     clientName?: string | null;
-    disbursed: number;
+    disbursed: number;   // base a pagar (LoanRequest.amount)
     repaid: number;
     penalties: number;
     fees: number;
     discounts: number;
     lastPaymentAt: Date | null;
+    status?: string;     // estado en minúsculas
   };
   const perLoan = new Map<number, LoanAgg>();
 
   const isDisb        = (t: any) => String(t) === String(TransactionType.DISBURSEMENT);
   const isPenalty     = (t: any) => String(t) === String(TransactionType.PENALTY);
-  const isPaymentLike = (t: any) => ['repayment','REPAYMENT'].includes(String(t).toUpperCase());
+  const isPaymentLike = (t: any) => ['PAYMENT','REPAYMENT'].includes(String(t).toUpperCase());
   const isFee         = (t: any) => String(t).toUpperCase() === 'FEE';
   const isDiscount    = (t: any) => String(t).toUpperCase() === 'DISCOUNT';
+
+  // Normalizador de estado (minúsculas)
+  const toStatus = (lr?: LoanRequest) =>
+    String((lr as any)?.status ?? '').trim().toLowerCase();
 
   for (const tx of txs) {
     const lr = tx.loanRequest as LoanRequest; if (!lr) continue;
@@ -663,45 +662,64 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
         loanRequestId: id,
         clientId: (lr as any)?.client?.id ?? null,
         clientName: ((lr as any)?.client?.name ?? (lr as any)?.client?.fullName ?? null),
-        disbursed: +((lr as any).amount ?? 0),
-        repaid: 0, penalties: 0, fees: 0, discounts: 0,        lastPaymentAt: null,
+        disbursed: +((lr as any).amount ?? 0),  // base a pagar SOLO amount
+        repaid: 0, penalties: 0, fees: 0, discounts: 0,
+        lastPaymentAt: null,
+        status: toStatus(lr),
       });
     }
     const agg = perLoan.get(id)!;
     const amt = +((tx as any).amount ?? 0);
 
     if (isDisb(tx.Transactiontype)) {
-      //agg.disbursed += amt;
+      // no-op: la base ya viene de lr.amount; NO sumar desembolsos aquí
     } else if (isPaymentLike(tx.Transactiontype)) {
       agg.repaid += amt;
       const d = (tx as any).date ? new Date((tx as any).date) : null;
       if (d && (!agg.lastPaymentAt || d > agg.lastPaymentAt)) agg.lastPaymentAt = d;
     } else if (isPenalty(tx.Transactiontype)) {
-      //agg.penalties += amt;
+      // si las penalidades aumentan deuda y NO están incluidas en amount, descomenta:
+      // agg.penalties += amt;
     } else if (isFee(tx.Transactiontype)) {
-      //agg.fees += amt;
+      // si los fees aumentan deuda y NO están incluidos en amount, descomenta:
+      // agg.fees += amt;
     } else if (isDiscount(tx.Transactiontype)) {
-      //agg.discounts += amt;
+      // si los descuentos reducen deuda y NO están ya aplicados, descomenta:
+      // agg.discounts += amt;
     }
   }
 
   const loans = Array.from(perLoan.values()).map((l) => {
-    const outstanding = l.disbursed - l.repaid + l.penalties + l.fees - l.discounts;
+    // Si fees/penalties ya están incluidos en amount, deja solo (amount - pagos - descuentos).
+    let outstanding = l.disbursed - l.repaid /* + l.penalties + l.fees */ - l.discounts;
+    if (outstanding < 0) outstanding = 0;
     return { ...l, outstanding };
   });
 
-  const activeLoans = loans.filter((l) => l.outstanding > 0.000001);
-  const clientIds   = new Set(activeLoans.map((l) => l.clientId).filter(Boolean) as number[]);
+  // Valor en cartera = SOLO 'funded' o 'renewed'
+  const ACTIVE_FOR_PORTFOLIO = new Set(['funded','renewed']);
+  const activeLoans = loans.filter(
+    (l: any) => ACTIVE_FOR_PORTFOLIO.has(String(l.status)) && l.outstanding > 0.000001
+  );
+
+  // Clientes en deuda = todos los ≠ 'completed' y ≠ 'rejected'
+  const EXCLUDE_FOR_DEBT = new Set(['completed','rejected']);
+  const clientsInDebtSet = new Set<number>();
+  for (const l of loans as any[]) {
+    if (!EXCLUDE_FOR_DEBT.has(String(l.status))) {
+      if (l.clientId) clientsInDebtSet.add(l.clientId as number);
+    }
+  }
 
   const portfolio = {
     asOf: end, // Date fin del día (local)
     agentId: userId,
-    clientsCount: clientIds.size,
+    clientsCount: clientsInDebtSet.size, // 👈 clientes con estado distinto a completed/rejected
     loansCount: activeLoans.length,
-    outstandingTotal: activeLoans.reduce((s, l) => s + l.outstanding, 0),
+    outstandingTotal: activeLoans.reduce((s: number, l: any) => s + l.outstanding, 0),
     loans: activeLoans
-      .sort((a, b) => b.outstanding - a.outstanding)
-      .map((l) => ({
+      .sort((a: any, b: any) => b.outstanding - a.outstanding)
+      .map((l: any) => ({
         loanRequestId: l.loanRequestId,
         clientId: l.clientId,
         clientName: l.clientName,
@@ -712,10 +730,11 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
         discounts: l.discounts,
         outstanding: l.outstanding,
         lastPaymentAt: l.lastPaymentAt,
+        status: l.status,
       })),
   };
 
-  // 11) KPI cobrado del día (pagos del día) — Raw con strings locales
+  // 11) KPI cobrado del día (pagos del día)
   const paymentsToday = await this.loanTransactionRepo.find({
     where: {
       date: Raw((alias) => `${alias} BETWEEN :start AND :end`, {
@@ -730,7 +749,7 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
     .filter((t) => isPaymentLike(t.Transactiontype))
     .reduce((s, t) => s + +((t as any).amount ?? 0), 0);
 
-  // 12) KPI nuevos/renovados (desembolsos del día) — Raw con strings locales
+  // 12) KPI nuevos/renovados (desembolsos del día)
   const disbursalsToday = await this.loanTransactionRepo.find({
     where: {
       Transactiontype: TransactionType.DISBURSEMENT,
@@ -743,7 +762,6 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
     relations: { loanRequest: { client: true } },
   });
 
-  const toStatus = (lr?: LoanRequest) => String((lr as any)?.status ?? '').trim().toUpperCase();
   const NUEVO_CLIENTES = new Set<number>();
   const RENOV_CLIENTES = new Set<number>();
   let montoPrestadoNuevos = 0;
@@ -755,14 +773,22 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
     if (!clientId) continue;
 
     const desembolso = +((tx as any).amount ?? 0);
-    if (toStatus(lr) === LoanRequestStatus.RENEWED) {
+    const st = toStatus(lr); // 'funded' | 'renewed' | 'new' | ...
+
+    if (st === 'renew' || st === 'renewed') {
       RENOV_CLIENTES.add(clientId);
       montoPrestadoRenovados += desembolso;
-    } else {
+    } else if (st === 'funded') {
       NUEVO_CLIENTES.add(clientId);
       montoPrestadoNuevos += desembolso;
     }
   }
+
+  // Fija el egreso de "renovados" a lo realmente desembolsado en renovaciones
+  totalRenovados = montoPrestadoRenovados;
+  // Recalcula egresos/total final con el valor definitivo de renovados
+  totalEgresosDia  = transferOut + prestamosNuevos + gastos + totalRenovados;
+  totalFinal       = baseAnterior + totalIngresosDia - totalEgresosDia;
 
   return {
     fecha: fmtYMD(start),  // solo referencia para UI
@@ -779,8 +805,8 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
     movimientos: movimientosDia,
 
     kpis: {
-      valorEnCartera: portfolio.outstandingTotal,
-      clientesEnDeuda: portfolio.clientsCount,
+      valorEnCartera: portfolio.outstandingTotal,       // suma de outstanding SOLO de funded/renewed
+      clientesEnDeuda: portfolio.clientsCount,          // ≠ completed y ≠ rejected
       baseAnterior,
       valorCobradoDia,
       clientesNuevos:    { cantidad: NUEVO_CLIENTES.size,  montoPrestado: montoPrestadoNuevos },
@@ -790,6 +816,7 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
     portfolio,
   };
 }
+
 
 
 

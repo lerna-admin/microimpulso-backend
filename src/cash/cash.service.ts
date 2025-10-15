@@ -7,10 +7,11 @@ import { LessThan } from 'typeorm';
 import { startOfDay, endOfDay, parseISO } from 'date-fns';
 import { toZonedTime, fromZonedTime } from 'date-fns-tz';
 import { AgentClosing } from 'src/entities/agent-closing.entity';
-import { LoanRequest } from 'src/entities/loan-request.entity';
+import { LoanRequest, LoanRequestStatus } from 'src/entities/loan-request.entity';
 import { LoanTransaction, TransactionType } from 'src/entities/transaction.entity';
 import { format } from 'date-fns';
 import { User } from 'src/entities/user.entity';
+import { LoanRequestService } from 'src/loan-request/loan-request.service';
 
 /** Devuelve el rango [start, end] del día local Bogotá para 'YYYY-MM-DD' o Date */
 function getBogotaDayRange(raw: string | Date) {
@@ -754,7 +755,7 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
     if (!clientId) continue;
 
     const desembolso = +((tx as any).amount ?? 0);
-    if (toStatus(lr) === 'renewed') {
+    if (toStatus(lr) === LoanRequestStatus.RENEWED) {
       RENOV_CLIENTES.add(clientId);
       montoPrestadoRenovados += desembolso;
     } else {

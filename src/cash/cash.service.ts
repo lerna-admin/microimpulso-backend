@@ -670,17 +670,17 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
     const amt = +((tx as any).amount ?? 0);
 
     if (isDisb(tx.Transactiontype)) {
-      agg.disbursed += amt;
+      //agg.disbursed += amt;
     } else if (isPaymentLike(tx.Transactiontype)) {
       agg.repaid += amt;
       const d = (tx as any).date ? new Date((tx as any).date) : null;
       if (d && (!agg.lastPaymentAt || d > agg.lastPaymentAt)) agg.lastPaymentAt = d;
     } else if (isPenalty(tx.Transactiontype)) {
-      agg.penalties += amt;
+      //agg.penalties += amt;
     } else if (isFee(tx.Transactiontype)) {
-      agg.fees += amt;
+      //agg.fees += amt;
     } else if (isDiscount(tx.Transactiontype)) {
-      agg.discounts += amt;
+      //agg.discounts += amt;
     }
   }
 

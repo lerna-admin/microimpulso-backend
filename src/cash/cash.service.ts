@@ -330,9 +330,10 @@ export class CashService {
         }
         
         const totalRenovados = [...renewedByRequest.values()].reduce(
-            (sum, req) => sum + +(req.requestedAmount ?? req.amount ?? 0),
+            (sum, req) => sum + +((req as any).amount ?? 0),
             0,
         );
+
         
         
         
@@ -440,9 +441,10 @@ export class CashService {
       renewed.set(p.loanRequest.id, p.loanRequest as LoanRequest),
     );
     const totalRenovados = [...renewed.values()].reduce(
-      (s, r) => s + +(r.requestedAmount ?? r.amount ?? 0),
-      0,
+        (s, r) => s + +((r as any).amount ?? 0),
+        0,
     );
+
 
     const nuevosHoy = today.filter(
       (m) => m.type === 'SALIDA' && m.category === 'PRESTAMO',
@@ -591,9 +593,10 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
   const renewed = new Map<number, LoanRequest>();
   penalties.forEach((p) => renewed.set(p.loanRequest.id, p.loanRequest as LoanRequest));
   const totalRenovados = [...renewed.values()].reduce(
-    (s, req) => s + +(req.requestedAmount ?? req.amount ?? 0),
+    (s, req) => s + +((req as any).amount ?? 0),
     0
-  );
+    );
+
 
   // 8) Totales del día y saldo final
   const totalIngresosDia = ingresosNoTransfer + transferIn + cobros;

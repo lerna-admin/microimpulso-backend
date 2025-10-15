@@ -754,7 +754,7 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
     if (!clientId) continue;
 
     const desembolso = +((tx as any).amount ?? 0);
-    if (toStatus(lr) === 'RENEW') {
+    if (toStatus(lr) === 'renewed') {
       RENOV_CLIENTES.add(clientId);
       montoPrestadoRenovados += desembolso;
     } else {

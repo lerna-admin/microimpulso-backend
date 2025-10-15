@@ -109,7 +109,7 @@ async renewLoanRequest(
     agent: originalLoan.agent,
     amount: amount ?? originalLoan.amount,
     requestedAmount: amount ?? originalLoan.amount,
-    status: LoanRequestStatus.NEW, // o 'renovado' si tienes ese estado
+    status: LoanRequestStatus.RENEWED, // o 'renovado' si tienes ese estado
     type: originalLoan.type,
     mode: originalLoan.mode,
     mora: 0,

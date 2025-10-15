@@ -26,6 +26,7 @@ export enum LoanRequestStatus {
   CANCELED     = 'canceled',
   COMPLETED    = 'completed',
   FUNDED       = 'funded',
+  RENEWED      = 'renewed',
 }
 
 @Entity()

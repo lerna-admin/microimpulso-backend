@@ -407,7 +407,7 @@ async findAll(
     async findOne(id: number): Promise<any | null> {
       const result = await this.clientRepository
       .createQueryBuilder('client')
-      .innerJoin('client.loanRequests', 'loan', 'loan.status = :status', { status: 'funded' })
+      .innerJoin('client.loanRequests', 'loan', 'loan.status IN :status', { status: ['funded', 'renewed'] })
       .innerJoin('loan.transactions', 'txn')
       .where('client.id = :id', { id })
       .select('client.id', 'clientId')

@@ -406,70 +406,65 @@ async findAll(
     
     
     
-    async findOne(id: number): Promise<any | null> {
-      const result = await this.clientRepository
-      .createQueryBuilder('client')
-    .innerJoin('client.loanRequests', 'loan', 'loan.status IN (:...status)', { status: ['funded', 'renewed'] })
-      .innerJoin('loan.transactions', 'txn')
-      .where('client.id = :id', { id })
-      .select('client.id', 'clientId')
-      .addSelect('client.name', 'clientName')
-      .addSelect('loan.id', 'loanRequestId')
-      .addSelect('loan.mode', 'loanMode')
-      .addSelect('loan.type', 'loanType')
-      .addSelect('loan.amount', 'totalAmountToPay')
-      .addSelect(
-        `
+   async findOne(id: number): Promise<any | null> {
+  const result = await this.clientRepository
+    .createQueryBuilder('client')
+    .innerJoin(
+      'client.loanRequests',
+      'loan',
+      'loan.status IN (:...status)',
+      { status: ['funded', 'renewed'] }
+    )
+    .innerJoin('loan.transactions', 'txn')
+    .where('client.id = :id', { id })
+    .select('client.id', 'clientId')
+    .addSelect('client.name', 'clientName')
+    .addSelect('loan.id', 'loanRequestId')
+    .addSelect('loan.mode', 'loanMode')
+    .addSelect('loan.type', 'loanType')
+    .addSelect('loan.amount', 'totalAmountToPay')
+    .addSelect(`
       CASE 
         WHEN loan."endDateAt" IS NOT NULL AND julianday('now') > julianday(loan."endDateAt")
         THEN CAST(julianday('now') - julianday(loan."endDateAt") AS INTEGER)
         ELSE 0
       END
-    `,
-        'diasMora',
-      )
-      .addSelect(
-        `
-      SUM(CASE WHEN txn."Transactiontype" = 'disbursement' THEN txn.amount ELSE 0 END)
-    `,
-        'montoPrestado',
-      )
-      .addSelect(
-        `
-      SUM(CASE WHEN txn."Transactiontype" = 'repayment' THEN txn.amount ELSE 0 END)
-    `,
-        'totalPagado',
-      )
-      .addSelect(
-        `
-      loan.amount - SUM(CASE WHEN txn."Transactiontype" = 'repayment' THEN txn.amount ELSE 0 END)
-    `,
-        'pendientePorPagar',
-      )
-      .groupBy('client.id')
-      .addGroupBy('loan.id')
-      .getRawOne();
-      
-      const fullClient = await this.clientRepository.findOne({
-        where: { id },
-        relations: {
-          loanRequests: {
-            transactions: true,
-          },
-        },
-      });
-      
-      if (fullClient) {
-        fullClient.loanRequests = fullClient.loanRequests.filter(
-          (loan) => loan.status !== 'completed' && loan.status !== 'rejected',
-        );
-      }
-      
-      return {
-        ...result,
-        client: fullClient,
-      };
+    `, 'diasMora')
+    .addSelect(`SUM(CASE WHEN txn."Transactiontype" = 'disbursement' THEN txn.amount ELSE 0 END)`, 'montoPrestado')
+    .addSelect(`SUM(CASE WHEN txn."Transactiontype" = 'repayment' THEN txn.amount ELSE 0 END)`, 'totalPagado')
+    .addSelect(`loan.amount - SUM(CASE WHEN txn."Transactiontype" = 'repayment' THEN txn.amount ELSE 0 END)`, 'pendientePorPagar')
+    .groupBy('client.id')
+    .addGroupBy('loan.id')
+    .getRawOne();
+
+  const fullClient = await this.clientRepository.findOne({
+    where: { id },
+    relations: { loanRequests: { transactions: true } },
+  });
+
+  if (fullClient) {
+    // Mantén fuera solo los que no quieres mostrar
+    fullClient.loanRequests = fullClient.loanRequests.filter(
+      (loan) => loan.status !== 'completed' && loan.status !== 'rejected',
+    );
+
+    // ⬇️ Deriva el estado "activo" para la respuesta si hay funded/renewed
+    const hasActiveLoan = fullClient.loanRequests.some(
+      (lr) => lr.status === 'funded' || lr.status === 'renewed'
+    );
+
+    if (hasActiveLoan) {
+      // OJO: no cambiamos la BD; solo la respuesta
+      (fullClient as any).status = 'ACTIVE';
     }
+  }
+
+  return {
+    ...result,
+    client: fullClient,
+  };
+}
+
     
     async create(data: Partial<Client>): Promise<Client> {
       if (data.document || data.email) {

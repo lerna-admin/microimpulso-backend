@@ -363,190 +363,142 @@ export class CashService {
     ];
   }
   
+    
+
   /**
-  * Returns the branch-level dashboard for the day that belongs to `userId`.
-  * • ADMIN / MANAGER → full dashboard (same columns as antes).
-  * • AGENT           → igual, excepto que oculta la tarjeta “Gastos”.
-  *
-  * Actualizado: maneja RENOVACIONES agrupando por bundle y sumando solo el NETO (desembolsado - aplicado),
-  *    excluyendo las líneas internas de renovación de los totales normales.
-  *    Mantiene el MISMO tipo de retorno (array de tiles con label/value/...).
-  */
-  async getDailyTotalsByUser(userId: number, rawDate: Date | string) {
-    /* ─── 0 · Resolve branch + role from the user ─── */
-    const user = await this.userRepository.findOne({
-      where: { id: userId },
-      relations: { branch: true },
-    });
-    if (!user?.branch?.id) throw new BadRequestException('User has no branch');
-    const branchId = user.branch.id;
-    const role     = user.role; // 'ADMIN' | 'AGENT' | 'MANAGER' …
-    
-    /* ─── 1 · [start, end] for local day ─── */
-    const start =
+ * Returns the branch-level dashboard for the day that belongs to `userId`.
+ * • ADMIN / MANAGER → full dashboard (same columns as antes).
+ * • AGENT           → igual, excepto que oculta la tarjeta “Gastos”.
+ *
+ * Actualizado: KPIs “Renovados” y “Nuevos” se basan en transacciones de
+ * DESEMBOLSO del día y en LoanRequest.status === 'RENEWED'.
+ * Se mantiene el MISMO shape de respuesta.
+ */
+async getDailyTotalsByUser(userId: number, rawDate: Date | string) {
+  /* ─── 0 · Resolve branch + role from the user ─── */
+  const user = await this.userRepository.findOne({
+    where: { id: userId },
+    relations: { branch: true },
+  });
+  if (!user?.branch?.id) throw new BadRequestException('User has no branch');
+  const branchId = user.branch.id;
+  const role     = user.role; // 'ADMIN' | 'AGENT' | 'MANAGER' …
+
+  /* ─── 1 · [start, end] for local day ─── */
+  const start =
     typeof rawDate === 'string'
-    ? (() => {
-      const [y, m, d] = rawDate.split('-').map(Number);
-      return new Date(y, m - 1, d, 0, 0, 0, 0); // 00:00 local
-    })()
-    : new Date(rawDate.setHours(0, 0, 0, 0));
-    const end = new Date(start);
-    end.setHours(23, 59, 59, 999);
-    
-    /* ─── 2 · Cash movements ─── */
-    const [today, history] = await Promise.all([
-      this.cashRepo.find({
-        where: { branch: { id: branchId }, createdAt: Between(start, end) },
-      }),
-      this.cashRepo.find({
-        where: { branch: { id: branchId }, createdAt: LessThan(start) },
-      }),
-    ]);
-    
-    /* Opening cash (acumulado hasta antes de hoy) */
-    const opening = history.reduce(
-      (tot, m) => tot + (m.type === 'ENTRADA' ? +m.amount : -+m.amount),
-      0,
-    );
-    
-    // ---------- LÓGICA NUEVA PARA RENOVACIONES ----------
-    type CashMovement = typeof today[number] & {
-      meta?: {
-        isRenewal?: boolean;
-        renewalGroupId?: string;
-        loanId?: number | string;
-        renewalAppliedAmount?: number;   // si viene explícito en meta
-        renewalDisbursedAmount?: number; // si viene explícito en meta
-      };
-      renewalGroupId?: string;           // por si viene en raíz
-      reference?: string | null;
-    };
-    
-    // Ajusta estas categorías a tu catálogo real si ya existen:
-    const RENEWAL_APPLIED_CATS = new Set([
-      'RENOVACION_APLICADA',
-      'RENEWAL_APPLIED',
-      'COBRO_RENOVACION',
-    ]);
-    const RENEWAL_DISBURSE_CATS = new Set([
-      'RENOVACION_DESEMBOLSO',
-      'RENEWAL_DISBURSED',
-    ]);
-    
-    const buildBundleKey = (m: CashMovement): string | null => {
-      if (m.meta?.renewalGroupId) return `g:${m.meta.renewalGroupId}`;
-      if (m.renewalGroupId)       return `g:${m.renewalGroupId}`;
-      if (m.meta?.loanId != null) {
-        const y = start.getFullYear(), mo = String(start.getMonth() + 1).padStart(2,'0'), d = String(start.getDate()).padStart(2,'0');
-        return `l:${m.meta.loanId}|${y}-${mo}-${d}`;
-      }
-      if (typeof m.reference === 'string') {
-        const m1 = m.reference.match(/renewal(?:Group|Id)?[:#\s-]*([A-Za-z0-9_-]+)/i);
-        if (m1?.[1]) return `g:${m1[1]}`;
-      }
-      return null;
-    };
-    
-    const isRenewalMovement = (m: CashMovement): boolean =>
-      !!(m.meta?.isRenewal ||
-      RENEWAL_APPLIED_CATS.has(m.category) ||
-      RENEWAL_DISBURSE_CATS.has(m.category) ||
-      buildBundleKey(m));
-      
-      const isApplied = (m: CashMovement): boolean => {
-        if (typeof m.meta?.renewalAppliedAmount === 'number') return true;
-        if (RENEWAL_APPLIED_CATS.has(m.category)) return true;
-        return m.type === 'ENTRADA'; // heurística típica
-      };
-      
-      const isDisbursed = (m: CashMovement): boolean => {
-        if (typeof m.meta?.renewalDisbursedAmount === 'number') return true;
-        if (RENEWAL_DISBURSE_CATS.has(m.category)) return true;
-        return m.type === 'SALIDA'; // heurística típica
-      };
-      
-      type Bundle = { applied: number; disbursed: number; ids: Set<any> };
-      const bundles = new Map<string, Bundle>();
-      const renewalIds = new Set<any>();
-      
-      (today as CashMovement[]).forEach((m) => {
-        if (!isRenewalMovement(m)) return;
-        const key = buildBundleKey(m) ?? `heur:${m.id}`;
-        const b = bundles.get(key) ?? { applied: 0, disbursed: 0, ids: new Set() };
-        
-        if (typeof m.meta?.renewalAppliedAmount === 'number') b.applied += +m.meta.renewalAppliedAmount;
-        else if (isApplied(m))                                 b.applied += +m.amount;
-        
-        if (typeof m.meta?.renewalDisbursedAmount === 'number') b.disbursed += +m.meta.renewalDisbursedAmount;
-        else if (isDisbursed(m))                                 b.disbursed += +m.amount;
-        
-        b.ids.add(m.id);
-        bundles.set(key, b);
-        renewalIds.add(m.id);
-      });
-      
-      // Neto total de renovaciones + métricas de "Renovados"
-      let netoRenovaciones = 0;
-      let totalRenovadosDisbursado = 0;
-      let cantidadRenovados = 0;
-      
-      for (const [, b] of bundles) {
-        const net = (b.disbursed || 0) - (b.applied || 0);
-        netoRenovaciones       += net;
-        totalRenovadosDisbursado += (b.disbursed || 0);
-        if (b.disbursed > 0 || b.applied > 0) cantidadRenovados += 1;
-      }
-      
-      // ---------- TOTALES NORMALES EXCLUYENDO RENOVACIONES ----------
-      const todayNoRenewal = (today as CashMovement[]).filter(m => !renewalIds.has(m.id));
-      
-      const totalEntradasNoRen = todayNoRenewal
-      .filter((m) => m.type === 'ENTRADA')
-      .reduce((s, m) => s + +m.amount, 0);
-      
-      const totalSalidasNoRen = todayNoRenewal
-      .filter((m) => m.type === 'SALIDA')
-      .reduce((s, m) => s + +m.amount, 0);
-      
-      // Caja real = opening + entradas(no-renov) - salidas(no-renov) + neto(renovaciones)
-      const realCash = opening + totalEntradasNoRen - totalSalidasNoRen + netoRenovaciones;
-      
-      // ---------- CATEGORÍAS (EXCLUYENDO RENOVACIONES EN LOS FILTROS) ----------
-      const byCategoryNoRen = (cat: string) =>
-        todayNoRenewal
+      ? (() => {
+          const [y, m, d] = rawDate.split('-').map(Number);
+          return new Date(y, m - 1, d, 0, 0, 0, 0); // 00:00 local
+        })()
+      : new Date(rawDate.setHours(0, 0, 0, 0));
+  const end = new Date(start);
+  end.setHours(23, 59, 59, 999);
+
+  /* ─── 2 · Cash movements (igual que antes) ─── */
+  const [today, history] = await Promise.all([
+    this.cashRepo.find({
+      where: { branch: { id: branchId }, createdAt: Between(start, end) },
+    }),
+    this.cashRepo.find({
+      where: { branch: { id: branchId }, createdAt: LessThan(start) },
+    }),
+  ]);
+
+  /* Opening cash (acumulado hasta antes de hoy) */
+  const opening = history.reduce(
+    (tot, m) => tot + (m.type === 'ENTRADA' ? +m.amount : -+m.amount),
+    0,
+  );
+
+  /* Net para hoy (idéntico a tu lógica previa de caja) */
+  const totalEntradas = today
+    .filter((m) => m.type === 'ENTRADA')
+    .reduce((s, m) => s + +m.amount, 0);
+
+  const totalSalidas = today
+    .filter((m) => m.type === 'SALIDA')
+    .reduce((s, m) => s + +m.amount, 0);
+
+  const realCash = opening + totalEntradas - totalSalidas;
+
+  /* Helpers por categoría (igual que antes) */
+  const byCategory = (cat: string) =>
+    today
       .filter((m) => m.category === cat)
       .reduce((s, m) => s + +m.amount, 0);
-      
-      const entraCaja        = byCategoryNoRen('ENTRADA_GERENCIA');
-      const totalCobros      = byCategoryNoRen('COBRO_CLIENTE'); // cobros NO-renovación
-      // Para "Préstamos" mantenemos la semántica de antes, pero ya SIN doble conteo:
-      // desembolsos no-renovación + desembolsos por renovación
-      const totalDesembolsos = byCategoryNoRen('PRESTAMO') + totalRenovadosDisbursado;
-      const totalGastos      = byCategoryNoRen('GASTO_PROVEEDOR');
-      
-      // ---------- KPIs "Renovados" y "Nuevos" con la lógica nueva ----------
-      const nuevosHoy = todayNoRenewal.filter(
-        (m) => m.type === 'SALIDA' && m.category === 'PRESTAMO',
-      );
-      const totalNuevos = nuevosHoy.reduce((s, m) => s + +m.amount, 0);
-      
-      /* ─── 3 · Assemble tiles (MISMO SHAPE) ─── */
-      const tiles = [
-        { label: 'Caja anterior', value: opening },
-        { label: 'Entra caja',    value: entraCaja,        trend: 'increase' },
-        { label: 'Cobro',         value: totalCobros,      trend: 'increase' },
-        { label: 'Préstamos',     value: totalDesembolsos, trend: 'decrease' },
-        { label: 'Gastos',        value: totalGastos,      trend: 'decrease', hideForAgent: true },
-        { label: 'Caja real',     value: realCash },
-        // Renovados ahora se calculan desde los bundles (sin usar penalties):
-        { label: 'Renovados',     value: totalRenovadosDisbursado, amount: cantidadRenovados },
-        { label: 'Nuevos',        value: totalNuevos,               amount: nuevosHoy.length },
-      ];
-      
-      /* For AGENT, remove any tile flagged hideForAgent */
-      return role === 'AGENT' ? tiles.filter(t => !t.hideForAgent) : tiles;
+
+  const entraCaja        = byCategory('ENTRADA_GERENCIA');
+  const totalCobros      = byCategory('COBRO_CLIENTE');
+  const totalDesembolsos = byCategory('PRESTAMO');
+  const totalGastos      = byCategory('GASTO_PROVEEDOR');
+
+  /* ──────────────────────────────────────────────
+   * KPIs “Renovados” / “Nuevos” con la regla actual:
+   *   - Renovado ⇢ loanRequest.status === 'RENEWED'
+   *   - Día ⇢ fecha de la transacción de DESEMBOLSO (entre [start, end])
+   *   - Nuevo ⇢ desembolso del día cuyo loanRequest.status !== 'RENEWED'
+   * (sin usar PENALTY ni categorías de caja)
+   * ────────────────────────────────────────────── */
+  const disbursements = await this.loanTransactionRepo.find({
+    where: {
+      Transactiontype: TransactionType.DISBURSEMENT,
+      date: Between(start, end),
+      loanRequest: { agent: { branch: { id: branchId } } },
+    },
+    relations: { loanRequest: true },
+  });
+
+  const isRenewedStatus = (st: any) => {
+    const s = String(st ?? '').toUpperCase();
+    return s === 'RENEWED' || s === String(LoanRequestStatus.RENEWED);
+  };
+
+  let totalRenovados = 0;
+  let countRenovados = 0;
+  let totalNuevos    = 0;
+  let countNuevos    = 0;
+
+  // agrupamos por loanRequest para no duplicar si hay varias líneas del mismo desembolso
+  const perLoanSum = new Map<number, number>();
+  for (const tx of disbursements) {
+    const lr = tx.loanRequest as LoanRequest | undefined;
+    if (!lr) continue;
+    const lrId = Number(lr.id);
+    const amt  = Number((tx as any).amount ?? 0);
+    perLoanSum.set(lrId, (perLoanSum.get(lrId) ?? 0) + amt);
+  }
+
+  for (const [lrId, amt] of perLoanSum.entries()) {
+    // necesitamos el status del LR; ya viene en relations: { loanRequest: true }
+    const tx = disbursements.find(t => Number((t.loanRequest as any)?.id) === lrId)!;
+    const lr = tx.loanRequest as LoanRequest;
+
+    if (isRenewedStatus(lr.status)) {
+      totalRenovados += amt;
+      countRenovados += 1;
+    } else {
+      totalNuevos += amt;
+      countNuevos += 1;
     }
-    
+  }
+
+  /* ─── 3 · Assemble tiles (MISMO SHAPE) ─── */
+  const tiles = [
+    { label: 'Caja anterior', value: opening },
+    { label: 'Entra caja',    value: entraCaja,        trend: 'increase' },
+    { label: 'Cobro',         value: totalCobros,      trend: 'increase' },
+    { label: 'Préstamos',     value: totalDesembolsos, trend: 'decrease' },
+    { label: 'Gastos',        value: totalGastos,      trend: 'decrease', hideForAgent: true },
+    { label: 'Caja real',     value: realCash },
+    { label: 'Renovados',     value: totalRenovados, trend: 'increase', amount: countRenovados },
+    { label: 'Nuevos',        value: totalNuevos,    trend: 'increase', amount: countNuevos },
+  ];
+
+  /* Para AGENT, se ocultan tiles con hideForAgent */
+  return role === 'AGENT' ? tiles.filter(t => !t.hideForAgent) : tiles;
+}
+
     
     /**
     * Traza diaria por USUARIO:

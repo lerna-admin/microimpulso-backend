@@ -141,7 +141,9 @@ async findAll(
   for (const [, clientLoans] of clientMap) {
     const client = clientLoans[0].client;
 
-    const hasFunded = clientLoans.some(l => l.status === 'funded');
+    const validStatuses = ['funded', 'renewed'];
+    const hasFunded = clientLoans.some(l => validStatuses.includes(l.status));
+    
     const status: 'active' | 'inactive' = hasFunded ? 'active' : 'inactive';
 
     const sel =

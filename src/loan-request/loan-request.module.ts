@@ -8,14 +8,18 @@ import { LoanTransaction } from '../entities/transaction.entity';
 import { UsersModule } from '../users/users.module'
 import { User } from '../entities/user.entity';
 import { Notification } from 'src/notifications/notifications.entity';
+import { Client } from 'src/entities/client.entity';
+import { ClientsModule } from 'src/clients/clients.module';
 
 
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([LoanRequest,LoanTransaction, User, Notification]),
+    TypeOrmModule.forFeature([LoanRequest,LoanTransaction, User, Notification, Client]),
     ChatModule,
-    UsersModule
+    UsersModule,
+    ClientsModule
+    
   ],
   controllers: [LoanRequestController],
   providers: [LoanRequestService],

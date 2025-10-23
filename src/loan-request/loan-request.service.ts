@@ -8,6 +8,7 @@ import { TransactionType, LoanTransaction} from 'src/entities/transaction.entity
 import { User } from 'src/entities/user.entity'
 import { Notification } from 'src/notifications/notifications.entity';
 import { BadRequestException } from '@nestjs/common';
+import { Client, ClientStatus } from 'src/entities/client.entity';
 
 
 @Injectable()
@@ -24,6 +25,8 @@ export class LoanRequestService {
     private readonly userRepository: Repository<User>,
     @InjectRepository(Notification)
     private notificationRepository: Repository<Notification>,
+    @InjectRepository(Client)
+    private clientRepository: Repository<Client>,
     
     ) {}
   
@@ -371,13 +374,17 @@ async renewLoanRequest(
   }
   
   async update(id: number, updateLoanRequestDto: UpdateLoanRequestDto): Promise<LoanRequest> {
+    console.log(id)
     const loanRequest = await this.loanRequestRepository.findOne({ where: { id },
-      relations: ['agent', 'agent.branch', 'agent.branch.administrator'], });
-    
+      relations: ['agent', 'client', 'agent.branch', 'agent.branch.administrator'], });
+    console.log(loanRequest)
     if (!loanRequest) {
       throw new NotFoundException(`loanRequest with ID ${id} not found`);
     }
-    
+    console.log(loanRequest.client)
+    if (loanRequest.status === LoanRequestStatus.REJECTED){
+      await this.clientRepository.update(loanRequest.client.id, {status: ClientStatus.INACTIVE});
+    }
     const updated = Object.assign(loanRequest, updateLoanRequestDto);
     if(updated.status == LoanRequestStatus.APPROVED){
       await this.notificationRepository.save(

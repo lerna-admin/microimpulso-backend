@@ -213,8 +213,8 @@ export class CashService {
         amount: m.amount,
         createdAt: m.createdAt,
         description: m.reference,
-        origen: m.origenId,
-        destino : m.destinoId
+        origen: this.userRepository.findOne({ where: { id: m.origenId } }),
+        destino :this.userRepository.findOne({ where: { id: m.destinoId  } })
       })),
       total,
       page,

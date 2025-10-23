@@ -157,6 +157,8 @@ export class CashService {
       category: category as CashMovementCategory,
       reference,
       branchId,
+      origenId,          // quien envía
+      destinoId,         // quien recibe
       transaction: transactionId ? ({ id: transactionId } as any) : undefined,
     };
     

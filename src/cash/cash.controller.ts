@@ -7,64 +7,67 @@ import {
     BadRequestException,
     ParseIntPipe,
     Param,
+    Delete,
+    DefaultValuePipe,
+    ParseBoolPipe,
 } from '@nestjs/common';
 import { CashService } from './cash.service';
 
 @Controller('cash')
 export class CashController {
     constructor(private readonly cashService: CashService) { }
-
+    
     /** Register a manual movement */
     @Post()
     async registerMovement(@Body() body: any) {
-    const { typeMovement, amount, category, description, branchId, userId, origenId, destinoId } = body;
+        const { typeMovement, amount, category, description, branchId, userId, origenId, destinoId } = body;
         console.log('BODY RECIBIDO:', body);
         console.log("SI ES")
-
+        
         // Validar tipo de movimiento
         if (typeof typeMovement !== 'string') {
             throw new BadRequestException('typeMovement must be a string');
         }
-
+        
         if (!['ENTRADA', 'SALIDA', 'TRANSFERENCIA'].includes(typeMovement)) {
             throw new BadRequestException('typeMovement must be either "ENTRADA" or "SALIDA"');
         }
-
+        
         // Validar amount
         if (amount === undefined || amount === null) {
             throw new BadRequestException('amount is required');
         }
-
+        
         if (typeof amount !== 'number') {
             throw new BadRequestException('amount must be a number');
         }
-
+        
         if (isNaN(amount) || amount <= 0) {
             throw new BadRequestException('amount must be a number greater than 0');
         }
-
+        
         // Validar categoría
         if (typeof category !== 'string') {
             throw new BadRequestException('category must be a string');
         }
-
+        
         if (!category.trim()) {
             throw new BadRequestException('category cannot be empty');
         }
-
         
-
-     return this.cashService.registerMovement({
-        typeMovement: typeMovement,
-        amount,
-        category,
-        reference: description,
-        branchId,
-        origenId,
-        destinoId
-    });
+        
+        
+        return this.cashService.registerMovement({
+            typeMovement: typeMovement,
+            amount,
+            category,
+            reference: description,
+            branchId,
+            origenId,
+            destinoId
+        });
     }
-
+    
     /** Paginated list of movements with optional search */
     @Get()
     async getMovements(
@@ -77,10 +80,10 @@ export class CashController {
         if (!branchId || isNaN(Number(branchId))) {
             throw new BadRequestException('branchId is required and must be a valid number');
         }
-
+        
         return this.cashService.getMovements(Number(branchId), limit, page, search, date);
     }
-
+    
     /** Daily cash summary (totals) */
     @Get('summary')
     async getSummary(
@@ -90,7 +93,7 @@ export class CashController {
         if (!branchId) {
             throw new BadRequestException('branchId is required');
         }
-
+        
         const parsedDate = date;
         return this.cashService.getDailyTotals(branchId, parsedDate);
     }
@@ -102,12 +105,25 @@ export class CashController {
     ) {
         return this.cashService.getDailyTotalsByUser(userId, date);
     }
-@Get('daily-trace/by-user/:userId')
-async getDailyTraceByUserController(
-  @Param('userId') userId: number,
-  @Query('date') date?: string, // 'YYYY-MM-DD'
-) {
-  const target = date ?? new Date().toISOString().slice(0, 10);
-  return this.cashService.getDailyTraceByUser(+userId, target);
-}
+    @Get('daily-trace/by-user/:userId')
+    async getDailyTraceByUserController(
+        @Param('userId') userId: number,
+        @Query('date') date?: string, // 'YYYY-MM-DD'
+    ) {
+        const target = date ?? new Date().toISOString().slice(0, 10);
+        return this.cashService.getDailyTraceByUser(+userId, target);
+    }
+    /**
+    * Elimina un movimiento de caja.
+    * Si el movimiento tiene una LoanTransaction asociada y nadie más la referencia,
+    * la elimina también.
+    * Extra: si es TRANSFERENCIA, puedes eliminar el movimiento "par" con ?pair=true
+    */
+    @Delete(':id')
+    async deleteMovement(
+        @Param('id', ParseIntPipe) id: number,
+        @Query('pair', new DefaultValuePipe(false), ParseBoolPipe) pair: boolean,
+    ) {
+        return this.cashService.deleteMovement(id, { deletePair: pair });
+    }
 }

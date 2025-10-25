@@ -176,7 +176,7 @@ async findAll(
     if (filters?.branch && (loan.agent as any)?.branchId !== filters.branch) continue;
 
     // -------- Números por PRÉSTAMO (no agregados) --------
-    const amountBorrowed = Number(loan.amount || 0); // base del préstamo
+    const amountBorrowed = Number(loan.requestedAmount || 0); // base del préstamo
     const totalRepayment = (loan.transactions || [])
       .filter(t => lower(t.Transactiontype) === 'repayment')
       .reduce((s, t) => s + Number(t.amount), 0);

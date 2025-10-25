@@ -46,10 +46,11 @@ async create(data: Partial<LoanRequest>): Promise<LoanRequest> {
         status: Not(In([LoanRequestStatus.COMPLETED, LoanRequestStatus.REJECTED])),
       },
     });
-
+/**
     if (hasOpen) {
       throw new BadRequestException('El cliente ya tiene una solicitud abierta (no completed/rejected).');
     }
+      */
   }
 
   // === Tu lógica original SIN cambios ===

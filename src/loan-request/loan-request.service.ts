@@ -111,7 +111,7 @@ async renewLoanRequest(
   const newLoan = this.loanRequestRepository.create({
     client: originalLoan.client,
     agent: originalLoan.agent,
-    amount: amount ?? originalLoan.amount*1.2,
+    amount: (amount ?? originalLoan.amount) * 1.2,
     requestedAmount: amount ?? originalLoan.amount,
     status: LoanRequestStatus.RENEWED, // o 'renovado' si tienes ese estado
     type: originalLoan.type,

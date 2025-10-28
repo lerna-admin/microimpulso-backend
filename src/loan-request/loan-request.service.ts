@@ -130,7 +130,7 @@ async renewLoanRequest(
   const disbursement = this.transactionRepository.create({
   loanRequest: savedNewLoan,
   Transactiontype: TransactionType.DISBURSEMENT,
-  amount: savedNewLoan.amount,
+  amount: savedNewLoan.requestedAmount,
   date: new Date(), // si tu entidad usa 'date' en vez de 'createdAt'
 });
   await this.transactionRepository.save(disbursement);

@@ -134,20 +134,9 @@ export class CashService {
         transaction: transactionId ? ({ id: transactionId } as any) : undefined,
       };
       
-      // Movimiento de entrada (destino <- origen)
-      const entrada: Partial<CashMovement> = {
-        type: 'ENTRADA' as CashMovementType,
-        amount,
-        category: 'TRANSFERENCIA' as CashMovementCategory,
-        reference,
-        branchId,
-        origenId: destinoId,  // 🔁 invertido correctamente
-        destinoId: origenId,  // 🔁 invertido correctamente
-        transaction: transactionId ? ({ id: transactionId } as any) : undefined,
-      };
+
       const salidaMov = await this.cashRepo.save(this.cashRepo.create(salida));
-      const entradaMov = await this.cashRepo.save(this.cashRepo.create(entrada));
-      return [salidaMov, entradaMov];
+      return [salidaMov];
     }
     
     // Movimiento normal

@@ -40,12 +40,20 @@ export class ChatController {
   @Post()
   async handleIncomingMessage(
     @Body() body: any,
-    @Req() req: Request,
+    @Req() _req: Request,
     @Res() res: Response,
   ) {
-    console.log('📥 Mensaje entrante recibido:', JSON.stringify(body, null, 2));
-    await this.chatService.processIncoming(body);
-    return res.sendStatus(200);
+    // 1) responder 200 YA
+    res.sendStatus(200);
+    
+    // 2) procesar en background
+    setImmediate(async () => {
+      try {
+        await this.chatService.processIncoming(body);
+      } catch (e) {
+        console.error('Error procesando webhook:', e);
+      }
+    });
   }
   
   @Get('/agent/:agentId/conversations')

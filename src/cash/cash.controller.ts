@@ -10,8 +10,10 @@ import {
     Delete,
     DefaultValuePipe,
     ParseBoolPipe,
+    Res,
 } from '@nestjs/common';
 import { CashService } from './cash.service';
+import { Response } from 'express';
 
 @Controller('cash')
 export class CashController {
@@ -126,4 +128,35 @@ export class CashController {
     ) {
         return this.cashService.deleteMovement(id, { deletePair: pair });
     }
+
+  
+/**
+   * GET /cash/export-daily-trace?userId=1&date=2025-10-27&format=excel|pdf&filename=opcional
+   * Devuelve un .xlsx o .pdf con la traza diaria (misma data que getDailyTraceByUser).
+   */
+
+@Get('export-daily-trace')
+async exportDailyTrace(
+  @Query('userId', ParseIntPipe) userId: number,
+  @Query('date') date: string,
+  @Query('format') format: 'excel' | 'pdf' = 'excel',
+  @Res() res: Response,                 // ← MOVER AQUÍ
+  @Query('filename') filename?: string, // ← OPCIONAL al final
+) {
+  if (!date) throw new BadRequestException('date (YYYY-MM-DD) es requerido');
+
+  const baseName = (filename?.trim() || `traza_${userId}_${date}`).replace(/[^a-zA-Z0-9_-]/g, '');
+
+  if (format === 'pdf') {
+    const pdf = await this.cashService.exportDailyTraceToPDF(userId, date);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${baseName}.pdf"`);
+    return res.end(pdf);
+  }
+
+  const xlsx = await this.cashService.exportDailyTraceToExcel(userId, date);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${baseName}.xlsx"`);
+  return res.end(xlsx);
+}
 }

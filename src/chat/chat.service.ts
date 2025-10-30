@@ -20,7 +20,7 @@ export class ChatService {
   private readonly logger = new Logger(ChatService.name);
   
   private TOKEN_TEMP: string =
-  'EAAYqvtVC2P8BOzsT4kPyA688jJsgCFlhYMyHzmW6iRERKZA9ZA5ae2hohZAXAKhwQwfXz9PGu9oJFPswM12yPgRbom2bPlyBGlXo1JRwOfMgZAiOMW2NZAyCf5HTB7xqsZAnHfJ55c7IyYYVbhvGBGOaWlvZBsafybHUIPaEUGMkC4P0JPHMTEg0lb7tDXbph4YYjX8USs7vunIxDoYpKiipwl22Qzvxmca';
+  'EAAYsi96jmUYBPxTaOjbGyEiiYQXqoeOEcQ0OedMsvecltdhILB2rCQSx4fbwdTfolp29vRcBdqO5MZBx57kJnahZCPO3XVTafAfiYtT4FgH1EQc7sZA5AZCMASEZCquKp3JWzsxWbZClswZBARpQhUi3SesE9l0biTkcj6BhRG6TvI0xoTF8wSZBfhtO9Y84KvezIgZDZD';
   
   constructor(
     @InjectRepository(Client)
@@ -271,7 +271,7 @@ export class ChatService {
     
     /* 3. WhatsApp credentials --------------------------------------------- */
     const accessToken = this.TOKEN_TEMP;
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '696358046884463';
+    const phoneNumberId =  '867657363098003';
     if (!accessToken || !phoneNumberId) {
       throw new Error('WhatsApp TOKEN or PHONE_NUMBER_ID env vars are not set.');
     }
@@ -283,13 +283,15 @@ export class ChatService {
       type: 'text',
       text: { body: message },
     };
-    
-    await axios.post(`https://graph.facebook.com/v18.0/${phoneNumberId}/messages`, payload, {
+    console.log("antes de enviar el mensaje")
+    let res = await axios.post(`https://graph.facebook.com/v18.0/${phoneNumberId}/messages`, payload, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
     });
+
+    console.log(res)
     
     /* 5. Persist the OUTGOING ChatMessage ---------------------------------- */
     const msgData: DeepPartial<ChatMessage> = {
@@ -362,7 +364,7 @@ export class ChatService {
     
     // 4. Prepare WhatsApp upload
     const accessToken = this.TOKEN_TEMP;
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '696358046884463';
+    const phoneNumberId =  '867657363098003';
     
     if (!accessToken || !phoneNumberId) {
       throw new Error('Missing WhatsApp token or phone number ID');

@@ -13,6 +13,9 @@ import { format } from 'date-fns';
 import { User } from 'src/entities/user.entity';
 import { LoanRequestService } from 'src/loan-request/loan-request.service';
 import { DataSource, Not } from 'typeorm';
+import * as ExcelJS from 'exceljs';
+import PDFDocument = require('pdfkit');
+  
 
 /** Devuelve el rango [start, end] del día local Bogotá para 'YYYY-MM-DD' o Date */
 function getBogotaDayRange(raw: string | Date) {
@@ -364,8 +367,6 @@ async getMovements(
     ];
   }
   
-  
-  
   /**
   * Returns the branch-level dashboard for the day that belongs to `userId`.
   * • ADMIN / MANAGER → full dashboard (same columns as antes).
@@ -499,15 +500,6 @@ async getMovements(
     /* Para AGENT, se ocultan tiles con hideForAgent */
     return role === 'AGENT' ? tiles.filter(t => !t.hideForAgent) : tiles;
   }
-  
-  
-  /**
-  * Traza diaria por USUARIO:
-  * - baseAnterior (saldo de apertura del usuario)
-  * - desglose de ingresos/egresos del día
-  * - totalFinal
-  * - lista de movimientos del día del usuario (para trazabilidad)
-  */
   
 /**
  * Traza diaria por USUARIO (versión ajustada):
@@ -862,10 +854,6 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
     // warnings, // ← si activas la reconciliación
   };
 }
-
-  
-  
-  
   
   /**
   * Elimina un movimiento de caja y, si corresponde, su LoanTransaction.
@@ -958,6 +946,241 @@ async getDailyTraceByUser(userId: number, rawDate: Date | string) {
       };
     });
   }
-  
+ 
+  // cash.service.ts (dentro de CashService)
+
+async exportDailyTraceToExcel(userId: number, date: string): Promise<Buffer> {
+  const data = await this.getDailyTraceByUser(userId, date);
+
+  // Import dinámico compatible CJS/ESM
+  const ExcelMod = await import('exceljs');
+  const ExcelJS: any = (ExcelMod as any).default ?? ExcelMod;
+
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'CashService';
+  wb.created = new Date();
+
+  // --- Resumen ---
+  const wsResumen = wb.addWorksheet('Resumen');
+  wsResumen.columns = [
+    { header: 'Campo', key: 'k', width: 32 },
+    { header: 'Valor', key: 'v', width: 32 },
+  ];
+  wsResumen.addRows([
+    { k: 'Fecha', v: data.fecha },
+    { k: 'Usuario', v: data.usuario },
+    { k: 'Sucursal (branchId)', v: data.branchId ?? '—' },
+    { k: 'Base anterior', v: data.baseAnterior },
+    { k: 'Ingresos del día', v: data.totalIngresosDia },
+    { k: 'Egresos del día', v: data.totalEgresosDia },
+    { k: 'Total final', v: data.totalFinal },
+    { k: 'Cobrado hoy (kpi)', v: data.kpis?.valorCobradoDia ?? 0 },
+    { k: 'Clientes en deuda (kpi)', v: data.kpis?.clientesEnDeuda ?? 0 },
+    { k: 'Valor en cartera (kpi)', v: data.kpis?.valorEnCartera ?? 0 },
+    { k: 'Nuevos (cant)', v: data.kpis?.clientesNuevos?.cantidad ?? 0 },
+    { k: 'Nuevos (monto)', v: data.kpis?.clientesNuevos?.montoPrestado ?? 0 },
+    { k: 'Renovados (cant)', v: data.kpis?.clientesRenovados?.cantidad ?? 0 },
+    { k: 'Renovados (monto)', v: data.kpis?.clientesRenovados?.montoPrestado ?? 0 },
+  ]);
+
+  // --- Ingresos / Egresos ---
+  const wsIE = wb.addWorksheet('Ingresos_Egresos');
+  wsIE.columns = [
+    { header: 'Grupo', key: 'g', width: 22 },
+    { header: 'Concepto', key: 'c', width: 28 },
+    { header: 'Monto', key: 'm', width: 18 },
+  ];
+  wsIE.addRows([
+    { g: 'Ingresos', c: 'Ingresos No Transfer', m: data.ingresos?.ingresosNoTransfer ?? 0 },
+    { g: 'Ingresos', c: 'Transferencias Entrantes', m: data.ingresos?.transferIn ?? 0 },
+    { g: 'Ingresos', c: 'Cobros', m: data.ingresos?.cobros ?? 0 },
+    { g: 'Egresos',  c: 'Transferencias Salientes', m: data.egresos?.transferOut ?? 0 },
+    { g: 'Egresos',  c: 'Gastos', m: data.egresos?.gastos ?? 0 },
+    { g: 'Egresos',  c: 'Préstamos Nuevos', m: data.egresos?.prestamosNuevos ?? 0 },
+    { g: 'Egresos',  c: 'Renovados', m: data.egresos?.renovados ?? 0 },
+  ]);
+
+  // --- Movimientos ---
+  const wsMov = wb.addWorksheet('Movimientos');
+  wsMov.columns = [
+    { header: 'ID', key: 'id', width: 10 },
+    { header: 'Tipo', key: 'type', width: 12 },
+    { header: 'Categoría', key: 'category', width: 22 },
+    { header: 'Monto', key: 'amount', width: 14 },
+    { header: 'Fecha', key: 'createdAt', width: 22 },
+    { header: 'Descripción', key: 'description', width: 40 },
+    { header: 'Origen', key: 'origen', width: 10 },
+    { header: 'Destino', key: 'destino', width: 10 },
+    { header: 'Afecta saldo', key: 'affectsBalance', width: 14 },
+  ];
+  wsMov.addRows(
+    (data.movimientos || []).map((m: any) => ({
+      id: m.id,
+      type: m.type,
+      category: m.category,
+      amount: m.amount,
+      createdAt: this.toLocalDateTime(m.createdAt),
+      description: m.description,
+      origen: m.origen ?? '',
+      destino: m.destino ?? '',
+      affectsBalance: m.affectsBalance ? 'Sí' : 'No',
+    })),
+  );
+
+  // --- Cartera ---
+  const wsCart = wb.addWorksheet('Cartera');
+  wsCart.columns = [
+    { header: 'LoanRequestId', key: 'loanRequestId', width: 14 },
+    { header: 'ClienteId', key: 'clientId', width: 10 },
+    { header: 'Cliente', key: 'clientName', width: 32 },
+    { header: 'Desembolsado', key: 'disbursed', width: 14 },
+    { header: 'Pagado', key: 'repaid', width: 14 },
+    { header: 'Descuentos', key: 'discounts', width: 14 },
+    { header: 'Penalidades', key: 'penalties', width: 14 },
+    { header: 'Fees', key: 'fees', width: 14 },
+    { header: 'Saldo', key: 'outstanding', width: 14 },
+    { header: 'Último pago', key: 'lastPaymentAt', width: 22 },
+    { header: 'Estatus', key: 'status', width: 12 },
+  ];
+  wsCart.addRows(
+    (data.portfolio?.loans || []).map((l: any) => ({
+      loanRequestId: l.loanRequestId,
+      clientId: l.clientId ?? '',
+      clientName: l.clientName ?? '',
+      disbursed: l.disbursed,
+      repaid: l.repaid,
+      discounts: l.discounts,
+      penalties: l.penalties,
+      fees: l.fees,
+      outstanding: l.outstanding,
+      lastPaymentAt: l.lastPaymentAt ? this.toLocalDateTime(l.lastPaymentAt) : '',
+      status: l.status,
+    })),
+  );
+
+  const buffer = await wb.xlsx.writeBuffer();
+  // writeBuffer devuelve ArrayBuffer | BufferLike según versión
+  return Buffer.from(buffer as ArrayBuffer);
+}
+
+
+async exportDailyTraceToPDF(userId: number, date: string): Promise<Buffer> {
+  const data = await this.getDailyTraceByUser(userId, date);
+
+  // Import dinámico compatible CJS/ESM
+  const PDFMod = await import('pdfkit');
+  const PDFDocument: any = (PDFMod as any).default ?? PDFMod;
+
+  const doc = new PDFDocument({ size: 'A4', margin: 32 });
+  const chunks: Buffer[] = [];
+
+  return await new Promise<Buffer>((resolve, reject) => {
+    doc.on('data', (c: Buffer) => chunks.push(c));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+
+    // Título + resumen
+    doc.fontSize(16).text('Traza diaria por usuario', { align: 'center' });
+    doc.moveDown(0.5);
+    doc.fontSize(10).text(`Fecha: ${data.fecha}  ·  Usuario: ${data.usuario}  ·  Sucursal: ${data.branchId ?? '—'}`);
+    doc.moveDown();
+
+    const resumen: Array<[string, any]> = [
+      ['Base anterior', data.baseAnterior],
+      ['Ingresos del día', data.totalIngresosDia],
+      ['Egresos del día', data.totalEgresosDia],
+      ['Total final', data.totalFinal],
+      ['Cobrado hoy (kpi)', data.kpis?.valorCobradoDia ?? 0],
+      ['Clientes en deuda (kpi)', data.kpis?.clientesEnDeuda ?? 0],
+      ['Valor en cartera (kpi)', data.kpis?.valorEnCartera ?? 0],
+      ['Nuevos (cant/monto)', `${data.kpis?.clientesNuevos?.cantidad ?? 0} / ${data.kpis?.clientesNuevos?.montoPrestado ?? 0}`],
+      ['Renovados (cant/monto)', `${data.kpis?.clientesRenovados?.cantidad ?? 0} / ${data.kpis?.clientesRenovados?.montoPrestado ?? 0}`],
+    ];
+    resumen.forEach(([k, v]) => doc.fontSize(10).text(`${k}: ${v}`));
+
+    // Movimientos
+    doc.addPage();
+    doc.fontSize(12).text('Movimientos del día');
+    doc.moveDown(0.4);
+    this.pdfRow(doc, ['ID', 'Tipo', 'Categoría', 'Monto', 'Fecha', 'Descripción'], true);
+    (data.movimientos || []).slice(0, 500).forEach((m: any) => {
+      this.pdfRow(doc, [
+        String(m.id),
+        String(m.type),
+        String(m.category),
+        String(m.amount),
+        this.toLocalDateTime(m.createdAt),
+        String(m.description ?? ''),
+      ]);
+    });
+
+    // Cartera (resumen)
+    doc.addPage();
+    doc.fontSize(12).text('Cartera (resumen)');
+    doc.moveDown(0.4);
+    this.pdfRow(doc, ['LoanId', 'Cliente', 'Desemb.', 'Pagado', 'Saldo', 'Últ. pago', 'Status'], true);
+    (data.portfolio?.loans || []).slice(0, 300).forEach((l: any) => {
+      this.pdfRow(doc, [
+        String(l.loanRequestId),
+        (l.clientName ?? '').slice(0, 28),
+        String(l.disbursed),
+        String(l.repaid),
+        String(l.outstanding),
+        l.lastPaymentAt ? this.toLocalDateTime(l.lastPaymentAt) : '',
+        String(l.status ?? ''),
+      ]);
+    });
+
+    doc.end();
+  });
+}
+
+// --- helpers simples de formato (pueden ser privados) ---
+private toLocalDateTime(d: Date | string | null | undefined): string {
+  if (!d) return '';
+  const x = typeof d === 'string' ? new Date(d) : d;
+  if (!(x instanceof Date) || isNaN(x.getTime())) return ''; // evita "Invalid Date"
+  const y = x.getFullYear();
+  const m = String(x.getMonth() + 1).padStart(2, '0');
+  const dd = String(x.getDate()).padStart(2, '0');
+  const hh = String(x.getHours()).padStart(2, '0');
+  const mi = String(x.getMinutes()).padStart(2, '0');
+  const ss = String(x.getSeconds()).padStart(2, '0');
+  return `${y}-${m}-${dd} ${hh}:${mi}:${ss}`;
+}
+
+private pdfRow(doc: PDFDocument, cells: Array<string | number>, header = false) {
+  // Ajusta anchos y evita desbordes si cambias el número de columnas
+  const widths = [40, 50, 90, 60, 90, 200]; // puedes modificar a gusto
+  const usedWidths = widths.slice(0, cells.length);
+  const x0 = (doc as any).x as number; // props .x/.y existen en pdfkit; cast para evitar fricciones de tipos
+  const y0 = (doc as any).y as number;
+  const h = 16;
+
+  if (header) {
+    doc.save();
+    doc
+      .rect(x0, y0, usedWidths.reduce((a, b) => a + b, 0), h)
+      .fillOpacity(0.1)
+      .fill('#000');
+    doc.fillOpacity(1).fill('#000');
+    doc.restore();
+  }
+
+  let x = x0;
+  cells.forEach((text, i) => {
+    const w = usedWidths[i] ?? 80;
+    doc.rect(x, y0, w, h).stroke();
+
+    // opciones como "ellipsis" no están tipadas en todas las defs; úsalo como any
+    (doc as any).text(String(text ?? ''), x + 3, y0 + 3, { width: w - 6, ellipsis: true });
+    x += w;
+  });
+
+  // Avanza la "línea"
+  (doc as any).moveDown(0.1);
+  (doc as any).y = y0 + h;
+}
+
   
 }

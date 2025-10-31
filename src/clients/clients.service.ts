@@ -504,6 +504,7 @@ async findOne(id: number): Promise<any | null> {
       }
     : null;
 
+    console.log(clientResponse);
   return {
     ...result,
     client: clientResponse,

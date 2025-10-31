@@ -415,7 +415,7 @@ async findAll(
     
     
     
-   async findOne(id: number): Promise<any | null> {
+async findOne(id: number): Promise<any | null> {
   const result = await this.clientRepository
     .createQueryBuilder('client')
     .innerJoin(
@@ -468,11 +468,48 @@ async findAll(
     }
   }
 
+  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+  // AQUI armamos el objeto client que enviaremos al frontend
+  // incluyendo los campos nuevos.
+  // Notas:
+  // - usamos optional chaining porque fullClient podría ser null
+  // - seguimos exponiendo loanRequests porque ya lo haces en la UI
+  // - NO tocamos la forma de `result`, que parece usarse en otras partes
+  // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+  const clientResponse = fullClient
+    ? {
+        id: fullClient.id,
+        name: fullClient.name,
+        phone: fullClient.phone,
+        phone2: (fullClient as any).phone2 ?? null,
+        email: fullClient.email,
+        document: fullClient.document,
+        documentType: fullClient.documentType,
+        address: fullClient.address,
+        address2: (fullClient as any).address2 ?? null,
+
+        // nuevos campos de referencia
+        referenceName: (fullClient as any).referenceName ?? null,
+        referencePhone: (fullClient as any).referencePhone ?? null,
+        referenceRelationship: (fullClient as any).referenceRelationship ?? null,
+
+        status: (fullClient as any).status,
+        totalLoanAmount: fullClient.totalLoanAmount,
+        notEligible: fullClient.notEligible,
+        lead: fullClient.lead,
+
+        // seguimos mandando loanRequests porque la vista de detalle las usa
+        loanRequests: fullClient.loanRequests,
+      }
+    : null;
+
   return {
     ...result,
-    client: fullClient,
+    client: clientResponse,
   };
 }
+
 
     
     async create(data: Partial<Client>): Promise<Client> {

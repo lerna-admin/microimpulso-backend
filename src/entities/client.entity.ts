@@ -19,10 +19,8 @@ export enum ClientStatus {
   REJECTED = 'REJECTED',
   PROSPECT = 'PROSPECT',
 }
-
 @Entity()
 export class Client {
-  // ▶ Numeric, auto‑increment primary key
   @PrimaryGeneratedColumn()
   id: number;
 
@@ -32,26 +30,36 @@ export class Client {
   @Column()
   phone: string;
 
+  // 👇 NUEVO: teléfono alternativo
+  @Column({ nullable: true })
+  phone2?: string;
+
   @Column({ nullable: true })
   email: string;
 
-  // ▶ New fields
   @Column({ nullable: true })
-  document: string; // e.g. national ID number
+  document: string;
 
   @Column({ nullable: true })
-  documentType: string; // e.g. national ID number
+  documentType: string;
 
   @Column({ nullable: true })
   address: string;
 
-  /**
-   * Cumulative amount lent to the client.
-   * IMPORTANT: keep this in sync with LoanRequest totals.
-   *   – Option A: update it in a transaction every time you create/close a loan.
-   *   – Option B: drop this column and expose it through a SQL view or a
-   *     service method that sums `loanRequest.amount` on demand.
-   */
+  // 👇 NUEVO: dirección alterna
+  @Column({ nullable: true })
+  address2?: string;
+
+  // 👇 NUEVO: datos de referencia personal
+  @Column({ nullable: true })
+  referenceName?: string;
+
+  @Column({ nullable: true })
+  referencePhone?: string;
+
+  @Column({ nullable: true })
+  referenceRelationship?: string;
+
   @Column({
     type: 'decimal',
     precision: 12,
@@ -82,18 +90,13 @@ export class Client {
 
   @OneToMany(() => ChatMessage, (chatMessage) => chatMessage.client)
   chatMessages: ChatMessage[];
-  
+
   @Column({ type: 'text', nullable: true })
-  notes?: string; 
+  notes?: string;
 
   @Column({ type: 'boolean', default: false })
   notEligible: boolean;
 
-   /**
-   * Lead flag — true = imported from external systems; false = created in our platform.
-   * Default is false to keep existing records as "platform-created" unless explicitly set.
-   */
   @Column({ type: 'boolean', default: false })
   lead: boolean;
-
 }

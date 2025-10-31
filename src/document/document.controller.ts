@@ -1,10 +1,26 @@
-import { Controller, Get, Param, Patch, Body, NotFoundException, Res } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Body,
+  NotFoundException,
+  Res,
+  Post,
+  UploadedFile,
+  UseInterceptors,
+  BadRequestException,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
 import { join } from 'path';
 import { existsSync, createReadStream } from 'fs';
 import { Response } from 'express';
 
 import { DocumentService } from './document.service';
 import { DocumentType } from '../entities/document.entity';
+import { v4 as uuid } from 'uuid';
+
 
 @Controller('documents')
 export class DocumentController {
@@ -61,4 +77,44 @@ export class DocumentController {
 
     return createReadStream(filePath).pipe(res);
   }
+
+  /* ---------- Upload a new document -------------------------------------- */
+@Post()
+@UseInterceptors(
+  FileInterceptor('file', {
+    storage: diskStorage({
+      destination: (req, file, cb) => {
+        const uploadPath = join(process.cwd(), 'public', 'uploads');
+        cb(null, uploadPath);
+      },
+      filename: (req, file, cb) => {
+        const uniqueName = `${uuid()}-${file.originalname}`;
+        cb(null, uniqueName);
+      },
+    }),
+  }),
+)
+async uploadDocument(
+  @UploadedFile() file: Express.Multer.File,
+  @Body('customerId') customerId: number,
+  @Body('category') category: DocumentType,
+) {
+  if (!file) throw new BadRequestException('No se adjuntó ningún archivo');
+  if (!customerId) throw new BadRequestException('customerId es requerido');
+  if (!category) throw new BadRequestException('category es requerida');
+
+  const newDoc = await this.documentService.createDocument({
+    filename: file.originalname,
+    path: `uploads/${file.filename}`,
+    mimeType: file.mimetype,
+    customerId,
+    classification: category,
+  });
+
+  return {
+    success: true,
+    document: newDoc,
+  };
+}
+
 }

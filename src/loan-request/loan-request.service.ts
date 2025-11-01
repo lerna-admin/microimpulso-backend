@@ -46,35 +46,68 @@ async create(data: Partial<LoanRequest>): Promise<LoanRequest> {
         status: Not(In([LoanRequestStatus.COMPLETED, LoanRequestStatus.REJECTED])),
       },
     });
-/**
+    /**
     if (hasOpen) {
       throw new BadRequestException('El cliente ya tiene una solicitud abierta (no completed/rejected).');
     }
-      */
+    */
   }
 
-  // === Tu lógica original SIN cambios ===
+  // === Resolver branch objetivo ===
+  // Prioridad: data.branchId -> data.branch?.id -> por defecto 2
+  const requestedBranchId: number =
+    (data as any)?.branchId ??
+    (data as any)?.branch?.id ??
+    2;
+
+  // === Si no llega agent, elegir uno aleatorio según la branch deseada ===
   if (!data.agent) {
-    const randomAgent = await this.userRepository
-      .createQueryBuilder('user')
-      .where('user.role = :role', { role: 'AGENT' })
-      .orderBy('RANDOM()')
-      .limit(1)
-      .getOne();
+    // Helper para elegir un AGENT aleatorio por branchId
+    const pickRandomAgentByBranch = async (branchId: number) => {
+      return await this.userRepository
+        .createQueryBuilder('user')
+        .leftJoin('user.loanRequests', 'loanRequest', "loanRequest.status NOT IN ('COMPLETED', 'REJECTED')")
+        .leftJoin('user.branch', 'branch')
+        .where('user.role = :role', { role: 'AGENT' })
+        .andWhere('branch.id = :branchId', { branchId })
+        // si quieres priorizar menos ocupados, ordena por COUNT; aquí usamos aleatorio como pediste
+        .orderBy('RANDOM()') // SQLite/Postgres
+        .limit(1)
+        .getOne();
+    };
+
+    // 1) Intentar con la branch solicitada
+    let randomAgent = await pickRandomAgentByBranch(requestedBranchId);
+
+    // 2) Fallback a branch 2 si no encontró
+    if (!randomAgent && requestedBranchId !== 2) {
+      randomAgent = await pickRandomAgentByBranch(2);
+    }
+
+    // 3) Último recurso: cualquier AGENT
+    if (!randomAgent) {
+      randomAgent = await this.userRepository
+        .createQueryBuilder('user')
+        .where('user.role = :role', { role: 'AGENT' })
+        .orderBy('RANDOM()')
+        .limit(1)
+        .getOne();
+    }
 
     if (!randomAgent) {
-      throw new Error('No available agent to assign');
+      throw new Error(`No hay agentes disponibles para asignar (branch solicitada: ${requestedBranchId}).`);
     }
 
     data.agent = randomAgent;
   }
 
-  console.log(data);
-
+  // === Lógica original extra ===
   data.mode = (data.amount ? data.amount / 1000 : 100).toString().concat('X1');
+
   const loanRequest = this.loanRequestRepository.create(data);
   return await this.loanRequestRepository.save(loanRequest);
 }
+
 
 async renewLoanRequest(
   loanRequestId: number,

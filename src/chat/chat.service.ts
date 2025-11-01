@@ -7,7 +7,7 @@ import { User } from '../entities/user.entity';
 import { LoanRequest, LoanRequestStatus } from '../entities/loan-request.entity';
 import { Document } from '../entities/document.entity';
 import { ChatMessage } from '../entities/chat-message.entity';
-import { Branch } from '../entities/branch.entity';
+import { Branch } from '../entities/branch.entity'; // 👈 solo para tipado/manager
 
 import axios, { AxiosInstance, AxiosResponse } from 'axios';
 import { join, dirname } from 'path';
@@ -33,13 +33,12 @@ export class ChatService implements OnModuleInit {
     @InjectRepository(LoanRequest) private loanRequestRepository: Repository<LoanRequest>,
     @InjectRepository(ChatMessage) private chatMessageRepository: Repository<ChatMessage>,
     @InjectRepository(Notification) private notificationRepository: Repository<Notification>,
-    @InjectRepository(Branch) private branchRepository: Repository<Branch>,         // 👈 Branch
     private readonly config: ConfigService,
   ) {
     this.http = axios.create({
       baseURL: `https://graph.facebook.com/${this.getGraphVersion()}`,
       timeout: 30000,
-      validateStatus: () => true,
+      validateStatus: () => true, // loguear también 4xx/5xx
     });
   }
 
@@ -51,7 +50,7 @@ export class ChatService implements OnModuleInit {
     console.log('[BOOT] DEBUG_WA:', this.DEBUG_WA);
   }
 
-  /* ================= Helpers ================= */
+  /* ================= Helpers generales ================= */
   private getGraphVersion(): string {
     return this.config.get<string>('GRAPH_API_VERSION') || 'v21.0';
   }
@@ -73,23 +72,12 @@ export class ChatService implements OnModuleInit {
   private ensureDir(path: string) {
     if (!existsSync(path)) mkdirSync(path, { recursive: true });
   }
-
-  // Normaliza a E.164 con país por defecto (solo para envíos salientes)
   private toE164(phone: string): string {
-    const raw = (phone || '').trim();
-    const digits = raw.replace(/[^\d+]/g, '');
-    if (raw.startsWith('+')) return raw;
-    if (raw.startsWith('00')) return `+${raw.replace(/\D/g, '').slice(2)}`;
-
-    const def = (this.config.get<string>('DEFAULT_COUNTRY_CODE') || '57').replace(/\D/g, '') || '57';
-    const justDigits = raw.replace(/\D/g, '');
-
-    // CO: celulares 10 dígitos que empiezan en 3
-    if (justDigits.length === 10 && justDigits.startsWith('3')) return `+${def}${justDigits}`;
-    if (justDigits.length >= 11) return `+${justDigits}`;
-    return `+${def}${justDigits}`;
+    const t = (phone || '').trim();
+    if (t.startsWith('+')) return t;
+    if (t.startsWith('00')) return `+${t.replace(/\D/g, '').slice(2)}`;
+    return `+${t.replace(/\D/g, '')}`;
   }
-
   private redactBearer(v?: string) {
     if (!v) return v;
     return v.replace(/(Bearer\s+)[A-Za-z0-9\-\._]+/i, '$1***REDACTED***');
@@ -107,7 +95,6 @@ export class ChatService implements OnModuleInit {
       return Buffer.byteLength(JSON.stringify(data || {}), 'utf8');
     } catch { return 0; }
   }
-
   private debug(label: string, obj?: Dict) {
     if (this.DEBUG_WA) console.debug(`[DEBUG_WA] ${label}:`, obj ?? {});
     this.logger.debug(JSON.stringify({ label, ...(obj || {}) }, null, 2));
@@ -138,56 +125,81 @@ export class ChatService implements OnModuleInit {
     };
   }
 
-  /* ========== País/branch helpers ========== */
+  /* ========== País desde número & selección de branch/agent ========== */
 
-  /** Devuelve las branches habilitadas para entrantes, ordenadas por longitud del phoneCountryCode (desc). */
-  private async getInboundBranches(): Promise<Branch[]> {
-    const branches = await this.branchRepository.find({
-      where: { acceptsInbound: true },
-      relations: { administrator: false, agents: false },
-      order: { id: 'ASC' },
-    });
-    // Ordenar por longitud de prefijo para evitar colisiones (p.ej. 1 vs 57)
-    return branches.sort((a, b) => (b.phoneCountryCode?.length || 0) - (a.phoneCountryCode?.length || 0));
-  }
+  /** Extrae el indicativo internacional (sin '+') del número entrante. */
+  private extractCountryCallingCode(phone: string): string | null {
+    if (!phone) return null;
+    const s = String(phone).trim();
 
-  /** Encuentra la branch que coincide por prefijo de phoneCountryCode con el número WA (sin '+'). */
-  private async resolveBranchForIncoming(waFromRaw: string): Promise<Branch | null> {
-    const digits = (waFromRaw || '').replace(/\D/g, ''); // '573165...'
+    // +E.164: +57..., +506...
+    if (s.startsWith('+')) {
+      // priorizamos 3 dígitos si es 506 (CR)
+      if (s.startsWith('+506')) return '506';
+      const m = s.match(/^\+(\d{2,3})/);
+      return m?.[1] ?? null;
+    }
+    // 00-prefijo internacional
+    if (s.startsWith('00')) {
+      const rest = s.replace(/\D/g, '').slice(2);
+      if (rest.startsWith('506')) return '506';
+      return rest.slice(0, 2);
+    }
+    // Solo dígitos u otros
+    const digits = s.replace(/\D/g, '');
     if (!digits) return null;
 
-    const branches = await this.getInboundBranches();
-    for (const b of branches) {
-      const cc = (b.phoneCountryCode || '').replace(/\D/g, '');
-      if (!cc) continue;
-      if (digits.startsWith(cc)) {
-        return b;
-      }
-    }
-    return null;
+    // Reglas conocidas
+    if (digits.startsWith('506')) return '506'; // CR
+    if (digits.startsWith('57')) return '57';   // CO
+
+    // Caso CO local: 10 dígitos iniciando en 3 ⇒ asumimos 57
+    if (digits.length === 10 && digits.startsWith('3')) return '57';
+
+    // Fallback: primeros 3 o 2
+    return digits.length >= 3 ? digits.slice(0, 3) : (digits.length >= 2 ? digits.slice(0, 2) : null);
   }
 
-  /** Selecciona el agente menos cargado de una branch (por solicitudes abiertas) */
-  private async pickLeastBusyAgentInBranch(branchId: number): Promise<User | null> {
-    // Devuelve filas { user_id, activeCount }
-    const rows = await this.userRepository
-      .createQueryBuilder('user')
-      .leftJoin('user.loanRequests', 'loan',
-        'loan.status NOT IN (:...closed)', { closed: [LoanRequestStatus.COMPLETED, LoanRequestStatus.REJECTED] })
-      .leftJoin('user.branch', 'branch')
-      .where('user.role = :role', { role: 'AGENT' })
-      .andWhere('branch.id = :branchId', { branchId })
-      .select(['user.id'])
-      .addSelect('COUNT(loan.id)', 'activeCount')
-      .groupBy('user.id')
-      .orderBy('activeCount', 'ASC')
-      .addOrderBy('user.id', 'ASC')
-      .getRawMany<{ user_id: number; activeCount: string }>();
+  /** Busca TODAS las sedes de un país (por phoneCountryCode) que acepten entrantes. */
+  private async findInboundBranchesByCallingCode(code: string | null): Promise<Branch[]> {
+    if (!code) return [];
+    const branchRepo = this.userRepository.manager.getRepository(Branch);
+    return branchRepo.find({ where: { phoneCountryCode: code, acceptsInbound: true } });
+  }
 
-    if (!rows.length) return null;
-    const agentId = rows[0].user_id;
-    const agent = await this.userRepository.findOne({ where: { id: agentId }, relations: { branch: true } });
-    return agent ?? null;
+  /** Elige el agente menos cargado entre TODAS las sedes del país. */
+  private async pickLeastBusyAgentForCountry(callingCode: string): Promise<{ agent: User | null; branchId: number | null }> {
+    const branchRepo = this.userRepository.manager.getRepository(Branch);
+    const branches = await branchRepo.find({
+      where: { phoneCountryCode: callingCode, acceptsInbound: true },
+      select: ['id'],
+    });
+    if (!branches.length) return { agent: null, branchId: null };
+
+    const branchIds = branches.map((b) => b.id);
+
+    // Contar solicitudes activas por agente en esas sedes
+    const raw = await this.userRepository
+      .createQueryBuilder('u')
+      .leftJoin('u.branch', 'b')
+      .leftJoin('u.loanRequests', 'lr', "lr.status NOT IN ('COMPLETED','REJECTED')")
+      .where('u.role = :role', { role: 'AGENT' })
+      .andWhere('b.id IN (:...branchIds)', { branchIds })
+      .select(['u.id', 'b.id'])
+      .addSelect('COUNT(lr.id)', 'activeCount')
+      .groupBy('u.id')
+      .addGroupBy('b.id')
+      .orderBy('activeCount', 'ASC')
+      .getRawMany();
+
+    if (!raw.length) return { agent: null, branchId: null };
+
+    const agentId = raw[0].u_id ?? raw[0].user_id ?? raw[0].id;
+    const branchId = raw[0].b_id ?? raw[0].branch_id ?? null;
+    if (!agentId) return { agent: null, branchId: null };
+
+    const agent = await this.userRepository.findOne({ where: { id: agentId } });
+    return { agent: agent ?? null, branchId };
   }
 
   /* ================= Media: descarga y guardado ================= */
@@ -216,7 +228,7 @@ export class ChatService implements OnModuleInit {
       const fileUrl = metadata.data?.url as string;
       if (!fileUrl) throw new Error('Media URL missing');
 
-      // 2) Binario
+      // 2) Archivo
       const t1 = Date.now();
       this.debug('WA.media.file.request', { cId, fileUrl });
 
@@ -263,97 +275,129 @@ export class ChatService implements OnModuleInit {
       const messageData = value?.messages?.[0];
       const statuses = value?.statuses?.[0];
 
-      // 1) Si llega un status solamente, log y salir
-      if (statuses && !messageData) {
-        this.debug('INCOMING.status', { cId, statuses });
-        return;
-      }
-      // Si llegan ambos, igual registramos el status
-      if (statuses && messageData) {
-        this.debug('INCOMING.status', { cId, statuses });
-      }
+      if (statuses) this.debug('INCOMING.status', { cId, statuses });
 
-      const phoneFrom = messageData?.from; // WA id, ej: "57316..."
+      const phoneFrom = messageData?.from;
       const type = messageData?.type;
-
-      if (!phoneFrom) {
-        if (messageData) this.warn('INCOMING.missingPhone', { cId });
-        return;
-      }
-
-      // 2) Validar país/branch ANTES de crear nada
-      const branch = await this.resolveBranchForIncoming(phoneFrom);
-      if (!branch) {
-        this.warn('INCOMING.rejected.unknown_country_or_blocked', { cId, phone: this.maskPhone(phoneFrom) });
-        return; // ⬅️ Política: NO crear client / loan / chat si no hay branch inbound
-      }
-
-      // 3) Cliente (crear solo ahora, ya que tenemos branch válida)
-      let client = await this.clientRepository.findOne({
-        where: { phone: phoneFrom },
-        relations: ['loanRequests', 'loanRequests.agent'],
-      });
-      if (!client) {
-        client = this.clientRepository.create({
-          phone: phoneFrom,                                // guardamos como llega de WA (sin '+')
-          name: `Client ${phoneFrom}`,
-          status: ClientStatus.PROSPECT,
-        });
-        await this.clientRepository.save(client);
-        this.debug('INCOMING.client.created', { cId, clientId: client.id, phone: this.maskPhone(phoneFrom), branchId: branch.id });
-      }
+      if (!phoneFrom) { this.warn('INCOMING.missingPhone', { cId }); return; }
 
       const isText = type === 'text';
       const isImage = type === 'image';
       const isDocument = type === 'document';
 
-      // 4) Buscar solicitud abierta y agente
+      // === (1) País por phone → branches del país que aceptan entrantes
+      const callingCode = this.extractCountryCallingCode(phoneFrom);
+      const inboundBranches = await this.findInboundBranchesByCallingCode(callingCode);
+
+      if (!inboundBranches.length) {
+        this.warn('INCOMING.noBranchForCountry', { cId, callingCode, from: this.maskPhone(phoneFrom) });
+        // Política: si no hay sedes aptas para ese país, no generamos entidades.
+        return;
+      }
+
+      // === (2) Cliente (usando nombre del contacto si viene)
+      const profileName = value?.contacts?.[0]?.profile?.name || undefined;
+      let client = await this.clientRepository.findOne({
+        where: { phone: phoneFrom },
+        relations: ['loanRequests', 'loanRequests.agent'],
+      });
+
+      if (!client) {
+        client = this.clientRepository.create({
+          phone: phoneFrom,
+          name: profileName ? String(profileName) : `Client ${phoneFrom}`,
+          status: ClientStatus.PROSPECT,
+        });
+        await this.clientRepository.save(client);
+        this.debug('INCOMING.client.created', {
+          cId, clientId: client.id, phone: this.maskPhone(phoneFrom),
+          branchId: inboundBranches[0]?.id,
+        });
+      }
+
+      // === (3) LoanRequest y agente
       let loanRequest =
         client.loanRequests?.find(
           (lr) => lr.status !== LoanRequestStatus.COMPLETED && lr.status !== LoanRequestStatus.REJECTED,
         ) || null;
+
+      // Buscar el agente menos cargado entre TODAS las sedes del país
+      const { agent: countryAgent, branchId: chosenBranchId } =
+        await this.pickLeastBusyAgentForCountry(callingCode!);
+
       let assignedAgent: User | null = loanRequest?.agent ?? null;
+      if (!assignedAgent && countryAgent) {
+        assignedAgent = countryAgent;
+      }
 
-      // Si no hay solicitud abierta, intentamos asignar agente SOLO de la branch
       if (!loanRequest) {
-        assignedAgent = await this.pickLeastBusyAgentInBranch(branch.id);
-        if (assignedAgent) {
-          loanRequest = this.loanRequestRepository.create({
-            client,
-            agent: assignedAgent,
-            status: LoanRequestStatus.NEW,
-            amount: 0,
-          });
-          await this.loanRequestRepository.save(loanRequest);
+        const lrData: DeepPartial<LoanRequest> = {
+          client,
+          status: LoanRequestStatus.NEW,
+          amount: 0,
+          ...(assignedAgent ? { agent: assignedAgent } : {}),
+        };
+        loanRequest = this.loanRequestRepository.create(lrData);
+        await this.loanRequestRepository.save(loanRequest);
 
+        if (assignedAgent) {
           await this.notificationRepository.save(
             this.notificationRepository.create({
               recipientId: assignedAgent.id,
               category: 'loan',
               type: 'loan.assigned',
               payload: { loanRequestId: loanRequest.id, clientId: client.id },
-              description: `Se te ha asignado una nueva solicitud, contacta al cliente ${client.name} (${client.phone}).`,
+              description: `Se te ha asignado una nueva solicitud. Cliente: ${client.name} (${client.phone})`,
             }),
           );
-
-          this.debug('INCOMING.loan.created', { cId, loanRequestId: loanRequest.id, agentId: assignedAgent.id, branchId: branch.id });
         } else {
-          this.warn('INCOMING.noAgentInBranch', { cId, branchId: branch.id });
+          this.warn('INCOMING.noAgentInAnyBranchForCountry', {
+            cId, callingCode, branches: inboundBranches.map(b => b.id)
+          });
         }
+
+        this.debug('INCOMING.loan.created', {
+          cId,
+          loanRequestId: loanRequest.id,
+          agentId: assignedAgent?.id ?? null,
+          countryCallingCode: callingCode,
+          chosenBranchId: chosenBranchId ?? inboundBranches[0]?.id ?? null,
+        });
+      } else if (!loanRequest.agent && assignedAgent) {
+        await this.loanRequestRepository.update(loanRequest.id, { agent: assignedAgent });
+        loanRequest = await this.loanRequestRepository.findOne({
+          where: { id: loanRequest.id },
+          relations: ['client', 'agent'],
+        });
+        await this.notificationRepository.save(
+          this.notificationRepository.create({
+            recipientId: assignedAgent.id,
+            category: 'loan',
+            type: 'loan.assigned',
+            payload: { loanRequestId: loanRequest!.id, clientId: client.id },
+            description: `Se te asignó una solicitud existente. Cliente: ${client.name} (${client.phone})`,
+          }),
+        );
+        this.debug('INCOMING.loan.agent.assigned', {
+          cId,
+          loanRequestId: loanRequest?.id,
+          agentId: assignedAgent.id,
+          countryCallingCode: callingCode,
+          chosenBranchId: chosenBranchId ?? inboundBranches[0]?.id ?? null,
+        });
       }
 
-      // 5) Contenido del mensaje
+      // === (4) Contenido del mensaje
       let content = '';
       if (isText) {
         content = messageData.text.body;
       } else if (isImage || isDocument) {
         const media = isImage ? messageData.image : messageData.document;
         const mimeType = media.mime_type;
-        const mediaId = media.id;
+        const mediaId  = media.id;
 
         const url = await this.downloadAndStoreMedia(mediaId, mimeType);
 
-        // Vincular el documento al loan abierto si existe
         const doc = await this.documentRepository.save({
           type: mimeType,
           url,
@@ -369,24 +413,34 @@ export class ChatService implements OnModuleInit {
         return;
       }
 
-      // 6) Guardar chat message
-      // - Si hay agente, lo vinculamos a agente + loan (si existe).
-      // - Si no hay agente en la branch, guardamos el mensaje sin agente/loan para no perder el contexto.
-      const msgData: DeepPartial<ChatMessage> = {
-        content,
-        direction: 'INCOMING',
-        client,
-        ...(assignedAgent ? { agent: assignedAgent } : {}),
-        ...(loanRequest ? { loanRequest } : {}),
-      };
-      const chatMessage = this.chatMessageRepository.create(msgData);
-      await this.chatMessageRepository.save(chatMessage);
+      // === (5) Guardar chat_message SIEMPRE (con o sin agente)
+      try {
+        const chatData: DeepPartial<ChatMessage> = {
+          content,
+          direction: 'INCOMING',
+          client,
+          ...(loanRequest ? { loanRequest } : {}),
+          ...(assignedAgent ? { agent: assignedAgent } : {}),
+        };
+        const chatMessage = this.chatMessageRepository.create(chatData);
+        await this.chatMessageRepository.save(chatMessage);
+
+        this.debug('INCOMING.chat.persisted', {
+          cId,
+          chatMessageId: chatMessage.id,
+          loanRequestId: loanRequest?.id ?? null,
+          agentId: assignedAgent?.id ?? null,
+        });
+      } catch (e: any) {
+        this.error('INCOMING.chat.persist.error', { cId, msg: e?.message });
+      }
 
       this.info('INCOMING.saved', {
         cId,
         phone: this.maskPhone(phoneFrom),
         type,
-        branchId: branch.id,
+        countryCallingCode: callingCode,
+        branchesTried: inboundBranches.map(b => b.id),
         withAgent: !!assignedAgent,
         withLoan: !!loanRequest,
       });
@@ -590,6 +644,7 @@ export class ChatService implements OnModuleInit {
     const agent = loan.agent;
     loan.endDateAt = new Date(loan.endDateAt);
 
+    // PDF básico (resumido)
     const pdfDoc = await PDFDocument.create();
     const helv = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const helvBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
@@ -629,6 +684,7 @@ export class ChatService implements OnModuleInit {
     this.ensureDir(dirname(filePath));
     writeFileSync(filePath, pdfBytes);
 
+    // Upload + send
     const accessToken = this.getAccessToken();
     const phoneNumberId = this.getPhoneNumberId();
     const to = this.toE164(client.phone);

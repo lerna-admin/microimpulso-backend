@@ -97,18 +97,18 @@ export class DocumentController {
 async uploadDocument(
   @UploadedFile() file: Express.Multer.File,
   @Body('customerId') customerId: number,
-  @Body('category') category: DocumentType,
+  @Body('classification') classification: DocumentType,
 ) {
   if (!file) throw new BadRequestException('No se adjuntó ningún archivo');
   if (!customerId) throw new BadRequestException('customerId es requerido');
-  if (!category) throw new BadRequestException('category es requerida');
+  if (!classification) throw new BadRequestException('classification es requerida');
 
   const newDoc = await this.documentService.createDocument({
     filename: file.originalname,
     path: `uploads/${file.filename}`,
     mimeType: file.mimetype,
     customerId,
-    classification: category,
+    classification: classification,
   });
 
   return {

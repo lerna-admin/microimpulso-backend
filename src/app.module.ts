@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ConfigModule } from '@nestjs/config';
+
 import { ClientsModule } from './clients/clients.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
@@ -17,14 +19,22 @@ import { PaymentAccountModule } from './payment-accounts/payment-account.module'
 import { ConfigParamModule } from './config-param/config-param.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { ReportsModule } from './reports/reports.module';
+
 @Module({
   imports: [
+    // ⬇️ Carga .env y expone ConfigService globalmente
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: ['.env'], // ajusta si tu .env está en otra ruta
+    }),
+
     TypeOrmModule.forRoot({
       type: 'sqlite',
       database: 'database.sqlite',
       entities: [__dirname + '/**/*.entity{.ts,.js}'],
       synchronize: true,
     }),
+
     ClientsModule,
     AuthModule,
     UsersModule,
@@ -41,8 +51,7 @@ import { ReportsModule } from './reports/reports.module';
     ConfigParamModule,
     PaymentAccountModule,
     NotificationsModule,
-    ReportsModule
-
+    ReportsModule,
   ],
 })
 export class AppModule {}

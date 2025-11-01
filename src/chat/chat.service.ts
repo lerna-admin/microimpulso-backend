@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DeepPartial, In, Not, Repository } from 'typeorm';
 import { Client, ClientStatus } from '../entities/client.entity';
@@ -14,19 +14,13 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import * as FormData from 'form-data';
 import { Readable } from 'stream';
 import { Notification } from 'src/notifications/notifications.entity';
+import { ConfigService } from '@nestjs/config';
 
 type Dict = Record<string, any>;
 
 @Injectable()
-export class ChatService {
+export class ChatService implements OnModuleInit {
   private readonly logger = new Logger(ChatService.name);
-
-  // ⚠️ Solo pruebas locales. Usa WHATSAPP_TOKEN en prod.
-  private TOKEN_TEMP =
-    'EAAYsi96jmUYBPxTaOjbGyEiiYQXqoeOEcQ0OedMsvecltdhILB2rCQSx4fbwdTfolp29vRcBdqO5MZBx57kJnahZCPO3XVTafAfiYtT4FgH1EQc7sZA5AZCMASEZCquKp3JWzsxWbZClswZBARpQhUi3SesE9l0biTkcj6BhRG6TvI0xoTF8wSZBfhtO9Y84KvezIgZDZD';
-
-  private GRAPH_API_VERSION = process.env.GRAPH_API_VERSION || 'v21.0';
-  private DEBUG_WA = (process.env.DEBUG_WA || '').toLowerCase() === 'true';
 
   private http: AxiosInstance;
 
@@ -37,39 +31,68 @@ export class ChatService {
     @InjectRepository(LoanRequest) private loanRequestRepository: Repository<LoanRequest>,
     @InjectRepository(ChatMessage) private chatMessageRepository: Repository<ChatMessage>,
     @InjectRepository(Notification) private notificationRepository: Repository<Notification>,
+    private readonly config: ConfigService,
   ) {
     this.http = axios.create({
-      baseURL: `https://graph.facebook.com/${this.GRAPH_API_VERSION}`,
+      baseURL: `https://graph.facebook.com/${this.getGraphVersion()}`,
       timeout: 30000,
-      validateStatus: () => true, // siempre ver 4xx/5xx
+      validateStatus: () => true, // loguear también 4xx/5xx
     });
   }
 
-  /* ========= Helpers ========= */
+  /* ================= Boot check ================= */
+  onModuleInit() {
+    // SIEMPRE a consola para confirmar .env cargado
+    console.log('[BOOT] GRAPH_API_VERSION:', this.getGraphVersion());
+    console.log('[BOOT] WHATSAPP_PHONE_NUMBER_ID:', this.config.get<string>('WHATSAPP_PHONE_NUMBER_ID') || '(NO DEFINIDO)');
+    console.log('[BOOT] WHATSAPP_TOKEN set?:', !!this.config.get<string>('WHATSAPP_TOKEN'));
+    console.log('[BOOT] DEBUG_WA:', this.DEBUG_WA);
+  }
+
+  /* ================= Helpers generales ================= */
+  private getGraphVersion(): string {
+    return this.config.get<string>('GRAPH_API_VERSION') || 'v21.0';
+  }
 
   private getAccessToken(): string {
-    return process.env.WHATSAPP_TOKEN || this.TOKEN_TEMP;
+    const t = this.config.get<string>('WHATSAPP_TOKEN');
+    if (!t) throw new Error('Config faltante: WHATSAPP_TOKEN no está definido.');
+    return t;
   }
+
   private getPhoneNumberId(): string {
-    return process.env.WHATSAPP_PHONE_NUMBER_ID || '000000000000000';
+    const id = this.config.get<string>('WHATSAPP_PHONE_NUMBER_ID');
+    if (!id || /^0+$/.test(id)) {
+      throw new Error('Config faltante: WHATSAPP_PHONE_NUMBER_ID no está definido o es inválido.');
+    }
+    return id;
   }
+
+  private get DEBUG_WA(): boolean {
+    return (this.config.get<string>('DEBUG_WA') || '').toLowerCase() === 'true';
+  }
+
   private ensureDir(path: string) {
     if (!existsSync(path)) mkdirSync(path, { recursive: true });
   }
+
   private toE164(phone: string): string {
     const t = (phone || '').trim();
     return t.startsWith('+') ? t : `+${t.replace(/\D/g, '')}`;
   }
+
   private redactBearer(v?: string) {
     if (!v) return v;
     return v.replace(/(Bearer\s+)[A-Za-z0-9\-\._]+/i, '$1***REDACTED***');
   }
+
   private maskPhone(p?: string) {
     if (!p) return p;
     const d = p.replace(/\D/g, '');
     if (d.length <= 4) return '***';
     return `${d.slice(0, 3)}***${d.slice(-2)}`;
   }
+
   private sizeOf(data: any): number {
     try {
       if (Buffer.isBuffer(data)) return data.length;
@@ -78,10 +101,9 @@ export class ChatService {
     } catch { return 0; }
   }
 
-  // ⬇️ Estos helpers garantizan salida en consola si DEBUG_WA=true
+  // === helpers de logging: con DEBUG_WA también imprimen por consola
   private debug(label: string, obj?: Dict) {
     if (this.DEBUG_WA) console.debug(`[DEBUG_WA] ${label}:`, obj ?? {});
-    // además usamos el logger de Nest
     this.logger.debug(JSON.stringify({ label, ...(obj || {}) }, null, 2));
   }
   private info(label: string, obj?: Dict) {
@@ -111,8 +133,7 @@ export class ChatService {
     };
   }
 
-  /* ========= Media: descarga ========= */
-
+  /* ================= Media: descarga y guardado ================= */
   async downloadAndStoreMedia(mediaId: string, mimeType: string): Promise<string> {
     const cId = uuid();
     const token = this.getAccessToken();
@@ -120,24 +141,18 @@ export class ChatService {
     try {
       // 1) Metadata
       const metaUrl = `/${mediaId}`;
-      const reqMetaStart = Date.now();
+      const t0 = Date.now();
       this.debug('WA.media.meta.request', {
         cId, url: this.http.defaults.baseURL + metaUrl,
         headers: { Authorization: this.redactBearer(`Bearer ${token}`) },
       });
 
-      const metadata = await this.http.get(metaUrl, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const metadata = await this.http.get(metaUrl, { headers: { Authorization: `Bearer ${token}` } });
 
-      const reqMetaMs = Date.now() - reqMetaStart;
       this.debug('WA.media.meta.response', {
-        cId, status: metadata.status, ms: reqMetaMs,
+        cId, status: metadata.status, ms: Date.now() - t0,
         data: metadata.data,
-        fb_headers: {
-          'x-fb-trace-id': metadata.headers['x-fb-trace-id'],
-          'x-fb-rev': metadata.headers['x-fb-rev'],
-        },
+        fb_headers: { 'x-fb-trace-id': metadata.headers['x-fb-trace-id'], 'x-fb-rev': metadata.headers['x-fb-rev'] },
       });
 
       if (metadata.status >= 400) throw new Error(`Media metadata error: ${metadata.status}`);
@@ -145,7 +160,7 @@ export class ChatService {
       if (!fileUrl) throw new Error('Media URL missing');
 
       // 2) Binario
-      const reqFileStart = Date.now();
+      const t1 = Date.now();
       this.debug('WA.media.file.request', { cId, fileUrl });
 
       const file = await axios.get(fileUrl, {
@@ -155,9 +170,8 @@ export class ChatService {
         validateStatus: () => true,
       });
 
-      const reqFileMs = Date.now() - reqFileStart;
       this.debug('WA.media.file.response', {
-        cId, status: file.status, ms: reqFileMs, size: (file.data as Buffer)?.length,
+        cId, status: file.status, ms: Date.now() - t1, size: (file.data as Buffer)?.length,
       });
 
       if (file.status >= 400) throw new Error(`Media download error: ${file.status}`);
@@ -182,8 +196,7 @@ export class ChatService {
     }
   }
 
-  /* ========= Webhook entrante ========= */
-
+  /* ================= Webhook entrante ================= */
   async processIncoming(payload: any) {
     const cId = uuid();
     try {
@@ -313,8 +326,7 @@ export class ChatService {
     }
   }
 
-  /* ========= Enviar texto ========= */
-
+  /* ================= Enviar texto ================= */
   async sendMessageToClient(clientId: number, message: string) {
     const cId = uuid();
 
@@ -331,12 +343,11 @@ export class ChatService {
 
     const accessToken = this.getAccessToken();
     const phoneNumberId = this.getPhoneNumberId();
-    if (!accessToken || !phoneNumberId) throw new Error('WHATSAPP_TOKEN or PHONE_NUMBER_ID not set');
 
     const payload = { messaging_product: 'whatsapp', to, type: 'text', text: { body: message } };
 
     try {
-      const start = Date.now();
+      const t0 = Date.now();
       this.debug('OUT.text.request', {
         cId, url: this.http.defaults.baseURL + `/${phoneNumberId}/messages`,
         headers: { Authorization: this.redactBearer(`Bearer ${accessToken}`), 'Content-Type': 'application/json' },
@@ -347,7 +358,7 @@ export class ChatService {
         headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
       });
 
-      const ms = Date.now() - start;
+      const ms = Date.now() - t0;
       const errorInfo = this.extractMetaError(res);
 
       this.debug('OUT.text.response', {
@@ -379,8 +390,7 @@ export class ChatService {
     }
   }
 
-  /* ========= Conversaciones por agente ========= */
-
+  /* ================= Conversaciones por agente ================= */
   async getAgentConversations(agentId: number) {
     const messages = await this.chatMessageRepository.find({
       where: { agent: { id: agentId } },
@@ -398,8 +408,7 @@ export class ChatService {
     return Array.from(grouped.values());
   }
 
-  /* ========= Enviar simulación (media) ========= */
-
+  /* ================= Enviar simulación (media) ================= */
   async sendSimulationToClient(clientId: number, file: Express.Multer.File) {
     const cId = uuid();
 
@@ -416,7 +425,6 @@ export class ChatService {
 
     const accessToken = this.getAccessToken();
     const phoneNumberId = this.getPhoneNumberId();
-    if (!accessToken || !phoneNumberId) throw new Error('Missing WhatsApp token or phone number ID');
 
     const bufferStream = new Readable();
     bufferStream.push(file.buffer);
@@ -440,10 +448,7 @@ export class ChatService {
         headers: { Authorization: `Bearer ${accessToken}`, ...(formData as any).getHeaders?.() },
       });
 
-      const upMs = Date.now() - upStart;
-      this.debug('OUT.media.upload.response', {
-        cId, status: mediaUpload.status, ms: upMs, data: mediaUpload.data,
-      });
+      this.debug('OUT.media.upload.response', { cId, status: mediaUpload.status, ms: Date.now() - upStart, data: mediaUpload.data });
 
       if (mediaUpload.status >= 400 || !mediaUpload.data?.id) {
         this.error('OUT.media.upload.failed', { cId, status: mediaUpload.status, data: mediaUpload.data });
@@ -472,11 +477,9 @@ export class ChatService {
         headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
       });
 
-      const sendMs = Date.now() - sendStart;
       const errorInfo = this.extractMetaError(sendRes);
-
       this.debug('OUT.media.send.response', {
-        cId, status: sendRes.status, ms: sendMs, data: sendRes.data,
+        cId, status: sendRes.status, ms: Date.now() - sendStart, data: sendRes.data,
         fb_headers: { 'x-fb-trace-id': sendRes.headers['x-fb-trace-id'], 'x-fb-rev': sendRes.headers['x-fb-rev'] },
       });
 
@@ -485,7 +488,7 @@ export class ChatService {
         throw new Error(`WhatsApp send media error: ${sendRes.status} ${errorInfo ? JSON.stringify(errorInfo) : ''}`);
       }
 
-      // 3) Persist
+      // 3) Guardar mensaje
       const content = `📎 Simulation sent: ${file.originalname}`;
       const chatMessage = this.chatMessageRepository.create({
         content,
@@ -504,8 +507,7 @@ export class ChatService {
     }
   }
 
-  /* ========= Generar & enviar contrato ========= */
-
+  /* ================= Generar & enviar contrato (PDF) ================= */
   async sendContractToClient(loanRequestId: number) {
     const cId = uuid();
 
@@ -519,7 +521,7 @@ export class ChatService {
     const agent = loan.agent;
     loan.endDateAt = new Date(loan.endDateAt);
 
-    // PDF básico
+    // PDF básico (resumido)
     const pdfDoc = await PDFDocument.create();
     const helv = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const helvBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
@@ -586,8 +588,7 @@ export class ChatService {
         headers: { Authorization: `Bearer ${accessToken}`, ...(formData as any).getHeaders?.() },
       });
 
-      const upMs = Date.now() - upStart;
-      this.debug('OUT.contract.upload.response', { cId, status: mediaUpload.status, ms: upMs, data: mediaUpload.data });
+      this.debug('OUT.contract.upload.response', { cId, status: mediaUpload.status, ms: Date.now() - upStart, data: mediaUpload.data });
 
       if (mediaUpload.status >= 400 || !mediaUpload.data?.id) {
         this.error('OUT.contract.upload.failed', { cId, status: mediaUpload.status, data: mediaUpload.data });
@@ -614,11 +615,9 @@ export class ChatService {
         headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
       });
 
-      const sendMs = Date.now() - sendStart;
       const errorInfo = this.extractMetaError(sendRes);
-
       this.debug('OUT.contract.send.response', {
-        cId, status: sendRes.status, ms: sendMs, data: sendRes.data,
+        cId, status: sendRes.status, ms: Date.now() - sendStart, data: sendRes.data,
         fb_headers: { 'x-fb-trace-id': sendRes.headers['x-fb-trace-id'], 'x-fb-rev': sendRes.headers['x-fb-rev'] },
       });
 

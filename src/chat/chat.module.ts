@@ -11,6 +11,7 @@ import { LoanRequest } from '../entities/loan-request.entity';
 import { ChatMessage } from '../entities/chat-message.entity';
 import { Document } from '../entities/document.entity';
 import { Notification } from 'src/notifications/notifications.entity';
+import { Branch } from 'src/entities/branch.entity';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { Notification } from 'src/notifications/notifications.entity';
       ChatMessage,
       Document,
       Notification,
+      Branch
     ]),
   ],
   controllers: [ChatController],

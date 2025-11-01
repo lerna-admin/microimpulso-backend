@@ -1,61 +1,131 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Branch } from 'src/entities/branch.entity';
 import { Repository, ILike } from 'typeorm';
+import { Branch } from 'src/entities/branch.entity';
+import { User } from 'src/entities/user.entity';
+
+type CreateBranchInput = {
+  name: string;
+  administrator?: number;         // ID de User (opcional)
+  countryIso2?: string;           // p.ej. 'CO'
+  phoneCountryCode?: string;      // p.ej. '57'
+  acceptsInbound?: boolean;
+};
+type UpdateBranchInput = Partial<CreateBranchInput>;
+
+// ---------- utils de normalización ----------
+const normIso2 = (v?: string) => (v ? v.trim().toUpperCase() : undefined);
+const normPhoneCode = (v?: string) =>
+  v ? v.toString().trim().replace(/[^\d]/g, '') || undefined : undefined;
 
 @Injectable()
 export class BranchService {
-    constructor(
-        @InjectRepository(Branch)
-        private branchRepository: Repository<Branch>,
-    ) {}
-    
-   // branches.service.ts
-    async create(data: { name: string; administrator: number }): Promise<Branch> {
-        const branch = this.branchRepository.create({
-        name: data.name,
-        administrator: { id: data.administrator }, // 👈 turn the ID into a relation
-        });
-    
-        return this.branchRepository.save(branch);
+  constructor(
+    @InjectRepository(Branch) private readonly branchRepository: Repository<Branch>,
+    @InjectRepository(User) private readonly userRepository: Repository<User>,
+  ) {}
+
+  // Mapea la entidad a un objeto plano serializable
+  private mapBranch(b: Branch) {
+    return {
+      id: b.id,
+      name: b.name,
+      countryIso2: b.countryIso2 ?? null,
+      phoneCountryCode: b.phoneCountryCode ?? null,
+      acceptsInbound: !!b.acceptsInbound,
+      administrator: b.administrator
+        ? { id: b.administrator.id, name: b.administrator.name, email: b.administrator.email }
+        : null,
+      agentsCount: Array.isArray(b.agents) ? b.agents.length : undefined,
+      createdAt: b.createdAt,
+      updatedAt: b.updatedAt,
+    };
+  }
+
+  private async getAdminOrUndefined(id?: number) {
+    if (!id && id !== 0) return undefined;
+    const admin = await this.userRepository.findOne({ where: { id } });
+    if (!admin) throw new BadRequestException(`administrator id=${id} no existe`);
+    return admin;
+  }
+
+  // ---------- CREATE ----------
+  async create(data: CreateBranchInput) {
+    if (!data?.name?.trim()) throw new BadRequestException('name es requerido');
+
+    const administrator = await this.getAdminOrUndefined(data.administrator);
+
+    const toCreate: Partial<Branch> = {
+      name: data.name.trim(),
+      administrator,
+      countryIso2: normIso2(data.countryIso2),
+      phoneCountryCode: normPhoneCode(data.phoneCountryCode),
+      acceptsInbound: data.acceptsInbound ?? true,
+    };
+
+    const entity = this.branchRepository.create(toCreate);
+    const saved = await this.branchRepository.save(entity);
+
+    // Re-cargar con relaciones para responder completo
+    const reloaded = await this.branchRepository.findOne({
+      where: { id: saved.id },
+      relations: { administrator: true, agents: true },
+    });
+    if (!reloaded) throw new NotFoundException(`Branch id=${saved.id} no encontrada`);
+
+    return this.mapBranch(reloaded);
+  }
+
+  // ---------- READ ----------
+  async findAll(filters?: { name?: string; administratorId?: number; countryIso2?: string; acceptsInbound?: boolean }) {
+    const where: any = {};
+    if (filters?.name) where.name = ILike(`%${filters.name}%`);
+    if (filters?.administratorId) where.administrator = { id: filters.administratorId };
+    if (filters?.countryIso2) where.countryIso2 = normIso2(filters.countryIso2);
+    if (typeof filters?.acceptsInbound === 'boolean') where.acceptsInbound = filters.acceptsInbound;
+
+    const rows = await this.branchRepository.find({
+      where,
+      relations: { administrator: true, agents: true },
+      order: { createdAt: 'DESC' },
+    });
+
+    return rows.map((b) => this.mapBranch(b));
+  }
+
+  async findOne(id: number) {
+    const b = await this.branchRepository.findOne({
+      where: { id },
+      relations: { administrator: true, agents: true },
+    });
+    if (!b) throw new NotFoundException(`Branch id=${id} no encontrada`);
+    return this.mapBranch(b);
+  }
+
+  // ---------- UPDATE ----------
+  async update(id: number, data: UpdateBranchInput) {
+    const exists = await this.branchRepository.findOne({ where: { id } });
+    if (!exists) throw new NotFoundException(`Branch id=${id} no encontrada`);
+
+    const patch: Partial<Branch> = {};
+    if (data.name !== undefined) patch.name = data.name?.trim() || '';
+    if (data.countryIso2 !== undefined) patch.countryIso2 = normIso2(data.countryIso2);
+    if (data.phoneCountryCode !== undefined) patch.phoneCountryCode = normPhoneCode(data.phoneCountryCode);
+    if (data.acceptsInbound !== undefined) patch.acceptsInbound = !!data.acceptsInbound;
+
+    if (data.administrator !== undefined) {
+      patch.administrator = await this.getAdminOrUndefined(data.administrator);
     }
-  
-    
-    async findAll(filters?: { name?: string; administratorId?: number }) {
-        const where: any = {};
-      
-        if (filters?.name) {
-          where.name = ILike(`%${filters.name}%`);
-        }
-        if (filters?.administratorId) {
-          where.administrator = { id: filters.administratorId };
-        }
-      
-        return this.branchRepository.find({
-          where,
-          relations: { administrator: true },      // 👈 loads the User entity
-          order: { createdAt: 'DESC' },
-        });
-      }
-    
-    findOne(id: number) {
-        return this.branchRepository.findOne({
-            where: { id },
-            relations: ['administrator', 'agents'],
-        });
-    }
-    
-    async update(id: number, data: Partial<Branch>) {
-        await this.branchRepository.update(id, data);
-        return this.findOne(id);
-    }
-    
-    async remove(id: number) {
-        const branch = await this.findOne(id);
-        if (!branch) {
-            throw new Error(`Branch with ID ${id} not found`);
-        }
-        return this.branchRepository.remove(branch);
-    }
-    
+
+    await this.branchRepository.update(id, patch);
+    return this.findOne(id); // ya mapeado
+  }
+
+  // ---------- DELETE ----------
+  async remove(id: number) {
+    const b = await this.branchRepository.findOne({ where: { id } });
+    if (!b) throw new NotFoundException(`Branch id=${id} no encontrada`);
+    await this.branchRepository.remove(b);
+    return { id };
+  }
 }

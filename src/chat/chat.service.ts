@@ -21,7 +21,6 @@ type Dict = Record<string, any>;
 @Injectable()
 export class ChatService implements OnModuleInit {
   private readonly logger = new Logger(ChatService.name);
-
   private http: AxiosInstance;
 
   constructor(
@@ -36,30 +35,27 @@ export class ChatService implements OnModuleInit {
     this.http = axios.create({
       baseURL: `https://graph.facebook.com/${this.getGraphVersion()}`,
       timeout: 30000,
-      validateStatus: () => true, // loguear también 4xx/5xx
+      validateStatus: () => true,
     });
   }
 
   /* ================= Boot check ================= */
   onModuleInit() {
-    // SIEMPRE a consola para confirmar .env cargado
     console.log('[BOOT] GRAPH_API_VERSION:', this.getGraphVersion());
     console.log('[BOOT] WHATSAPP_PHONE_NUMBER_ID:', this.config.get<string>('WHATSAPP_PHONE_NUMBER_ID') || '(NO DEFINIDO)');
     console.log('[BOOT] WHATSAPP_TOKEN set?:', !!this.config.get<string>('WHATSAPP_TOKEN'));
     console.log('[BOOT] DEBUG_WA:', this.DEBUG_WA);
   }
 
-  /* ================= Helpers generales ================= */
+  /* ================= Helpers ================= */
   private getGraphVersion(): string {
     return this.config.get<string>('GRAPH_API_VERSION') || 'v21.0';
   }
-
   private getAccessToken(): string {
     const t = this.config.get<string>('WHATSAPP_TOKEN');
     if (!t) throw new Error('Config faltante: WHATSAPP_TOKEN no está definido.');
     return t;
   }
-
   private getPhoneNumberId(): string {
     const id = this.config.get<string>('WHATSAPP_PHONE_NUMBER_ID');
     if (!id || /^0+$/.test(id)) {
@@ -67,32 +63,39 @@ export class ChatService implements OnModuleInit {
     }
     return id;
   }
-
   private get DEBUG_WA(): boolean {
     return (this.config.get<string>('DEBUG_WA') || '').toLowerCase() === 'true';
   }
-
   private ensureDir(path: string) {
     if (!existsSync(path)) mkdirSync(path, { recursive: true });
   }
 
+  // Normaliza a E.164 con país por defecto (p.ej. 57 para CO)
   private toE164(phone: string): string {
-    const t = (phone || '').trim();
-    return t.startsWith('+') ? t : `+${t.replace(/\D/g, '')}`;
+    const raw = (phone || '').trim();
+    const digits = raw.replace(/[^\d+]/g, '');
+    if (raw.startsWith('+')) return raw;
+    if (raw.startsWith('00')) return `+${raw.replace(/\D/g, '').slice(2)}`;
+
+    const def = (this.config.get<string>('DEFAULT_COUNTRY_CODE') || '57').replace(/\D/g, '') || '57';
+    const justDigits = raw.replace(/\D/g, '');
+
+    // CO: celulares 10 dígitos que empiezan en 3
+    if (justDigits.length === 10 && justDigits.startsWith('3')) return `+${def}${justDigits}`;
+    if (justDigits.length >= 11) return `+${justDigits}`;
+    return `+${def}${justDigits}`;
   }
 
   private redactBearer(v?: string) {
     if (!v) return v;
     return v.replace(/(Bearer\s+)[A-Za-z0-9\-\._]+/i, '$1***REDACTED***');
   }
-
   private maskPhone(p?: string) {
     if (!p) return p;
     const d = p.replace(/\D/g, '');
     if (d.length <= 4) return '***';
     return `${d.slice(0, 3)}***${d.slice(-2)}`;
   }
-
   private sizeOf(data: any): number {
     try {
       if (Buffer.isBuffer(data)) return data.length;
@@ -101,7 +104,7 @@ export class ChatService implements OnModuleInit {
     } catch { return 0; }
   }
 
-  // === helpers de logging: con DEBUG_WA también imprimen por consola
+  // Logging helpers: si DEBUG_WA=true también van a consola
   private debug(label: string, obj?: Dict) {
     if (this.DEBUG_WA) console.debug(`[DEBUG_WA] ${label}:`, obj ?? {});
     this.logger.debug(JSON.stringify({ label, ...(obj || {}) }, null, 2));
@@ -118,7 +121,6 @@ export class ChatService implements OnModuleInit {
     if (this.DEBUG_WA) console.error(`[DEBUG_WA] ${label}:`, obj ?? {});
     this.logger.error(JSON.stringify({ label, ...(obj || {}) }, null, 2));
   }
-
   private extractMetaError(res: AxiosResponse | undefined) {
     if (!res) return null;
     const e = (res.data as any)?.error;
@@ -202,20 +204,35 @@ export class ChatService implements OnModuleInit {
     try {
       this.debug('INCOMING.received', { cId, payload });
 
-      const messageData = payload?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-      const statuses = payload?.entry?.[0]?.changes?.[0]?.value?.statuses?.[0];
+      const value = payload?.entry?.[0]?.changes?.[0]?.value;
+      const messageData = value?.messages?.[0];
+      const statuses = value?.statuses?.[0];
 
-      if (statuses) this.debug('INCOMING.status', { cId, statuses });
+      // 1) Si llega un status (sent/delivered/read/failed) lo logueamos y salimos.
+      if (statuses && !messageData) {
+        this.debug('INCOMING.status', { cId, statuses });
+        return; // ⬅️ NO procesar como mensaje
+      }
+
+      // 2) Si llegan ambos (a veces Meta manda en el mismo payload), log de status y seguimos con message
+      if (statuses && messageData) {
+        this.debug('INCOMING.status', { cId, statuses });
+      }
 
       const phone = messageData?.from;
       const type = messageData?.type;
-      if (!phone) { this.warn('INCOMING.missingPhone', { cId }); return; }
+
+      if (!phone) {
+        // Solo advertimos si el payload era de tipo message y faltó el phone
+        if (messageData) this.warn('INCOMING.missingPhone', { cId });
+        return;
+      }
 
       const isText = type === 'text';
       const isImage = type === 'image';
       const isDocument = type === 'document';
 
-      // 1) Cliente
+      // 3) Cliente
       let client = await this.clientRepository.findOne({
         where: { phone },
         relations: ['loanRequests', 'loanRequests.agent'],
@@ -226,7 +243,7 @@ export class ChatService implements OnModuleInit {
         this.debug('INCOMING.client.created', { cId, clientId: client.id, phone: this.maskPhone(phone) });
       }
 
-      // 2) Loan + agente
+      // 4) Loan + agente
       let loanRequest =
         client.loanRequests?.find(
           (lr) => lr.status !== LoanRequestStatus.COMPLETED && lr.status !== LoanRequestStatus.REJECTED,
@@ -273,7 +290,7 @@ export class ChatService implements OnModuleInit {
         }
       }
 
-      // 3) Contenido
+      // 5) Contenido
       let content = '';
       if (isText) {
         content = messageData.text.body;
@@ -306,7 +323,7 @@ export class ChatService implements OnModuleInit {
         return;
       }
 
-      // 4) Guardar mensaje
+      // 6) Guardar mensaje (solo si hay agente asignado)
       if (assignedAgent) {
         const chatMessage = this.chatMessageRepository.create({
           content,
@@ -521,7 +538,7 @@ export class ChatService implements OnModuleInit {
     const agent = loan.agent;
     loan.endDateAt = new Date(loan.endDateAt);
 
-    // PDF básico (resumido)
+    // PDF (resumido)
     const pdfDoc = await PDFDocument.create();
     const helv = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const helvBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
@@ -561,7 +578,6 @@ export class ChatService implements OnModuleInit {
     this.ensureDir(dirname(filePath));
     writeFileSync(filePath, pdfBytes);
 
-    // Upload + send
     const accessToken = this.getAccessToken();
     const phoneNumberId = this.getPhoneNumberId();
     const to = this.toE164(client.phone);

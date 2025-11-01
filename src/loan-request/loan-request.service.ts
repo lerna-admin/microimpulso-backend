@@ -33,12 +33,44 @@ export class LoanRequestService {
   
   
 async create(data: Partial<LoanRequest>): Promise<LoanRequest> {
-  // === CHECK mínimo: si el cliente ya tiene solicitud abierta, bloquear ===
+  // ── 0) Validar cliente y traer su teléfono ────────────────────────────────
   const clientId =
     typeof data.client === 'number'
       ? data.client
       : (data.client as any)?.id;
 
+  if (!clientId) {
+    throw new BadRequestException('Falta cliente en la solicitud.');
+  }
+
+  const client = await this.clientRepository.findOne({ where: { id: clientId } });
+  if (!client || !client.phone) {
+    throw new BadRequestException('Cliente no encontrado o sin teléfono.');
+  }
+
+  // ── 1) Normalizar teléfono y extraer código de país (indicativo) ─────────
+  const toE164Basic = (phone: string, fallbackCc = '57'): string => {
+    const raw = (phone || '').trim();
+    if (!raw) return '';
+    if (raw.startsWith('+')) return raw.replace(/[^\d+]/g, '');
+    if (raw.startsWith('00')) return `+${raw.replace(/\D/g, '').slice(2)}`;
+    const digits = raw.replace(/\D/g, '');
+    return `+${fallbackCc}${digits}`;
+  };
+
+  const getCountryCallingCode = (e164: string): string | null => {
+    const m = /^\+(\d{1,3})/.exec(e164 || '');
+    return m ? m[1] : null;
+  };
+
+  const e164 = toE164Basic(client.phone);
+  const ccode = getCountryCallingCode(e164);
+  if (!ccode) {
+    throw new BadRequestException('No se pudo determinar el país del teléfono del cliente.');
+  }
+
+  // ── 2) (Opcional) Bloqueo si ya tiene una solicitud abierta ───────────────
+  // Mantengo tu lógica original comentada:
   if (clientId) {
     const hasOpen = await this.loanRequestRepository.exist({
       where: {
@@ -46,68 +78,54 @@ async create(data: Partial<LoanRequest>): Promise<LoanRequest> {
         status: Not(In([LoanRequestStatus.COMPLETED, LoanRequestStatus.REJECTED])),
       },
     });
-    /**
-    if (hasOpen) {
-      throw new BadRequestException('El cliente ya tiene una solicitud abierta (no completed/rejected).');
-    }
-    */
+    // if (hasOpen) {
+    //   throw new BadRequestException('El cliente ya tiene una solicitud abierta.');
+    // }
   }
 
-  // === Resolver branch objetivo ===
-  // Prioridad: data.branchId -> data.branch?.id -> por defecto 2
-  const requestedBranchId: number =
-    (data as any)?.branchId ??
-    (data as any)?.branch?.id ??
-    2;
-
-  // === Si no llega agent, elegir uno aleatorio según la branch deseada ===
+  // ── 3) Selección de agente por país (branch.phoneCountryCode) ─────────────
   if (!data.agent) {
-    // Helper para elegir un AGENT aleatorio por branchId
-    const pickRandomAgentByBranch = async (branchId: number) => {
-      return await this.userRepository
-        .createQueryBuilder('user')
-        .leftJoin('user.loanRequests', 'loanRequest', "loanRequest.status NOT IN ('COMPLETED', 'REJECTED')")
-        .leftJoin('user.branch', 'branch')
-        .where('user.role = :role', { role: 'AGENT' })
-        .andWhere('branch.id = :branchId', { branchId })
-        // si quieres priorizar menos ocupados, ordena por COUNT; aquí usamos aleatorio como pediste
-        .orderBy('RANDOM()') // SQLite/Postgres
-        .limit(1)
-        .getOne();
-    };
-
-    // 1) Intentar con la branch solicitada
-    let randomAgent = await pickRandomAgentByBranch(requestedBranchId);
-
-    // 2) Fallback a branch 2 si no encontró
-    if (!randomAgent && requestedBranchId !== 2) {
-      randomAgent = await pickRandomAgentByBranch(2);
-    }
-
-    // 3) Último recurso: cualquier AGENT
-    if (!randomAgent) {
-      randomAgent = await this.userRepository
-        .createQueryBuilder('user')
-        .where('user.role = :role', { role: 'AGENT' })
-        .orderBy('RANDOM()')
-        .limit(1)
-        .getOne();
-    }
+    // Tomar un AGENTE aleatorio de sedes que acepten ese indicativo
+    const randomAgent = await this.userRepository
+      .createQueryBuilder('user')
+      .leftJoinAndSelect('user.branch', 'branch')
+      .where('user.role = :role', { role: 'AGENT' })
+      .andWhere('branch.acceptsInbound = :acc', { acc: true })
+      .andWhere('branch.phoneCountryCode = :pcc', { pcc: ccode })
+      .orderBy('RANDOM()')
+      .limit(1)
+      .getOne();
 
     if (!randomAgent) {
-      throw new Error(`No hay agentes disponibles para asignar (branch solicitada: ${requestedBranchId}).`);
+      // Si no hay agente/sede para ese país → NO crear solicitud
+      throw new BadRequestException(
+        `No hay sedes/agentes configurados para el país con indicativo +${ccode}. No se crea la solicitud.`
+      );
     }
 
     data.agent = randomAgent;
+  } else {
+    // Si viene agente, validar que su branch coincida con el país detectado
+    const agentId = (data.agent as any)?.id ?? (data.agent as any);
+    const agent = await this.userRepository.findOne({
+      where: { id: agentId },
+      relations: ['branch'],
+    });
+
+    if (!agent?.branch?.phoneCountryCode || agent.branch.phoneCountryCode !== ccode) {
+      throw new BadRequestException(
+        `El agente provisto no pertenece a una sede que atienda el país +${ccode}.`
+      );
+    }
   }
 
-  // === Lógica original extra ===
+  // ── 4) Completar y persistir ──────────────────────────────────────────────
+  data.client = client; // asegurar referencia
   data.mode = (data.amount ? data.amount / 1000 : 100).toString().concat('X1');
 
   const loanRequest = this.loanRequestRepository.create(data);
   return await this.loanRequestRepository.save(loanRequest);
 }
-
 
 async renewLoanRequest(
   loanRequestId: number,

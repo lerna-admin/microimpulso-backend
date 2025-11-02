@@ -99,4 +99,7 @@ export class Client {
 
   @Column({ type: 'boolean', default: false })
   lead: boolean;
+  
+  @Column({ type: 'jsonb', nullable: false, default: () => `'[]'::jsonb` })
+  customFields: Array<{ key: string; type: 'text'|'number'|'link'; value: any }>;
 }

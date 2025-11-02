@@ -49,53 +49,63 @@ export class LoanRequestService {
     }
     
     // ── 1) Normalizar teléfono y extraer código de país (indicativo) ─────────
+    // 1) Mueve los indicativos conocidos arriba para reutilizarlos
+    const KNOWN_CCS = ['57', '506']; // CO, CR (agrega más si abres países)
+    
+    // ── 1) Normalizar teléfono y extraer código de país (indicativo) ─────────
     const toE164Basic = (phone: string, fallbackCc = '57'): string => {
       const raw = (phone || '').trim();
       if (!raw) return '';
       
-      // 1) Ya en formato +E.164 (permitimos espacios/guiones, los limpiamos)
+      // +E164
       if (raw.startsWith('+')) {
         return raw.replace(/[^\d+]/g, '');
       }
       
-      // 2) Formato internacional con '00'
+      // 00 internacional
       if (raw.startsWith('00')) {
-        const digits = raw.replace(/\D/g, '').slice(2); // quitar '00'
+        const digits = raw.replace(/\D/g, '').slice(2);
         return digits ? `+${digits}` : '';
       }
       
-      // 3) Solo dígitos (posible local o con indicativo sin '+')
+      // Solo dígitos
       const digitsOnly = raw.replace(/\D/g, '');
       if (!digitsOnly) return '';
       
-      // Indicativos que manejas hoy (extiende esta lista si agregas países)
-      const KNOWN_CCS = ['57', '506'];
-      
-      // 3.a) Si ya empieza por un indicativo conocido, respétalo
+      // Si ya empieza con un indicativo conocido (p.ej. 57 o 506) -> anteponer '+'
       for (const cc of KNOWN_CCS) {
         if (digitsOnly.startsWith(cc)) {
           return `+${digitsOnly}`;
         }
       }
       
-      // 3.b) Heurística Colombia: 10 dígitos y empieza en '3' => celular CO
+      // Heurística CO: 10 dígitos y empieza por '3' => celular CO
       if (digitsOnly.length === 10 && digitsOnly.startsWith('3')) {
         return `+57${digitsOnly}`;
       }
       
-      // 3.c) Si parece traer indicativo (>=11 dígitos), anteponer '+'
+      // Si parece internacional (>=11 dígitos), anteponer '+'
       if (digitsOnly.length >= 11) {
         return `+${digitsOnly}`;
       }
       
-      // 3.d) Fallback: asumir país por defecto (por compatibilidad)
+      // Fallback
       return `+${fallbackCc}${digitsOnly}`;
     };
     
+    // ❗ Nueva versión: NO regex codiciosa; valida contra KNOWN_CCS
     const getCountryCallingCode = (e164: string): string | null => {
-      const m = /^\+(\d{1,3})/.exec(e164 || '');
-      return m ? m[1] : null;
+      const digits = (e164 || '').replace(/[^\d]/g, ''); // quita '+'
+      if (!digits) return null;
+      // prioriza coincidencias de 3, luego 2, luego 1 (si tuvieras otras)
+      const ordered = [...KNOWN_CCS].sort((a, b) => b.length - a.length);
+      for (const cc of ordered) {
+        if (digits.startsWith(cc)) return cc;
+      }
+      // Si no está en la lista, como último recurso toma 1–3 dígitos (no recomendado)
+      return digits.slice(0, Math.min(3, digits.length));
     };
+    
     
     const e164 = toE164Basic(client.phone);
     const ccode = getCountryCallingCode(e164);

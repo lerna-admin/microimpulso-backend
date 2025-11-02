@@ -13,6 +13,24 @@ import { LoanRequest } from './loan-request.entity';
 import { Document } from './document.entity';
 import { ChatMessage } from './chat-message.entity';
 
+const jsonArrayTransformer = {
+  to(value?: Array<{ key: string; type: 'text' | 'number' | 'link'; value: any }>) {
+    try {
+      return JSON.stringify(Array.isArray(value) ? value : []);
+    } catch {
+      return '[]';
+    }
+  },
+  from(value?: string) {
+    try {
+      const parsed = JSON.parse(value || '[]');
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  },
+};
+
 export enum ClientStatus {
   ACTIVE = 'ACTIVE',
   INACTIVE = 'INACTIVE',
@@ -99,7 +117,13 @@ export class Client {
 
   @Column({ type: 'boolean', default: false })
   lead: boolean;
+
   
-  @Column({ type: 'jsonb', nullable: false, default: () => `'[]'::jsonb` })
+  @Column({
+    type: 'text',              // ✅ válido en SQLite y Postgres
+    nullable: true,
+    default: '[]',             // por si la DB crea la fila sin valor
+    transformer: jsonArrayTransformer,
+  })
   customFields: Array<{ key: string; type: 'text'|'number'|'link'; value: any }>;
 }

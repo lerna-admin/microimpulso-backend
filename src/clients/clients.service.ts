@@ -710,7 +710,7 @@ export class ClientsService {
     const saved = await this.clientRepository.save(client);
 
     // Dispara WhatsApp (no bloqueante)
-    this.sendOnboardingIfConfigured(saved).catch(() => {});
+    //this.sendOnboardingIfConfigured(saved).catch(() => {});
 
     return saved;
   }

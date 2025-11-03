@@ -165,7 +165,11 @@ export class LoanRequestService {
     
     // ── 4) Completar y persistir ──────────────────────────────────────────────
     data.client = client; // asegurar referencia
-    data.mode = (data.amount ? data.amount / 1000 : 100).toString().concat('X1');
+data.mode = (
+  data.amount
+    ? (data.amount < 1000 ? data.amount : data.amount / 1000)
+    : 100
+).toString().concat('X1');
     
     const loanRequest = this.loanRequestRepository.create(data);
     return await this.loanRequestRepository.save(loanRequest);

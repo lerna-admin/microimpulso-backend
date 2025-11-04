@@ -140,23 +140,36 @@ async exportDailyTrace(
   @Query('userId', ParseIntPipe) userId: number,
   @Query('date') date: string,
   @Query('format') format: 'excel' | 'pdf' = 'excel',
-  @Res() res: Response,                 // ← MOVER AQUÍ
-  @Query('filename') filename?: string, // ← OPCIONAL al final
+  @Res() res: Response,
+  @Query('filename') filename?: string,
+  @Query('detailed') detailed?: string,   // 👈 NUEVO
 ) {
   if (!date) throw new BadRequestException('date (YYYY-MM-DD) es requerido');
 
   const baseName = (filename?.trim() || `traza_${userId}_${date}`).replace(/[^a-zA-Z0-9_-]/g, '');
 
+  // si pide PDF
   if (format === 'pdf') {
+    // si pide detallado, llamamos al PDF detallado
+    if (detailed === 'true') {
+      const pdf = await this.cashService.exportDailyTraceToPDF(userId, date, { detailed: true });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${baseName}.pdf"`);
+      return res.end(pdf);
+    }
+
+    // si NO pide detallado, el que ya tenías
     const pdf = await this.cashService.exportDailyTraceToPDF(userId, date);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${baseName}.pdf"`);
     return res.end(pdf);
   }
 
+  // excel igual que antes
   const xlsx = await this.cashService.exportDailyTraceToExcel(userId, date);
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="${baseName}.xlsx"`);
   return res.end(xlsx);
 }
+
 }

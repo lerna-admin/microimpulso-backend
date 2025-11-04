@@ -18,6 +18,9 @@ const normIso2 = (v?: string) => (v ? v.trim().toUpperCase() : undefined);
 const normPhoneCode = (v?: string) =>
   v ? v.toString().trim().replace(/[^\d]/g, '') || undefined : undefined;
 
+// como no podemos importar del front, lo declaramos aquí:
+const AGENT_ROLE = 'AGENT';
+
 @Injectable()
 export class BranchService {
   constructor(
@@ -27,6 +30,17 @@ export class BranchService {
 
   // Mapea la entidad a un objeto plano serializable
   private mapBranch(b: Branch) {
+    // nos aseguramos de tener agentes y de filtrar por rol
+    const agents = Array.isArray(b.agents)
+      ? b.agents
+          .filter((a) => a.role === AGENT_ROLE)
+          .map((a) => ({
+            id: a.id,
+            name: a.name,
+            email: a.email,
+          }))
+      : [];
+
     return {
       id: b.id,
       name: b.name,
@@ -36,7 +50,8 @@ export class BranchService {
       administrator: b.administrator
         ? { id: b.administrator.id, name: b.administrator.name, email: b.administrator.email }
         : null,
-      agentsCount: Array.isArray(b.agents) ? b.agents.length : undefined,
+      agents,                      // 👈 ya los exponemos
+      agentsCount: agents.length,  // 👈 mantiene tu conteo
       createdAt: b.createdAt,
       updatedAt: b.updatedAt,
     };

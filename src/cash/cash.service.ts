@@ -20,7 +20,7 @@ import { DataSource } from 'typeorm';
 import * as ExcelJS from 'exceljs';
 import PDFDocument = require('pdfkit');
 
-/** Devuelve el rango [start, end] del día local Bogotá para 'YYYY-MM-DD' o Date */
+/** Local helpers */
 function getBogotaDayRange(raw: string | Date) {
   let y: number, m: number, d: number;
   if (typeof raw === 'string') {
@@ -32,12 +32,11 @@ function getBogotaDayRange(raw: string | Date) {
     m = loc.getMonth() + 1;
     d = loc.getDate();
   }
-  const start = new Date(y, (m - 1), d, 0, 0, 0, 0);   // 00:00 hora local del servidor
+  const start = new Date(y, (m - 1), d, 0, 0, 0, 0);
   const end   = new Date(y, (m - 1), d, 23, 59, 59, 999);
   return { start, end };
 }
 
-/** YYYY-MM-DD en local (sin UTC) */
 function formatYMDLocal(date: Date) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -45,7 +44,6 @@ function formatYMDLocal(date: Date) {
   return `${y}-${m}-${d}`;
 }
 
-/** “YYYY-MM-DD HH:mm:ss” en local (útil para mostrar createdAt) */
 function formatLocalDateTime(date: Date) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -58,13 +56,10 @@ function formatLocalDateTime(date: Date) {
 
 function getLocalDayRange(rawDate: string | Date): { start: Date; end: Date } {
   const date = typeof rawDate === 'string' ? new Date(rawDate) : rawDate;
-
   const start = new Date(date);
   start.setHours(0, 0, 0, 0);
-
   const end = new Date(date);
   end.setHours(23, 59, 59, 999);
-
   return { start, end };
 }
 
@@ -82,6 +77,10 @@ export class CashService {
     private readonly dataSource: DataSource,
   ) {}
 
+  /**
+   * Registers a manual cash movement.
+   * If `userId` is provided by controller, we persist it into `adminId` for audit purposes.
+   */
   async registerMovement(data: any): Promise<CashMovement[]> {
     // Prevent array input
     if (Array.isArray(data)) {
@@ -93,11 +92,12 @@ export class CashService {
       amount,
       category,
       reference,
-      adminId,
+      adminId,     // legacy / optional
       branchId,
       transactionId,
       origenId,
       destinoId,
+      userId,      // <-- performer user id sent by controller
     } = data;
 
     // Validate typeMovement
@@ -106,7 +106,7 @@ export class CashService {
     }
 
     if (!['ENTRADA', 'SALIDA', 'TRANSFERENCIA'].includes(typeMovement)) {
-      throw new BadRequestException('typeMovement must be "ENTRADA", "SALIDA" o "TRANSFERENCIA"');
+      throw new BadRequestException('typeMovement must be "ENTRADA", "SALIDA" or "TRANSFERENCIA"');
     }
 
     // Validate amount
@@ -119,13 +119,26 @@ export class CashService {
       throw new BadRequestException('category must be a non-empty string');
     }
 
-    // Transferencia: requiere origen y destino
+    // Validate userId (optional but if present must be number)
+    let performerId: number | undefined = undefined;
+    if (userId !== undefined && userId !== null) {
+      if (typeof userId !== 'number' || isNaN(userId) || userId <= 0) {
+        throw new BadRequestException('userId must be a valid positive number if provided');
+      }
+      performerId = userId;
+    } else if (adminId !== undefined && adminId !== null) {
+      // keep backward compatibility
+      if (typeof adminId === 'number' && !isNaN(adminId) && adminId > 0) {
+        performerId = adminId;
+      }
+    }
+
+    // TRANSFER: origin -> destination
     if (typeMovement === 'TRANSFERENCIA') {
       if (!origenId || !destinoId) {
-        throw new BadRequestException('origenId y destinoId son requeridos para transferencias');
+        throw new BadRequestException('origenId and destinoId are required for TRANSFERENCIA');
       }
 
-      // Movimiento de salida (origen -> destino)
       const salida: Partial<CashMovement> = {
         type: 'SALIDA' as CashMovementType,
         amount,
@@ -134,6 +147,7 @@ export class CashService {
         branchId,
         origenId,
         destinoId,
+        adminId: performerId ?? undefined, // who executed this manual movement
         transaction: transactionId ? ({ id: transactionId } as any) : undefined,
       };
 
@@ -141,7 +155,7 @@ export class CashService {
       return [salidaMov];
     }
 
-    // Movimiento normal
+    // Regular movement (ENTRADA / SALIDA)
     const partialMovement: Partial<CashMovement> = {
       type: typeMovement as CashMovementType,
       amount,
@@ -150,6 +164,7 @@ export class CashService {
       branchId,
       origenId,
       destinoId,
+      adminId: performerId ?? undefined, // who executed this manual movement
       transaction: transactionId ? ({ id: transactionId } as any) : undefined,
     };
 
@@ -157,6 +172,7 @@ export class CashService {
     return [await this.cashRepo.save(movement)];
   }
 
+  /** Paginated movement list with optional search */
   async getMovements(
     branchId: number,
     limit = 10,
@@ -185,7 +201,7 @@ export class CashService {
 
     const [rows, total] = await qb.getManyAndCount();
 
-    // 1) Reunir todos los IDs de origen/destino (únicos)
+    // batch load users for origen/destino
     const ids = Array.from(
       new Set(
         rows
@@ -194,7 +210,6 @@ export class CashService {
       ),
     );
 
-    // 2) Cargar usuarios en una sola consulta
     const usersById = new Map<number, { id: number; name: string; email?: string; role?: string }>();
     if (ids.length) {
       const users = await this.userRepository.find({
@@ -221,7 +236,8 @@ export class CashService {
   }
 
   /**
-   * Returns the cash/KPI dashboard for a branch on a given date.
+   * Dashboard totals by branch and date.
+   * (Optionally we can exclude admin-made disbursements from KPIs. Kept excluded for coherence.)
    */
   async getDailyTotals(branchId: number, rawDate: Date | string) {
     let start: Date;
@@ -232,7 +248,6 @@ export class CashService {
       start = new Date(rawDate);
       start.setHours(0, 0, 0, 0);
     }
-
     const end = new Date(start);
     end.setHours(23, 59, 59, 999);
 
@@ -276,11 +291,13 @@ export class CashService {
     const totalDesembolsos = byCategory('PRESTAMO');
     const totalGastos = byCategory('GASTO_PROVEEDOR');
 
+    // Optional coherence: exclude admin-made disbursements from branch KPIs
     const disbursements = await this.loanTransactionRepo.find({
       where: {
         Transactiontype: TransactionType.DISBURSEMENT,
         date: Between(start, end),
         loanRequest: { agent: { branch: { id: branchId } } },
+        isAdminTransaction: false as any,
       },
       relations: { loanRequest: { client: true, agent: { branch: true } } },
     });
@@ -289,43 +306,26 @@ export class CashService {
       where: {
         Transactiontype: TransactionType.PENALTY,
         date: Between(start, end),
-        loanRequest: {
-          agent: {
-            branch: {
-              id: branchId,
-            },
-          },
-        },
+        loanRequest: { agent: { branch: { id: branchId } } },
       },
-      relations: {
-        loanRequest: {
-          client: true,
-          agent: {
-            branch: true,
-          },
-        },
-      },
+      relations: { loanRequest: { client: true, agent: { branch: true } } },
     });
 
     const renewedByRequest = new Map<number, LoanRequest>();
     for (const pen of penalties) {
       const req = pen.loanRequest as LoanRequest;
-      if (!renewedByRequest.has(req.id)) {
-        renewedByRequest.set(req.id, req);
-      }
+      if (!renewedByRequest.has(req.id)) renewedByRequest.set(req.id, req);
     }
 
     const totalRenovados = [...renewedByRequest.values()].reduce(
       (sum, req) => sum + +(req.requestedAmount ?? req.amount ?? 0),
       0,
     );
-
     const countRenovados = renewedByRequest.size;
 
     const nuevosHoy = movements.filter(
       (m) => m.type === 'SALIDA' && m.category === 'PRESTAMO',
     );
-
     const totalNuevos = nuevosHoy.reduce((sum, m) => sum + +m.amount, 0);
     const countNuevos = nuevosHoy.length;
 
@@ -342,7 +342,8 @@ export class CashService {
   }
 
   /**
-   * tablero por usuario
+   * Dashboard tiles by user + date (agent view).
+   * Excludes admin-made disbursements to avoid charging the agent for admin actions.
    */
   async getDailyTotalsByUser(userId: number, rawDate: Date | string) {
     const user = await this.userRepository.findOne({
@@ -397,11 +398,13 @@ export class CashService {
     const totalDesembolsos = byCategory('PRESTAMO');
     const totalGastos = byCategory('GASTO_PROVEEDOR');
 
+    // Key: filter out admin-made disbursements from agent KPIs
     const disbursements = await this.loanTransactionRepo.find({
       where: {
         Transactiontype: TransactionType.DISBURSEMENT,
         date: Between(start, end),
         loanRequest: { agent: { branch: { id: branchId } } },
+        isAdminTransaction: false as any,
       },
       relations: { loanRequest: true },
     });
@@ -453,7 +456,9 @@ export class CashService {
   }
 
   /**
-   * Traza diaria por USUARIO (versión ajustada)
+   * Daily trace by USER (agent cash closing).
+   * - Excludes admin-made loan disbursements from agent balance and KPIs.
+   * - Uses `adminId` in manual movements to attribute performer when there is no loan/agent.
    */
   async getDailyTraceByUser(userId: number, rawDate: Date | string) {
     const C = CashMovementCategory;
@@ -496,11 +501,20 @@ export class CashService {
 
     const { start, end, startStr, endStr } = localDayRange(rawDate);
 
-    const ownerIdForNonTransfer = (m: CashMovement): number | null =>
-      (m as any)?.transaction?.loanRequest?.agent?.id ?? m.adminId ?? null;
+    // Attribution helpers
+    const ownerIdForNonTransfer = (m: CashMovement): number | null => {
+      const tx = (m as any)?.transaction as (LoanTransaction | undefined);
+      // If the linked loan transaction was performed by admin, do not attribute to agent
+      if (tx && (tx as any).isAdminTransaction === true) return null;
+
+      // Otherwise attribute to the loan's agent; fallback to performer adminId for manual movements
+      return tx?.loanRequest?.agent?.id ?? (m as any)?.adminId ?? null;
+    };
 
     const affectsUserForBalance = (m: CashMovement): boolean => {
+      // Transfers: belongs to 'origenId'
       if (m.category === C.TRANSFERENCIA) return m.origenId === userId;
+      // Non-transfers: attribute only if the "owner" matches the agent
       return ownerIdForNonTransfer(m) === userId;
     };
 
@@ -559,11 +573,13 @@ export class CashService {
 
     const toStatus = (lr?: LoanRequest) => String(lr?.status ?? '').trim().toLowerCase();
 
+    // Key: only count agent-made disbursements (exclude admin-made)
     const disbursalsToday = await this.loanTransactionRepo.find({
       where: {
         Transactiontype: Raw((alias) => `LOWER(${alias}) = 'disbursement'`),
         date: Raw((alias) => `${alias} BETWEEN :start AND :end`, { start: startStr, end: endStr }),
         loanRequest: { agent: { id: userId } },
+        isAdminTransaction: false as any,
       },
       relations: { loanRequest: { client: true } },
     });
@@ -590,7 +606,6 @@ export class CashService {
 
     const totalIngresosDia = ingresosNoTransfer + transferIn + cobros;
     const totalEgresosDia = transferOut + gastos + totalNuevos + totalRenovados;
-
     const totalFinal = baseAnterior + totalIngresosDia - totalEgresosDia;
 
     const todayAgentTxAll = todayAll.filter(
@@ -618,7 +633,7 @@ export class CashService {
           adminId: m.adminId ?? null,
           affectsBalance: affectsUserForBalance(m),
 
-          // para Excel
+          // excel helpers
           loanRequestId: lr?.id ?? null,
           clientName: client?.name ?? client?.fullName ?? null,
           clientDocument:
@@ -630,7 +645,7 @@ export class CashService {
         };
       });
 
-    // 11) Snapshot de cartera (a fin de día)
+    // Portfolio snapshot up to end of day
     const txs = await this.loanTransactionRepo.find({
       where: {
         date: Raw((alias) => `${alias} <= :end`, { end: endStr }),
@@ -691,17 +706,17 @@ export class CashService {
       const amt = +((tx as any).amount ?? 0);
 
       if (isDisb(tx.Transactiontype)) {
-        // nada, la base viene del loan
+        // base disbursed comes from the loan itself
       } else if (isPaymentLike(tx.Transactiontype)) {
         agg.repaid += amt;
         const d = (tx as any).date ? new Date((tx as any).date) : null;
         if (d && (!agg.lastPaymentAt || d > agg.lastPaymentAt)) agg.lastPaymentAt = d;
       } else if (isPenalty(tx.Transactiontype)) {
-        // si quisieras sumar penalidades, aquí
+        // penalties aggregation (optional)
       } else if (isFee(tx.Transactiontype)) {
-        // fees
+        // fees aggregation (optional)
       } else if (isDiscount(tx.Transactiontype)) {
-        // descuentos
+        // discounts aggregation (optional)
       }
     }
 
@@ -748,6 +763,7 @@ export class CashService {
         })),
     };
 
+    // If you also want to exclude admin-made payments from "valorCobradoDia", keep filter below.
     const paymentsToday = await this.loanTransactionRepo.find({
       where: {
         date: Raw((alias) => `${alias} BETWEEN :start AND :end`, {
@@ -755,11 +771,15 @@ export class CashService {
           end: endStr,
         }),
         loanRequest: { agent: { id: userId } },
+        isAdminTransaction: false as any, // exclude admin-made payments from agent KPI
       },
       relations: { loanRequest: true },
     });
     const valorCobradoDia = paymentsToday
-      .filter((t) => isPaymentLike(t.Transactiontype))
+      .filter((t) => {
+        const s = String(t.Transactiontype).toLowerCase();
+        return s === 'repayment' || s === 'payment';
+      })
       .reduce((s, t) => s + +((t as any).amount ?? 0), 0);
 
     return {
@@ -790,7 +810,7 @@ export class CashService {
   }
 
   /**
-   * Elimina un movimiento de caja
+   * Delete a cash movement (and cleanup related tx if orphan).
    */
   async deleteMovement(
     id: number,
@@ -887,7 +907,7 @@ export class CashService {
     wb.creator = 'CashService';
     wb.created = new Date();
 
-    // --- Resumen ---
+    // --- Summary ---
     const wsResumen = wb.addWorksheet('Resumen');
     wsResumen.columns = [
       { header: 'Campo', key: 'k', width: 32 },
@@ -938,7 +958,6 @@ export class CashService {
       { header: 'Descripción', key: 'description', width: 30 },
       { header: 'Origen', key: 'origen', width: 12 },
       { header: 'Destino', key: 'destino', width: 12 },
-      // nuevos:
       { header: 'Cliente', key: 'clientName', width: 25 },
       { header: 'Doc. cliente', key: 'clientDocument', width: 20 },
       { header: 'Solicitud', key: 'loanRequestId', width: 14 },
@@ -1013,7 +1032,7 @@ export class CashService {
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', reject);
 
-      // Título + resumen
+      // Title + resume
       doc.fontSize(16).text('Traza diaria por usuario', { align: 'center' });
       doc.moveDown(0.5);
       doc
@@ -1048,7 +1067,7 @@ export class CashService {
       ];
       resumen.forEach(([k, v]) => doc.fontSize(10).text(`${k}: ${v}`));
 
-      // Movimientos
+      // Movements
       doc.addPage();
       doc.fontSize(12).text('Movimientos del día');
       doc.moveDown(0.4);
@@ -1066,7 +1085,7 @@ export class CashService {
           ]);
         });
 
-      // Cartera (resumen)
+      // Portfolio (summary)
       doc.addPage();
       doc.fontSize(12).text('Cartera (resumen)');
       doc.moveDown(0.4);

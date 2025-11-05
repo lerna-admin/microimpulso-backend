@@ -42,4 +42,12 @@ date: Date;
 
   @Column({ type: 'int', nullable: true })
   daysLate?: number;
+
+    // si es true/1, esta transacción la hizo el admin y no debe cargarse al agente
+  @Column({ type: 'boolean', default: false })
+  isAdminTransaction: boolean;
+
+  // quién la hizo (id del usuario logueado)
+  @Column({ type: 'int', nullable: true })
+  createdByUserId?: number;
 }

@@ -74,6 +74,10 @@ export class CashService {
     private readonly loanTransactionRepo: Repository<LoanTransaction>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+
+    @InjectRepository(LoanRequest)
+    private readonly loanRequestRepo: Repository<LoanRequest>,
+
     private readonly dataSource: DataSource,
   ) {}
 

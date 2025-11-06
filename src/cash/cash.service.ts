@@ -406,10 +406,9 @@ async getDailyTotalsByUser(userId: number, rawDate: Date | string) {
   const totalGastos = byCategory('GASTO_PROVEEDOR');
 
   // -------- KPIs de préstamos (Nuevos / Renovados) --------
-  const isRenewedStatus = (st: any) => {
-    const s = String(st ?? '').toUpperCase();
-    return s === 'RENEWED' || s === String(LoanRequestStatus.RENEWED);
-  };
+  const statusLower = (v: any) => String(v ?? '').trim().toLowerCase();
+  const isRenewedStatus = (st: any) => statusLower(st) === 'renewed';
+  const isFundedStatus  = (st: any) => statusLower(st) === 'funded';
 
   let totalRenovados = 0;
   let countRenovados = 0;
@@ -417,24 +416,7 @@ async getDailyTotalsByUser(userId: number, rawDate: Date | string) {
   let countNuevos = 0;
 
   if (isAdminOrManager) {
-    // ADMIN/MANAGER: "Nuevos" = LoanRequests creados hoy en la sede (por createdAt), excluyendo renovados
-    const createdToday = await this.loanRequestRepo.find({
-      where: {
-        agent: { branch: { id: branchId } },
-        createdAt: Between(start, end),
-      },
-      relations: { agent: { branch: true } },
-    });
-
-    const nuevosToday = createdToday.filter((lr) => !isRenewedStatus(lr.status));
-    countNuevos = nuevosToday.length;
-    totalNuevos = nuevosToday.reduce((sum, lr: any) => {
-      const val = Number(lr.requestedAmount ?? lr.amount ?? 0);
-      return sum + (isFinite(val) ? val : 0);
-    }, 0);
-
-    // ADMIN/MANAGER: "Renovados" = desembolsos del día por sede (sin filtrar isAdminTransaction),
-    // clasificados por status del LoanRequest
+    // Traemos TODAS las transacciones de desembolso del día en la sede
     const disbursementsAll = await this.loanTransactionRepo.find({
       where: {
         Transactiontype: TransactionType.DISBURSEMENT,
@@ -444,29 +426,47 @@ async getDailyTotalsByUser(userId: number, rawDate: Date | string) {
       relations: { loanRequest: true },
     });
 
-    // Agrupar monto desembolsado por LoanRequest en el día
-    const perLoanSum = new Map<number, number>();
+    // Agrupamos montos por LoanRequestId (para renovados sumaremos monto desembolsado;
+    // para nuevos usaremos requestedAmount/amount del loan, no el monto del tx).
+    const perLoanDisbursed = new Map<number, number>();
     for (const tx of disbursementsAll) {
       const lr = tx.loanRequest as LoanRequest | undefined;
       if (!lr) continue;
       const lrId = Number(lr.id);
       const amt = Number((tx as any).amount ?? 0);
-      perLoanSum.set(lrId, (perLoanSum.get(lrId) ?? 0) + (isFinite(amt) ? amt : 0));
+      perLoanDisbursed.set(lrId, (perLoanDisbursed.get(lrId) ?? 0) + (isFinite(amt) ? amt : 0));
     }
 
-    // Clasificar renovados vs nuevos solo para RENOVADOS;
-    // “Nuevos” ya lo calculamos por createdAt (no por desembolso) para admin/manager.
-    for (const [lrId, amt] of perLoanSum.entries()) {
+    // Clasificamos loans con desembolso hoy:
+    const seenForNew = new Set<number>();
+    const seenForRenew = new Set<number>();
+
+    for (const [lrId, sumTx] of perLoanDisbursed.entries()) {
       const tx = disbursementsAll.find((t) => Number((t.loanRequest as any)?.id) === lrId)!;
       const lr = tx.loanRequest as LoanRequest;
+
       if (isRenewedStatus(lr.status)) {
-        totalRenovados += amt;
-        countRenovados += 1;
+        // RENOVADOS: sumamos el monto desembolsado hoy
+        if (!seenForRenew.has(lrId)) {
+          seenForRenew.add(lrId);
+          countRenovados += 1;
+        }
+        totalRenovados += sumTx;
+      } else if (isFundedStatus(lr.status)) {
+        // NUEVOS (según lo que pediste): loans en FUNDED que tuvieron desembolso hoy
+        // Suma por LOAN = requestedAmount (fallback a amount), no el monto del tx
+        if (!seenForNew.has(lrId)) {
+          seenForNew.add(lrId);
+          countNuevos += 1;
+          const v = Number((lr as any).requestedAmount ?? (lr as any).amount ?? 0);
+          totalNuevos += isFinite(v) ? v : 0;
+        }
       }
+      // Rechazados y otros status no se cuentan
     }
   } else {
-    // AGENT: mantener la lógica original basada en desembolsos del día del agente,
-    // excluyendo transacciones marcadas como admin.
+    // AGENT: mantiene lógica original basada en desembolsos del día del agente,
+    // excluyendo transacciones hechas por admin
     const disbursements = await this.loanTransactionRepo.find({
       where: {
         Transactiontype: TransactionType.DISBURSEMENT,
@@ -492,7 +492,8 @@ async getDailyTotalsByUser(userId: number, rawDate: Date | string) {
       if (isRenewedStatus(lr.status)) {
         totalRenovados += amt;
         countRenovados += 1;
-      } else {
+      } else if (isFundedStatus(lr.status)) {
+        // Para agente, “nuevos” se basan en desembolsos suyos del día (suma de tx)
         totalNuevos += amt;
         countNuevos += 1;
       }
@@ -512,6 +513,7 @@ async getDailyTotalsByUser(userId: number, rawDate: Date | string) {
 
   return role === 'AGENT' ? tiles.filter((t) => !t.hideForAgent) : tiles;
 }
+
 
   /**
    * Daily trace by USER (agent cash closing).

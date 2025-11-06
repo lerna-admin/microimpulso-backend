@@ -240,13 +240,12 @@ export class ClientsService {
         continue;
 
       // Números por préstamo
-      const amountBorrowed = Number(loan.requestedAmount || 0);
+      const amountBorrowed = Number(loan.amount || 0);
       const totalRepayment = (loan.transactions || [])
         .filter((t) => lower(t.Transactiontype) === 'repayment')
         .reduce((s, t) => s + Number(t.amount), 0);
       const remainingAmount = amountBorrowed - totalRepayment;
       const daysLate = daysLateOf(loan.endDateAt);
-
       // Resumen global (solo préstamos activos)
       if (derivedStatus === 'active') {
         totalActiveAmountBorrowed += amountBorrowed;
@@ -335,7 +334,6 @@ export class ClientsService {
     const totalItems = items.length;
     const startIndex = (page - 1) * limit;
     const data = items.slice(startIndex, startIndex + limit);
-
     return {
       page,
       limit,

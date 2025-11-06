@@ -370,7 +370,7 @@ async getDailyTotalsByUser(userId: number, rawDate: Date | string) {
   const end = new Date(start);
   end.setHours(23, 59, 59, 999);
 
-  // Movimientos de caja para caja anterior, entradas/salidas, etc.
+  // ---------- Caja (branch) ----------
   const [today, history] = await Promise.all([
     this.cashRepo.find({
       where: { branch: { id: branchId }, createdAt: Between(start, end) },
@@ -405,10 +405,8 @@ async getDailyTotalsByUser(userId: number, rawDate: Date | string) {
   const totalDesembolsos = byCategory('PRESTAMO');
   const totalGastos = byCategory('GASTO_PROVEEDOR');
 
-  // -------- KPIs de préstamos (Nuevos / Renovados) --------
+  // ---------- KPIs (regla nueva) ----------
   const statusLower = (v: any) => String(v ?? '').trim().toLowerCase();
-  const isRenewedStatus = (st: any) => statusLower(st) === 'renewed';
-  const isFundedStatus  = (st: any) => statusLower(st) === 'funded';
 
   let totalRenovados = 0;
   let countRenovados = 0;
@@ -416,7 +414,7 @@ async getDailyTotalsByUser(userId: number, rawDate: Date | string) {
   let countNuevos = 0;
 
   if (isAdminOrManager) {
-    // Traemos TODAS las transacciones de desembolso del día en la sede
+    // ADMIN/MANAGER: incluir TODOS los desembolsos del día en la sede
     const disbursementsAll = await this.loanTransactionRepo.find({
       where: {
         Transactiontype: TransactionType.DISBURSEMENT,
@@ -426,76 +424,79 @@ async getDailyTotalsByUser(userId: number, rawDate: Date | string) {
       relations: { loanRequest: true },
     });
 
-    // Agrupamos montos por LoanRequestId (para renovados sumaremos monto desembolsado;
-    // para nuevos usaremos requestedAmount/amount del loan, no el monto del tx).
-    const perLoanDisbursed = new Map<number, number>();
+    // Agrupar monto de transacciones por loan para el día
+    const perLoanSum = new Map<number, number>();
+    const perLoanStatus = new Map<number, string>();
+
     for (const tx of disbursementsAll) {
       const lr = tx.loanRequest as LoanRequest | undefined;
       if (!lr) continue;
       const lrId = Number(lr.id);
       const amt = Number((tx as any).amount ?? 0);
-      perLoanDisbursed.set(lrId, (perLoanDisbursed.get(lrId) ?? 0) + (isFinite(amt) ? amt : 0));
+      perLoanSum.set(lrId, (perLoanSum.get(lrId) ?? 0) + (isFinite(amt) ? amt : 0));
+      perLoanStatus.set(lrId, statusLower((lr as any).status));
     }
 
-    // Clasificamos loans con desembolso hoy:
-    const seenForNew = new Set<number>();
-    const seenForRenew = new Set<number>();
+    const seenRenew = new Set<number>();
+    const seenNew = new Set<number>();
 
-    for (const [lrId, sumTx] of perLoanDisbursed.entries()) {
-      const tx = disbursementsAll.find((t) => Number((t.loanRequest as any)?.id) === lrId)!;
-      const lr = tx.loanRequest as LoanRequest;
-
-      if (isRenewedStatus(lr.status)) {
-        // RENOVADOS: sumamos el monto desembolsado hoy
-        if (!seenForRenew.has(lrId)) {
-          seenForRenew.add(lrId);
+    for (const [lrId, sumAmt] of perLoanSum.entries()) {
+      const st = perLoanStatus.get(lrId) || '';
+      if (st === 'renewed') {
+        if (!seenRenew.has(lrId)) {
+          seenRenew.add(lrId);
           countRenovados += 1;
         }
-        totalRenovados += sumTx;
-      } else if (isFundedStatus(lr.status)) {
-        // NUEVOS (según lo que pediste): loans en FUNDED que tuvieron desembolso hoy
-        // Suma por LOAN = requestedAmount (fallback a amount), no el monto del tx
-        if (!seenForNew.has(lrId)) {
-          seenForNew.add(lrId);
+        totalRenovados += sumAmt; // suma de montos de transacciones
+      } else {
+        if (!seenNew.has(lrId)) {
+          seenNew.add(lrId);
           countNuevos += 1;
-          const v = Number((lr as any).requestedAmount ?? (lr as any).amount ?? 0);
-          totalNuevos += isFinite(v) ? v : 0;
         }
+        totalNuevos += sumAmt; // suma de montos de transacciones
       }
-      // Rechazados y otros status no se cuentan
     }
   } else {
-    // AGENT: mantiene lógica original basada en desembolsos del día del agente,
-    // excluyendo transacciones hechas por admin
+    // AGENT: excluir transacciones realizadas por admin
     const disbursements = await this.loanTransactionRepo.find({
       where: {
         Transactiontype: TransactionType.DISBURSEMENT,
         date: Between(start, end),
-        loanRequest: { agent: { branch: { id: branchId } } },
+        loanRequest: { agent: { id: userId } },
         isAdminTransaction: false as any,
       },
       relations: { loanRequest: true },
     });
 
     const perLoanSum = new Map<number, number>();
+    const perLoanStatus = new Map<number, string>();
+
     for (const tx of disbursements) {
       const lr = tx.loanRequest as LoanRequest | undefined;
       if (!lr) continue;
       const lrId = Number(lr.id);
       const amt = Number((tx as any).amount ?? 0);
       perLoanSum.set(lrId, (perLoanSum.get(lrId) ?? 0) + (isFinite(amt) ? amt : 0));
+      perLoanStatus.set(lrId, statusLower((lr as any).status));
     }
 
-    for (const [lrId, amt] of perLoanSum.entries()) {
-      const tx = disbursements.find((t) => Number((t.loanRequest as any)?.id) === lrId)!;
-      const lr = tx.loanRequest as LoanRequest;
-      if (isRenewedStatus(lr.status)) {
-        totalRenovados += amt;
-        countRenovados += 1;
-      } else if (isFundedStatus(lr.status)) {
-        // Para agente, “nuevos” se basan en desembolsos suyos del día (suma de tx)
-        totalNuevos += amt;
-        countNuevos += 1;
+    const seenRenew = new Set<number>();
+    const seenNew = new Set<number>();
+
+    for (const [lrId, sumAmt] of perLoanSum.entries()) {
+      const st = perLoanStatus.get(lrId) || '';
+      if (st === 'renewed') {
+        if (!seenRenew.has(lrId)) {
+          seenRenew.add(lrId);
+          countRenovados += 1;
+        }
+        totalRenovados += sumAmt;
+      } else {
+        if (!seenNew.has(lrId)) {
+          seenNew.add(lrId);
+          countNuevos += 1;
+        }
+        totalNuevos += sumAmt;
       }
     }
   }

@@ -345,60 +345,124 @@ export class CashService {
    * Dashboard tiles by user + date (agent view).
    * Excludes admin-made disbursements to avoid charging the agent for admin actions.
    */
-  async getDailyTotalsByUser(userId: number, rawDate: Date | string) {
-    const user = await this.userRepository.findOne({
-      where: { id: userId },
-      relations: { branch: true },
+async getDailyTotalsByUser(userId: number, rawDate: Date | string) {
+  const user = await this.userRepository.findOne({
+    where: { id: userId },
+    relations: { branch: true },
+  });
+  if (!user?.branch?.id) throw new BadRequestException('User has no branch');
+
+  const branchId = user.branch.id;
+  const role = (user.role ?? '').toUpperCase();
+  const isAdminOrManager = role === 'ADMIN' || role === 'MANAGER';
+
+  const start =
+    typeof rawDate === 'string'
+      ? (() => {
+          const [y, m, d] = rawDate.split('-').map(Number);
+          return new Date(y, m - 1, d, 0, 0, 0, 0);
+        })()
+      : new Date(rawDate.setHours(0, 0, 0, 0));
+  const end = new Date(start);
+  end.setHours(23, 59, 59, 999);
+
+  // Movimientos de caja para caja anterior, entradas/salidas, etc.
+  const [today, history] = await Promise.all([
+    this.cashRepo.find({
+      where: { branch: { id: branchId }, createdAt: Between(start, end) },
+    }),
+    this.cashRepo.find({
+      where: { branch: { id: branchId }, createdAt: LessThan(start) },
+    }),
+  ]);
+
+  const opening = history.reduce(
+    (tot, m) => tot + (m.type === 'ENTRADA' ? +m.amount : -+m.amount),
+    0,
+  );
+
+  const totalEntradas = today
+    .filter((m) => m.type === 'ENTRADA')
+    .reduce((s, m) => s + +m.amount, 0);
+
+  const totalSalidas = today
+    .filter((m) => m.type === 'SALIDA')
+    .reduce((s, m) => s + +m.amount, 0);
+
+  const realCash = opening + totalEntradas - totalSalidas;
+
+  const byCategory = (cat: string) =>
+    today
+      .filter((m) => m.category === cat)
+      .reduce((s, m) => s + +m.amount, 0);
+
+  const entraCaja = byCategory('ENTRADA_GERENCIA');
+  const totalCobros = byCategory('COBRO_CLIENTE');
+  const totalDesembolsos = byCategory('PRESTAMO');
+  const totalGastos = byCategory('GASTO_PROVEEDOR');
+
+  // -------- KPIs de préstamos (Nuevos / Renovados) --------
+  const isRenewedStatus = (st: any) => {
+    const s = String(st ?? '').toUpperCase();
+    return s === 'RENEWED' || s === String(LoanRequestStatus.RENEWED);
+  };
+
+  let totalRenovados = 0;
+  let countRenovados = 0;
+  let totalNuevos = 0;
+  let countNuevos = 0;
+
+  if (isAdminOrManager) {
+    // ADMIN/MANAGER: "Nuevos" = LoanRequests creados hoy en la sede (por createdAt), excluyendo renovados
+    const createdToday = await this.loanRequestRepo.find({
+      where: {
+        agent: { branch: { id: branchId } },
+        createdAt: Between(start, end),
+      },
+      relations: { agent: { branch: true } },
     });
-    if (!user?.branch?.id) throw new BadRequestException('User has no branch');
-    const branchId = user.branch.id;
-    const role = user.role;
 
-    const start =
-      typeof rawDate === 'string'
-        ? (() => {
-            const [y, m, d] = rawDate.split('-').map(Number);
-            return new Date(y, m - 1, d, 0, 0, 0, 0);
-          })()
-        : new Date(rawDate.setHours(0, 0, 0, 0));
-    const end = new Date(start);
-    end.setHours(23, 59, 59, 999);
+    const nuevosToday = createdToday.filter((lr) => !isRenewedStatus(lr.status));
+    countNuevos = nuevosToday.length;
+    totalNuevos = nuevosToday.reduce((sum, lr: any) => {
+      const val = Number(lr.requestedAmount ?? lr.amount ?? 0);
+      return sum + (isFinite(val) ? val : 0);
+    }, 0);
 
-    const [today, history] = await Promise.all([
-      this.cashRepo.find({
-        where: { branch: { id: branchId }, createdAt: Between(start, end) },
-      }),
-      this.cashRepo.find({
-        where: { branch: { id: branchId }, createdAt: LessThan(start) },
-      }),
-    ]);
+    // ADMIN/MANAGER: "Renovados" = desembolsos del día por sede (sin filtrar isAdminTransaction),
+    // clasificados por status del LoanRequest
+    const disbursementsAll = await this.loanTransactionRepo.find({
+      where: {
+        Transactiontype: TransactionType.DISBURSEMENT,
+        date: Between(start, end),
+        loanRequest: { agent: { branch: { id: branchId } } },
+      },
+      relations: { loanRequest: true },
+    });
 
-    const opening = history.reduce(
-      (tot, m) => tot + (m.type === 'ENTRADA' ? +m.amount : -+m.amount),
-      0,
-    );
+    // Agrupar monto desembolsado por LoanRequest en el día
+    const perLoanSum = new Map<number, number>();
+    for (const tx of disbursementsAll) {
+      const lr = tx.loanRequest as LoanRequest | undefined;
+      if (!lr) continue;
+      const lrId = Number(lr.id);
+      const amt = Number((tx as any).amount ?? 0);
+      perLoanSum.set(lrId, (perLoanSum.get(lrId) ?? 0) + (isFinite(amt) ? amt : 0));
+    }
 
-    const totalEntradas = today
-      .filter((m) => m.type === 'ENTRADA')
-      .reduce((s, m) => s + +m.amount, 0);
-
-    const totalSalidas = today
-      .filter((m) => m.type === 'SALIDA')
-      .reduce((s, m) => s + +m.amount, 0);
-
-    const realCash = opening + totalEntradas - totalSalidas;
-
-    const byCategory = (cat: string) =>
-      today
-        .filter((m) => m.category === cat)
-        .reduce((s, m) => s + +m.amount, 0);
-
-    const entraCaja = byCategory('ENTRADA_GERENCIA');
-    const totalCobros = byCategory('COBRO_CLIENTE');
-    const totalDesembolsos = byCategory('PRESTAMO');
-    const totalGastos = byCategory('GASTO_PROVEEDOR');
-
-    // Key: filter out admin-made disbursements from agent KPIs
+    // Clasificar renovados vs nuevos solo para RENOVADOS;
+    // “Nuevos” ya lo calculamos por createdAt (no por desembolso) para admin/manager.
+    for (const [lrId, amt] of perLoanSum.entries()) {
+      const tx = disbursementsAll.find((t) => Number((t.loanRequest as any)?.id) === lrId)!;
+      const lr = tx.loanRequest as LoanRequest;
+      if (isRenewedStatus(lr.status)) {
+        totalRenovados += amt;
+        countRenovados += 1;
+      }
+    }
+  } else {
+    // AGENT: mantener la lógica original basada en desembolsos del día del agente,
+    // excluyendo transacciones marcadas como admin.
     const disbursements = await this.loanTransactionRepo.find({
       where: {
         Transactiontype: TransactionType.DISBURSEMENT,
@@ -409,29 +473,18 @@ export class CashService {
       relations: { loanRequest: true },
     });
 
-    const isRenewedStatus = (st: any) => {
-      const s = String(st ?? '').toUpperCase();
-      return s === 'RENEWED' || s === String(LoanRequestStatus.RENEWED);
-    };
-
-    let totalRenovados = 0;
-    let countRenovados = 0;
-    let totalNuevos = 0;
-    let countNuevos = 0;
-
     const perLoanSum = new Map<number, number>();
     for (const tx of disbursements) {
       const lr = tx.loanRequest as LoanRequest | undefined;
       if (!lr) continue;
       const lrId = Number(lr.id);
       const amt = Number((tx as any).amount ?? 0);
-      perLoanSum.set(lrId, (perLoanSum.get(lrId) ?? 0) + amt);
+      perLoanSum.set(lrId, (perLoanSum.get(lrId) ?? 0) + (isFinite(amt) ? amt : 0));
     }
 
     for (const [lrId, amt] of perLoanSum.entries()) {
       const tx = disbursements.find((t) => Number((t.loanRequest as any)?.id) === lrId)!;
       const lr = tx.loanRequest as LoanRequest;
-
       if (isRenewedStatus(lr.status)) {
         totalRenovados += amt;
         countRenovados += 1;
@@ -440,20 +493,21 @@ export class CashService {
         countNuevos += 1;
       }
     }
-
-    const tiles = [
-      { label: 'Caja anterior', value: opening },
-      { label: 'Entra caja', value: entraCaja, trend: 'increase' },
-      { label: 'Cobro', value: totalCobros, trend: 'increase' },
-      { label: 'Préstamos', value: totalDesembolsos, trend: 'decrease' },
-      { label: 'Gastos', value: totalGastos, trend: 'decrease', hideForAgent: true },
-      { label: 'Caja real', value: realCash },
-      { label: 'Renovados', value: totalRenovados, trend: 'increase', amount: countRenovados },
-      { label: 'Nuevos', value: totalNuevos, trend: 'increase', amount: countNuevos },
-    ];
-
-    return role === 'AGENT' ? tiles.filter((t) => !t.hideForAgent) : tiles;
   }
+
+  const tiles = [
+    { label: 'Caja anterior', value: opening },
+    { label: 'Entra caja', value: entraCaja, trend: 'increase' },
+    { label: 'Cobro', value: totalCobros, trend: 'increase' },
+    { label: 'Préstamos', value: totalDesembolsos, trend: 'decrease' },
+    { label: 'Gastos', value: totalGastos, trend: 'decrease', hideForAgent: true },
+    { label: 'Caja real', value: realCash },
+    { label: 'Renovados', value: totalRenovados, trend: 'increase', amount: countRenovados },
+    { label: 'Nuevos', value: totalNuevos, trend: 'increase', amount: countNuevos },
+  ];
+
+  return role === 'AGENT' ? tiles.filter((t) => !t.hideForAgent) : tiles;
+}
 
   /**
    * Daily trace by USER (agent cash closing).

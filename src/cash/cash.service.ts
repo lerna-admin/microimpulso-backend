@@ -340,8 +340,8 @@ export class CashService {
       { label: 'Préstamos', value: totalDesembolsos, trend: 'decrease' },
       { label: 'Gastos', value: totalGastos, trend: 'decrease' },
       { label: 'Caja real', value: cajaReal, trend: '' },
-      { label: 'Renovados', value: totalRenovados, trend: 'increase', amount: countRenovados },
-      { label: 'Nuevos', value: totalNuevos, trend: 'increase', amount: countNuevos },
+      { label: 'Renovados', value: totalRenovados, trend: 'decrease', amount: countRenovados },
+      { label: 'Nuevos', value: totalNuevos, trend: 'decrease', amount: countNuevos },
     ];
   }
   
@@ -505,11 +505,11 @@ export class CashService {
       { label: 'Caja anterior', value: opening },
       { label: 'Entra caja', value: entraCaja, trend: 'increase' },
       { label: 'Cobro', value: totalCobros, trend: 'increase' },
-      { label: 'Préstamos', value: totalDesembolsos, trend: 'decrease' },
+      { label: 'Préstamos', value: totalDesembolsos + totalRenovados, trend: 'decrease', amount : countNuevos + countRenovados },
       { label: 'Gastos', value: totalGastos, trend: 'decrease', hideForAgent: true },
       { label: 'Caja real', value: realCash },
-      { label: 'Renovados', value: totalRenovados, trend: 'increase', amount: countRenovados },
-      { label: 'Nuevos', value: totalNuevos, trend: 'increase', amount: countNuevos },
+      { label: 'Renovados', value: totalRenovados, trend: 'decrease', amount: countRenovados },
+      { label: 'Nuevos', value: totalNuevos, trend: 'decrease', amount: countNuevos },
     ];
     
     return role === 'AGENT' ? tiles.filter((t) => !t.hideForAgent) : tiles;

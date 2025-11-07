@@ -1421,14 +1421,12 @@ export class CashService {
       { header: 'Métrica', key: 'label', width: 28 },
       { header: 'Valor', key: 'value', width: 18 },
       { header: 'Cantidad', key: 'amount', width: 12 },
-      { header: 'Tendencia', key: 'trend', width: 12 },
     ];
     for (const t of tiles) {
       wsKPI.addRow({
         label: t.label,
         value: t.value ?? 0,
         amount: t.amount ?? '',
-        trend: t.trend ?? '',
       });
     }
     

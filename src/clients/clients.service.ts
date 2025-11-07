@@ -173,6 +173,8 @@ async findAll(
     branch?: number;
   },
 ): Promise<any> {
+
+  console.log("AGENTE:", filters?.agent);
   // ---------- Load loans ----------
   const loans = await this.loanRequestRepository.find({
     relations: { client: true, transactions: true, agent: true },
@@ -267,6 +269,7 @@ async findAll(
         else if (daysLate > 15) mora15++;
       }
     }
+
 
     items.push({
       client, // includes customFields implicitly if defined on entity

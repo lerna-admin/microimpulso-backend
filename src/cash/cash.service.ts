@@ -1481,15 +1481,18 @@ export class CashService {
       { header: 'Días mora', key: 'diasMora', width: 10 },
     ];
     
-    const fmtDT = (d: Date | null) =>
-      d
-    ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
-      d.getDate(),
-    ).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(
-      d.getMinutes(),
-    ).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
-    : '';
-    
+ const fmtDT = (d: Date | string | null | undefined): string => {
+  if (!d) return '';
+  const x = d instanceof Date ? d : new Date(d);
+  if (!(x instanceof Date) || isNaN(x.getTime())) return '';
+  const y = x.getFullYear();
+  const m = String(x.getMonth() + 1).padStart(2, '0');
+  const dd = String(x.getDate()).padStart(2, '0');
+  const hh = String(x.getHours()).padStart(2, '0');
+  const mi = String(x.getMinutes()).padStart(2, '0');
+  const ss = String(x.getSeconds()).padStart(2, '0');
+  return `${y}-${m}-${dd} ${hh}:${mi}:${ss}`;
+};
     wsPrestamos.addRows(
       filas.map((r) => ({
         ...r,

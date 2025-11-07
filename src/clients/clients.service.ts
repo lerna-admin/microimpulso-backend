@@ -159,201 +159,207 @@ export class ClientsService {
   // ============================================================
   // ========================  FIND ALL  ========================
   // ============================================================
-  async findAll(
-    limit: number = 10,
-    page: number = 1,
-    filters?: {
-      status?: 'active' | 'inactive' | 'rejected' | 'prospect';
-      document?: string;
-      name?: string;
-      mode?: string;
-      type?: string;
-      paymentDay?: string;
-      agent?: number;
-      branch?: number;
-    },
-  ): Promise<any> {
-    // ---------- Carga de préstamos como antes ----------
-    const loans = await this.loanRequestRepository.find({
-      relations: { client: true, transactions: true, agent: true },
-      order: { createdAt: 'DESC' },
+async findAll(
+  limit: number = 10,
+  page: number = 1,
+  filters?: {
+    status?: 'active' | 'inactive' | 'rejected' | 'prospect';
+    document?: string;
+    name?: string;
+    mode?: string;
+    type?: string;
+    paymentDay?: string;
+    agent?: number;
+    branch?: number;
+  },
+): Promise<any> {
+  // ---------- Load loans ----------
+  const loans = await this.loanRequestRepository.find({
+    relations: { client: true, transactions: true, agent: true },
+    order: { createdAt: 'DESC' },
+  });
+
+  // Normalize numeric filters if present
+  if (filters?.agent) filters.agent = Number(filters.agent);
+  if (filters?.branch) filters.branch = Number(filters.branch);
+
+  const lower = (s?: string) => String(s ?? '').toLowerCase();
+
+  // Active means funded OR renewed
+  const isActiveLoan = (s?: string) => {
+    const st = lower(s);
+    return st === 'funded' || st === 'renewed';
+  };
+
+  // Robust tx type extraction (handles different entity field names/casing)
+  const txTypeOf = (t: any) =>
+    lower((t?.type ?? t?.transactionType ?? t?.Transactiontype) as string);
+
+  // Days late helper (compares to now)
+  const now = new Date();
+  const daysLateOf = (end?: Date | string | null) => {
+    const d = end ? new Date(end) : null;
+    return d && now > d ? Math.floor((now.getTime() - d.getTime()) / 86_400_000) : 0;
+  };
+
+  let totalActiveAmountBorrowed = 0;
+  let totalActiveRepayment = 0;
+  const activeClientIds = new Set<number>();
+  let mora15 = 0;
+  let critical20 = 0;
+  let noPayment30 = 0;
+
+  const items: any[] = [];
+
+  // ---------- Iterate loans ----------
+  for (const loan of loans) {
+    const client = loan.client;
+    if (!client) continue;
+
+    // Client-level filters
+    if (filters?.document && !client.document?.includes(filters.document)) continue;
+    if (filters?.name && !client.name?.toLowerCase().includes(filters.name.toLowerCase())) continue;
+
+    // Derived loan status for filtering
+    const derivedStatus: 'active' | 'inactive' = isActiveLoan(loan.status) ? 'active' : 'inactive';
+
+    // Status filter logic
+    if (filters?.status && filters.status !== 'prospect') {
+      if (filters.status === 'rejected') {
+        if (lower(loan.status) !== 'rejected') continue;
+      } else {
+        if (filters.status !== derivedStatus) continue;
+      }
+    } else if (filters?.status === 'prospect') {
+      // "prospect" means clients without any loan request — handled later
+      continue;
+    }
+
+    // Additional loan-level filters
+    if (filters?.mode && String(loan.mode) !== filters.mode) continue;
+    if (filters?.type && loan.type !== filters.type) continue;
+    if (filters?.paymentDay && loan.paymentDay !== filters.paymentDay) continue;
+    if (filters?.agent && loan.agent?.id !== filters.agent) continue;
+    if (filters?.branch && (loan.agent as any)?.branchId !== filters.branch) continue;
+
+    // Per-loan numbers
+    const amountBorrowed = Number(loan.amount ?? 0);
+
+    // Sum only true repayments; add status/void checks if your entity has them
+    const totalRepayment = (loan.transactions ?? [])
+      .filter((t) => txTypeOf(t) === 'repayment')
+      .reduce((s, t) => s + Number(t?.amount ?? 0), 0);
+
+    // Guard against negatives (overpayments/rounding)
+    const remainingAmount = Math.max(0, amountBorrowed - totalRepayment);
+
+    const daysLate = daysLateOf(loan.endDateAt);
+
+    // Global aggregates for active loans only
+    if (derivedStatus === 'active') {
+      totalActiveAmountBorrowed += amountBorrowed;
+      totalActiveRepayment += totalRepayment;
+      if (client.id) activeClientIds.add(client.id);
+
+      if (daysLate > 0) {
+        if (daysLate >= 30) noPayment30++;
+        else if (daysLate > 20) critical20++;
+        else if (daysLate > 15) mora15++;
+      }
+    }
+
+    items.push({
+      client, // includes customFields implicitly if defined on entity
+      agent: loan.agent ? { id: loan.agent.id, name: loan.agent.name } : null,
+      loanRequest: {
+        id: loan.id,
+        status: loan.status,
+        amount: loan.amount,
+        requestedAmount: loan.requestedAmount,
+        createdAt: loan.createdAt,
+        updatedAt: loan.updatedAt,
+        type: loan.type,
+        mode: loan.mode,
+        mora: loan.mora,
+        endDateAt: loan.endDateAt,
+        paymentDay: loan.paymentDay,
+        transactions: loan.transactions,
+      },
+      totalRepayment,
+      amountBorrowed,
+      remainingAmount,
+      daysLate,
+      status: derivedStatus, // 'active' | 'inactive'
     });
+  }
 
-    if (filters?.agent) filters.agent = Number(filters.agent);
-    if (filters?.branch) filters.branch = Number(filters.branch);
+  // ---------- Include clients with NO loan requests ----------
+  const includeClientsWithoutLoans = !filters?.status || filters.status === 'prospect';
 
-    const lower = (s?: string) => String(s ?? '').toLowerCase();
-    const isActiveLoan = (s?: string) => {
-      const st = lower(s);
-      return st === 'funded';
-    };
+  if (includeClientsWithoutLoans) {
+    const qb = this.clientRepository
+      .createQueryBuilder('client')
+      .leftJoin('client.loanRequests', 'lr')
+      .where('lr.id IS NULL');
 
-    let totalActiveAmountBorrowed = 0;
-    let totalActiveRepayment = 0;
-    const activeClientIds = new Set<number>();
-    let mora15 = 0;
-    let critical20 = 0;
-    let noPayment30 = 0;
+    if (filters?.document) {
+      qb.andWhere('client.document LIKE :doc', { doc: `%${filters.document}%` });
+    }
+    if (filters?.name) {
+      qb.andWhere('LOWER(client.name) LIKE :name', { name: `%${filters.name.toLowerCase()}%` });
+    }
+    if (filters?.status === 'prospect') {
+      qb.andWhere('LOWER(client.status) = :st', { st: 'prospect' });
+    }
 
-    const now = new Date();
-    const daysLateOf = (end?: Date | string | null) => {
-      const d = end ? new Date(end) : null;
-      return d && now > d ? Math.floor((now.getTime() - d.getTime()) / 86_400_000) : 0;
-    };
+    const clientsWithoutLoans = await qb.getMany();
 
-    const items: any[] = [];
-
-    // ---------- Itera préstamos ----------
-    for (const loan of loans) {
-      const client = loan.client;
-      if (!client) continue;
-
-      // Filtros a nivel cliente
-      if (filters?.document && !client.document?.includes(filters.document))
-        continue;
-      if (
-        filters?.name &&
-        !client.name?.toLowerCase().includes(filters.name.toLowerCase())
-      )
-        continue;
-
-      // Filtros a nivel préstamo
-      const derivedStatus: 'active' | 'inactive' =
-        isActiveLoan(loan.status) ? 'active' : 'inactive';
-
-      if (filters?.status && filters.status !== 'prospect') {
-        if (filters.status === 'rejected') {
-          if (lower(loan.status) !== 'rejected') continue;
-        } else {
-          if (filters.status !== derivedStatus) continue;
-        }
-      } else if (filters?.status === 'prospect') {
-        // prospect = sin solicitud
-        continue;
-      }
-
-      if (filters?.mode && String(loan.mode) !== filters.mode) continue;
-      if (filters?.type && loan.type !== filters.type) continue;
-      if (filters?.paymentDay && loan.paymentDay !== filters.paymentDay) continue;
-      if (filters?.agent && loan.agent?.id !== filters.agent) continue;
-      if (filters?.branch && (loan.agent as any)?.branchId !== filters.branch)
-        continue;
-
-      // Números por préstamo
-      const amountBorrowed = Number(loan.amount || 0);
-      const totalRepayment = (loan.transactions || [])
-        .filter((t) => lower(t.Transactiontype) === 'repayment')
-        .reduce((s, t) => s + Number(t.amount), 0);
-      const remainingAmount = amountBorrowed - totalRepayment;
-      const daysLate = daysLateOf(loan.endDateAt);
-
-      // Resumen global (solo préstamos activos)
-      if (derivedStatus === 'active') {
-        totalActiveAmountBorrowed += amountBorrowed;
-        totalActiveRepayment += totalRepayment;
-        if (client.id) activeClientIds.add(client.id);
-
-        if (daysLate > 0) {
-          if (daysLate >= 30) noPayment30++;
-          else if (daysLate > 20) critical20++;
-          else if (daysLate > 15) mora15++;
-        }
-      }
-
+    for (const client of clientsWithoutLoans) {
       items.push({
-        client, // ← incluye customFields automáticamente
-        agent: loan.agent ? { id: loan.agent.id, name: loan.agent.name } : null,
-        loanRequest: {
-          id: loan.id,
-          status: loan.status,
-          amount: loan.amount,
-          requestedAmount: loan.requestedAmount,
-          createdAt: loan.createdAt,
-          updatedAt: loan.updatedAt,
-          type: loan.type,
-          mode: loan.mode,
-          mora: loan.mora,
-          endDateAt: loan.endDateAt,
-          paymentDay: loan.paymentDay,
-          transactions: loan.transactions,
-        },
-        totalRepayment,
-        amountBorrowed,
-        remainingAmount,
-        daysLate,
-        status: derivedStatus, // 'active' | 'inactive'
+        client,
+        agent: null,
+        loanRequest: null,
+        totalRepayment: 0,
+        amountBorrowed: 0,
+        remainingAmount: 0,
+        daysLate: 0,
+        status: 'prospect' as const,
       });
     }
-
-    // ---------- Agregar clientes sin NINGUNA solicitud ----------
-    const includeClientsWithoutLoans =
-      !filters?.status || filters.status === 'prospect';
-
-    if (includeClientsWithoutLoans) {
-      const qb = this.clientRepository
-        .createQueryBuilder('client')
-        .leftJoin('client.loanRequests', 'lr')
-        .where('lr.id IS NULL');
-
-      if (filters?.document) {
-        qb.andWhere('client.document LIKE :doc', {
-          doc: `%${filters.document}%`,
-        });
-      }
-      if (filters?.name) {
-        qb.andWhere('LOWER(client.name) LIKE :name', {
-          name: `%${filters.name.toLowerCase()}%`,
-        });
-      }
-      if (filters?.status === 'prospect') {
-        qb.andWhere('LOWER(client.status) = :st', { st: 'prospect' });
-      }
-
-      const clientsWithoutLoans = await qb.getMany();
-
-      for (const client of clientsWithoutLoans) {
-        items.push({
-          client, // ← incluye customFields automáticamente
-          agent: null,
-          loanRequest: null,
-          totalRepayment: 0,
-          amountBorrowed: 0,
-          remainingAmount: 0,
-          daysLate: 0,
-          status: 'prospect' as const,
-        });
-      }
-    }
-
-    // ---------- Orden/paginación ----------
-    items.sort((a, b) => {
-      const aDate = a.loanRequest?.createdAt ?? a.client?.createdAt ?? new Date(0);
-      const bDate = b.loanRequest?.createdAt ?? b.client?.createdAt ?? new Date(0);
-      return new Date(bDate).getTime() - new Date(aDate).getTime();
-    });
-
-    const totalItems = items.length;
-    const startIndex = (page - 1) * limit;
-    const data = items.slice(startIndex, startIndex + limit);
-    let remainangTotal = 0;
-    items.forEach(item => {
-      remainangTotal = item.remainingAmount + remainangTotal;
-    })
-    return {
-      page,
-      limit,
-      totalItems,
-      totalPages: Math.ceil(totalItems / limit),
-      totalActiveAmountBorrowed,
-      totalActiveRepayment,
-      activeClientsCount: activeClientIds.size,
-      mora15,
-      critical20,
-      noPayment30,
-      remainangTotal,
-      data,
-    };
   }
+
+  // ---------- Sort & paginate ----------
+  items.sort((a, b) => {
+    const aDate = a.loanRequest?.createdAt ?? a.client?.createdAt ?? new Date(0);
+    const bDate = b.loanRequest?.createdAt ?? b.client?.createdAt ?? new Date(0);
+    return new Date(bDate).getTime() - new Date(aDate).getTime();
+  });
+
+  const totalItems = items.length;
+  const startIndex = (page - 1) * limit;
+  const data = items.slice(startIndex, startIndex + limit);
+
+  // ---------- Remaining total ONLY for active (funded + renewed) ----------
+  const remainingTotal = items
+    .filter((it) => it.loanRequest && isActiveLoan(it.loanRequest.status))
+    .reduce((sum, it) => sum + Number(it.remainingAmount ?? 0), 0);
+
+  return {
+    page,
+    limit,
+    totalItems,
+    totalPages: Math.ceil(totalItems / limit),
+    totalActiveAmountBorrowed,
+    totalActiveRepayment,
+    activeClientsCount: activeClientIds.size,
+    mora15,
+    critical20,
+    noPayment30,
+    remainingTotal, // fixed name + logic
+    data,
+  };
+}
+
 
   // ============================================================
   // ====================  FIND ALL BY AGENT  ===================

@@ -113,7 +113,7 @@ export class CashController {
         @Query('date') date?: string, // 'YYYY-MM-DD'
     ) {
         const target = date ?? new Date().toISOString().slice(0, 10);
-        return this.cashService.getDailyTraceByUser(+userId, target);
+        return this.cashService.getDailyTraceByUser(userId, target);
     }
     /**
     * Elimina un movimiento de caja.

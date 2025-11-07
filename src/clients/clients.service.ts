@@ -185,7 +185,7 @@ export class ClientsService {
     const lower = (s?: string) => String(s ?? '').toLowerCase();
     const isActiveLoan = (s?: string) => {
       const st = lower(s);
-      return st !== 'completed' && st !== 'rejected';
+      return st === 'funded';
     };
 
     let totalActiveAmountBorrowed = 0;
@@ -334,6 +334,10 @@ export class ClientsService {
     const totalItems = items.length;
     const startIndex = (page - 1) * limit;
     const data = items.slice(startIndex, startIndex + limit);
+    let remainangTotal = 0;
+    items.forEach(item => {
+      remainangTotal = item.remainingAmount + remainangTotal;
+    })
     return {
       page,
       limit,
@@ -345,6 +349,7 @@ export class ClientsService {
       mora15,
       critical20,
       noPayment30,
+      remainangTotal,
       data,
     };
   }

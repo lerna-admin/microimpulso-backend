@@ -753,8 +753,8 @@ async sendContractToClient(loanRequestId: number) {
   const interes = Math.round(principal * (tasaMensualPct / 100) * (diasParaPago / 30));
   const totalAPagar = Math.max(0, Math.round(principal + interes));
 
-  // Monto en letras para el VALOR A PAGAR
-  const amountWordsPagar = this.amountToWordsCOP(totalAPagar);
+  // En letras (VALOR A PAGAR)
+  const deudaEnLetras = this.amountToWordsCOP(totalAPagar);
 
   const { dia, mesTxt, anio } = this.splitDate(today);
 
@@ -775,8 +775,9 @@ async sendContractToClient(loanRequestId: number) {
     DEUDOR_CIUDAD: client.city || '',
 
     // === VALOR A PAGAR (solicitud expresa) ===
-    DEUDA_NUMEROS: amountWordsPagar,        // en letras (valor a pagar)
-    DEUDA_VALOR: this.money(totalAPagar),   // en números (valor a pagar), sin símbolo $
+    DEUDA_NUMEROS: deudaEnLetras,            // en letras (valor a pagar)
+    DEUDA_EN_LETRAS: deudaEnLetras,          // alias por si existe en la plantilla
+    DEUDA_VALOR: this.money(totalAPagar),    // en números (valor a pagar), sin símbolo $
 
     // Anticipo 20% con aval incluido
     PORCENTAJE_ANTICIPO: `${Math.round(ANTICIPO_PCT*100)}%`, // “20%”
@@ -804,7 +805,10 @@ async sendContractToClient(loanRequestId: number) {
   };
 
   try {
-    // 4) Render DOCX (11 páginas) → PDF (1:1)
+    // (LOG de verificación de llaves)
+    this.debug('DOCX.data.keys', { cId, keys: Object.keys(dataForDocx) });
+
+    // 4) Render DOCX (plantilla 11 páginas) → PDF (1:1)
     this.debug('DOCX.render.start', { cId });
     const docxBuffer = this.renderDocx(dataForDocx);
     this.debug('DOCX.render.ok', { cId, size: docxBuffer.length });

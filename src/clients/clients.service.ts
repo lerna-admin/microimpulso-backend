@@ -270,7 +270,9 @@ async findAll(
       }
     }
 
-    const lastTransaction = (loan.transactions ?? []).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0] ?? null;
+    const lastTransaction = (loan.transactions ?? [])
+  .filter(t => txTypeOf(t) === 'repayment')
+  .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     items.push({
       client, // includes customFields implicitly if defined on entity

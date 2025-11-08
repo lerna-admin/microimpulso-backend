@@ -728,14 +728,14 @@ async sendContractToClient(loanRequestId: number) {
   const client = loan.client;
   const agent  = loan.agent;
 
-  // Validación: ciudad requerida (llenada por el agente en Client.city)
+  // Validación: ciudad requerida (la llena el agente en Client.city)
   if (!client.city?.trim()) {
     throw new Error('Falta la ciudad del cliente (client.city). Complétala antes de enviar el contrato.');
   }
 
   // 2) Cálculos de negocio
   const today = new Date();                 // fecha de firma
-  const dueDate = this.nextQuincena(today); // pago = próxima quincena (15 o último día)
+  const dueDate = this.nextQuincena(today); // próxima quincena (15 o último día)
   const diasParaPago = this.diffDays(today, dueDate);
 
   // principal: usa loan.amount; fallback requestedAmount
@@ -753,7 +753,7 @@ async sendContractToClient(loanRequestId: number) {
   const interes = Math.round(principal * (tasaMensualPct / 100) * (diasParaPago / 30));
   const totalAPagar = Math.max(0, Math.round(principal + interes));
 
-  // En letras (VALOR A PAGAR) para los placeholders del DOCX
+  // En letras (VALOR TOTAL A PAGAR) para los placeholders del DOCX
   const deudaEnLetras = this.amountToWordsCOP(totalAPagar);
 
   const { dia, mesTxt, anio } = this.splitDate(today);
@@ -767,7 +767,7 @@ async sendContractToClient(loanRequestId: number) {
   const diaEnLetras = dayToWords[dia] ?? this.numberToSpanish(dia);
   const diasParaPagoEnLetras = dayToWords[diasParaPago] ?? this.numberToSpanish(diasParaPago);
 
-  // 3) Tags para la plantilla DOCX (todos los que aparecen en tu documento)
+  // 3) Tags para la plantilla DOCX (coinciden con tu archivo con espacios en el nombre)
   const dataForDocx: Record<string, any> = {
     // Deudor
     DEUDOR_NOMBRE: client.name || '',
@@ -775,12 +775,11 @@ async sendContractToClient(loanRequestId: number) {
     DEUDOR_DIRECCION: (client.address || client.address2 || '').trim(),
     DEUDOR_CIUDAD: client.city || '',
 
-    // === VALOR A PAGAR (en letras y en números) ===
-    DEUDA_NUMEROS: deudaEnLetras,            // en letras (valor total a pagar)
-    DEUDA_EN_LETRAS: deudaEnLetras,          // alias por si existe en la plantilla
-    DEUDA_VALOR: this.money(totalAPagar),    // en números (sin símbolo $)
+    // === VALOR TOTAL A PAGAR (en letras y en números) ===
+    DEUDA_NUMEROS: deudaEnLetras,          // ej: "CIENTO VEINTE MIL DE PESOS M/CTE"
+    DEUDA_VALOR: this.money(totalAPagar),  // ej: "120.000" (sin símbolo)
 
-    // Anticipo 20% con aval incluido
+    // Anticipo 20% con aval incluido (para textos/recibos dentro del DOCX)
     PORCENTAJE_ANTICIPO: `${Math.round(ANTICIPO_PCT*100)}%`, // “20%”
     ANTICIPO_VALOR: this.money(anticipoValor),
     AVAL_PCT: `${Math.round(AVAL_PCT*100)}%`,
@@ -788,17 +787,17 @@ async sendContractToClient(loanRequestId: number) {
     SERVICIO_VALOR: this.money(servicioValor),
 
     // Plazo calculado
-    DIAS_PARA_PAGO: String(diasParaPago),
+    DIAS_PARA_PAGO: String(diasParaPago),                // ej: "7"
     DIAS_PARA_PAGO_TEXTO: `${diasParaPago} (${diasParaPagoEnLetras}) días`,
 
     // Fecha (hoy)
-    FECHA_DIA: String(dia).padStart(2, '0'),
-    FECHA_MES: mesTxt,
-    FECHA_ANIO: String(anio),
-    FECHA_DIA_LETRA: diaEnLetras,
-    FECHA_DIA_LETRAS: diaEnLetras, // alias por si quedó en algún párrafo
+    FECHA_DIA: String(dia).padStart(2, '0'),            // "08"
+    FECHA_MES: mesTxt,                                   // "noviembre"
+    FECHA_ANIO: String(anio),                            // "2025"
+    FECHA_DIA_LETRA: diaEnLetras,                        // "ocho"
+    FECHA_DIA_LETRAS: diaEnLetras,                       // alias por si quedó en algún párrafo
 
-    // Agente/Avalista (si falta, queda vacío)
+    // Agente/Avalista
     AGENTE_NOMBRE: agent?.name || '',
     AGENTE_CC: (agent as any)?.document || '',
 
@@ -807,7 +806,7 @@ async sendContractToClient(loanRequestId: number) {
   };
 
   try {
-    // (LOG de verificación de llaves y algunos valores)
+    // LOG de verificación rápida
     this.debug('DOCX.data.preview', { cId, subset: {
       DEUDOR_NOMBRE: dataForDocx.DEUDOR_NOMBRE,
       DEUDOR_CC: dataForDocx.DEUDOR_CC,
@@ -817,16 +816,16 @@ async sendContractToClient(loanRequestId: number) {
       DIAS_PARA_PAGO_TEXTO: dataForDocx.DIAS_PARA_PAGO_TEXTO,
     }});
 
-    // 4) Render DOCX (plantilla 11 páginas) → PDF (1:1)
+    // 4) Render DOCX (11 páginas) → PDF (1:1)
     this.debug('DOCX.render.start', { cId });
-    const docxBuffer = this.renderDocx(dataForDocx);
+    const docxBuffer = this.renderDocx(dataForDocx); // usa getTemplatePath() ⇒ 'CONTRATO DE MUTUO.docx'
     this.debug('DOCX.render.ok', { cId, size: docxBuffer.length });
 
     this.debug('PDF.convert.start', { cId });
     const pdfBytes = await this.convertDocxToPdf(docxBuffer);
     this.debug('PDF.convert.ok', { cId, size: pdfBytes.length });
 
-    // 5) Guardar PDF local
+    // 5) Guardar PDF
     const filename = `ContratoMutuo-${loan.id}.pdf`;
     const filePath = join(__dirname, '..', '..', 'public', 'uploads', 'documents', filename);
     this.ensureDir(dirname(filePath));
@@ -907,7 +906,6 @@ async sendContractToClient(loanRequestId: number) {
     throw err;
   }
 }
-
 
 
 }

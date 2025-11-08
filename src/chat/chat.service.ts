@@ -747,24 +747,37 @@ async sendContractToClient(loanRequestId: number) {
   const { ANTICIPO_PCT, anticipoValor, AVAL_PCT, avalValor, servicioValor } =
     this.calcPaymentBreakdown(principal);
 
+  // Monto en letras (fallback simple para 1..31 en caso de que numberToSpanish aún no esté)
+  const safeNumberToSpanish = (n: number) => {
+    try { return this.numberToSpanish(n); } catch { return String(n); }
+  };
   const amountWords = this.amountToWordsCOP(principal);
+
   const { dia, mesTxt, anio } = this.splitDate(today);
 
-  // (opcional) tasa mensual si la plantilla tiene {{TASA_MENSUAL_PCT}}
+  // Día en letras (1..31) por si tu numberToSpanish no está listo
+  const dayToWords: Record<number,string> = {
+    1:'uno',2:'dos',3:'tres',4:'cuatro',5:'cinco',6:'seis',7:'siete',8:'ocho',9:'nueve',10:'diez',
+    11:'once',12:'doce',13:'trece',14:'catorce',15:'quince',16:'dieciséis',17:'diecisiete',18:'dieciocho',19:'diecinueve',20:'veinte',
+    21:'veintiuno',22:'veintidós',23:'veintitrés',24:'veinticuatro',25:'veinticinco',26:'veintiséis',27:'veintisiete',28:'veintiocho',29:'veintinueve',30:'treinta',31:'treinta y uno'
+  };
+  const diaEnLetras = dayToWords[dia] ?? safeNumberToSpanish(dia);
+
+  // (opcional) tasa mensual si la plantilla la usa
   const tasaMensualDefault = Number(this.config.get<string>('DEFAULT_INTEREST_MONTHLY_PCT') ?? '0'); // ej. 3
   const tasaMensualPct = Number.isFinite(tasaMensualDefault) ? tasaMensualDefault : 0;
 
-  // 3) Tags para la plantilla DOCX (asegúrate de tenerlos en el .docx)
+  // 3) Tags para la plantilla DOCX (todos los que aparecen en tu documento)
   const dataForDocx: Record<string, any> = {
     // Deudor
     DEUDOR_NOMBRE: client.name || '',
     DEUDOR_CC: client.document || '',
-    DEUDOR_DIRECCION: client.address || client.address2 || '',
+    DEUDOR_DIRECCION: (client.address || client.address2 || '').trim(),
     DEUDOR_CIUDAD: client.city || '',
 
     // Monto principal
-    DEUDA_NUMEROS: amountWords,            // en letras
-    DEUDA_VALOR: this.money(principal),    // con separador de miles
+    DEUDA_NUMEROS: amountWords,            // en letras (ya con "PESOS M/CTE")
+    DEUDA_VALOR: this.money(principal),    // con separador de miles, sin $
 
     // Anticipo 20% con aval incluido
     PORCENTAJE_ANTICIPO: `${Math.round(ANTICIPO_PCT*100)}%`, // “20%”
@@ -773,20 +786,22 @@ async sendContractToClient(loanRequestId: number) {
     AVAL_VALOR: this.money(avalValor),
     SERVICIO_VALOR: this.money(servicioValor),
 
-    // Plazo calculado
-    DIAS_PARA_PAGO: `${diasParaPago} (${this.numberToSpanish(diasParaPago)}) días`,
+    // Plazo calculado (solo número porque el texto lo usa así)
+    DIAS_PARA_PAGO: String(diasParaPago),
 
     // Fecha (hoy)
     FECHA_DIA: String(dia).padStart(2, '0'),
     FECHA_MES: mesTxt,
     FECHA_ANIO: String(anio),
-    FECHA_DIA_LETRA: this.numberToSpanish(dia),
+    FECHA_DIA_LETRA: diaEnLetras,
+    // Alias por si quedó alguna referencia antigua
+    FECHA_DIA_LETRAS: diaEnLetras,
 
-    // Agente/representante (si tu plantilla lo usa)
+    // Agente/avalista (si falta, queda vacío)
     AGENTE_NOMBRE: agent?.name || '',
-    AGENTE_CC: agent?.document || '',
+    AGENTE_CC: (agent as any)?.document || '',
 
-    // (Opcional)
+    // (Opcional en plantilla)
     TASA_MENSUAL_PCT: tasaMensualPct ? `${tasaMensualPct}%` : '',
   };
 
@@ -881,5 +896,6 @@ async sendContractToClient(loanRequestId: number) {
     throw err;
   }
 }
+
 
 }

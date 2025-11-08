@@ -19,6 +19,8 @@ export class Country {
 
   @OneToMany(() => Client, c => c.country)
   clients: Client[];
-
+  
+  @OneToMany(() => User, (u) => u.managerCountry)
+  managers: User[];
   
 }

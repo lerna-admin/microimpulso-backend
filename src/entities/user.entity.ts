@@ -16,6 +16,7 @@ import { CashFlow } from './cash-flow.entity';
 import { LoanRequest } from './loan-request.entity';
 import { Branch } from './branch.entity';
 import { Permission } from './permissions.entity';
+import { Country } from './country.entity';
 
 /**
  * Enum for user roles
@@ -122,4 +123,14 @@ export class User {
   /** @brief Count of consecutive failed login attempts. Reset on successful login. */
   @Column({ type: 'int', default: 0 })
   failedLoginAttempts: number;
+
+  @ManyToOne(() => Country, c => c.managers, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
+  @JoinColumn({ name: 'managerCountryId' })
+  managerCountry: Country;
+
+  @Column({ type: 'int', nullable: true })
+  managerCountryId: number | null;
 }

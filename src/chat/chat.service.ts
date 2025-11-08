@@ -738,7 +738,7 @@ async sendContractToClient(loanRequestId: number) {
   const dueDate = this.nextQuincena(today); // pago = próxima quincena (15 o último día)
   const diasParaPago = this.diffDays(today, dueDate);
 
-  // principal: usa loan.amount; si no, requestedAmount
+  // principal: usa loan.amount; fallback requestedAmount
   const principal = typeof loan.amount === 'number'
     ? loan.amount
     : Number((loan as any).amount ?? loan.requestedAmount ?? 0);
@@ -753,7 +753,7 @@ async sendContractToClient(loanRequestId: number) {
   const interes = Math.round(principal * (tasaMensualPct / 100) * (diasParaPago / 30));
   const totalAPagar = Math.max(0, Math.round(principal + interes));
 
-  // En letras (VALOR A PAGAR)
+  // En letras (VALOR A PAGAR) para los placeholders del DOCX
   const deudaEnLetras = this.amountToWordsCOP(totalAPagar);
 
   const { dia, mesTxt, anio } = this.splitDate(today);
@@ -765,6 +765,7 @@ async sendContractToClient(loanRequestId: number) {
     21:'veintiuno',22:'veintidós',23:'veintitrés',24:'veinticuatro',25:'veinticinco',26:'veintiséis',27:'veintisiete',28:'veintiocho',29:'veintinueve',30:'treinta',31:'treinta y uno'
   };
   const diaEnLetras = dayToWords[dia] ?? this.numberToSpanish(dia);
+  const diasParaPagoEnLetras = dayToWords[diasParaPago] ?? this.numberToSpanish(diasParaPago);
 
   // 3) Tags para la plantilla DOCX (todos los que aparecen en tu documento)
   const dataForDocx: Record<string, any> = {
@@ -774,10 +775,10 @@ async sendContractToClient(loanRequestId: number) {
     DEUDOR_DIRECCION: (client.address || client.address2 || '').trim(),
     DEUDOR_CIUDAD: client.city || '',
 
-    // === VALOR A PAGAR (solicitud expresa) ===
-    DEUDA_NUMEROS: deudaEnLetras,            // en letras (valor a pagar)
+    // === VALOR A PAGAR (en letras y en números) ===
+    DEUDA_NUMEROS: deudaEnLetras,            // en letras (valor total a pagar)
     DEUDA_EN_LETRAS: deudaEnLetras,          // alias por si existe en la plantilla
-    DEUDA_VALOR: this.money(totalAPagar),    // en números (valor a pagar), sin símbolo $
+    DEUDA_VALOR: this.money(totalAPagar),    // en números (sin símbolo $)
 
     // Anticipo 20% con aval incluido
     PORCENTAJE_ANTICIPO: `${Math.round(ANTICIPO_PCT*100)}%`, // “20%”
@@ -786,8 +787,9 @@ async sendContractToClient(loanRequestId: number) {
     AVAL_VALOR: this.money(avalValor),
     SERVICIO_VALOR: this.money(servicioValor),
 
-    // Plazo calculado (solo número porque el texto lo usa así)
+    // Plazo calculado
     DIAS_PARA_PAGO: String(diasParaPago),
+    DIAS_PARA_PAGO_TEXTO: `${diasParaPago} (${diasParaPagoEnLetras}) días`,
 
     // Fecha (hoy)
     FECHA_DIA: String(dia).padStart(2, '0'),
@@ -805,8 +807,15 @@ async sendContractToClient(loanRequestId: number) {
   };
 
   try {
-    // (LOG de verificación de llaves)
-    this.debug('DOCX.data.keys', { cId, keys: Object.keys(dataForDocx) });
+    // (LOG de verificación de llaves y algunos valores)
+    this.debug('DOCX.data.preview', { cId, subset: {
+      DEUDOR_NOMBRE: dataForDocx.DEUDOR_NOMBRE,
+      DEUDOR_CC: dataForDocx.DEUDOR_CC,
+      DEUDOR_CIUDAD: dataForDocx.DEUDOR_CIUDAD,
+      DEUDA_VALOR: dataForDocx.DEUDA_VALOR,
+      DEUDA_NUMEROS: dataForDocx.DEUDA_NUMEROS,
+      DIAS_PARA_PAGO_TEXTO: dataForDocx.DIAS_PARA_PAGO_TEXTO,
+    }});
 
     // 4) Render DOCX (plantilla 11 páginas) → PDF (1:1)
     this.debug('DOCX.render.start', { cId });

@@ -490,6 +490,7 @@ data.mode = (
     .getOne();
   }
   
+  
   async update(id: number, updateLoanRequestDto: UpdateLoanRequestDto): Promise<LoanRequest> {
     console.log(id)
     const loanRequest = await this.loanRequestRepository.findOne({ where: { id },

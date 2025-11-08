@@ -117,8 +117,9 @@ export class Client {
 
   @Column({ type: 'boolean', default: false })
   lead: boolean;
-
-  
+  @Column({ nullable: true })
+  city?: string;
+    
   @Column({
     type: 'text',              // ✅ válido en SQLite y Postgres
     nullable: true,

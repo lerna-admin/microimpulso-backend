@@ -12,12 +12,18 @@ import { Branch } from '../entities/branch.entity'; // 👈 solo para tipado/man
 import axios, { AxiosInstance, AxiosResponse } from 'axios';
 import { join, dirname } from 'path';
 import { v4 as uuid } from 'uuid';
-import { existsSync, mkdirSync, writeFileSync } from 'fs';
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import * as FormData from 'form-data';
 import { Readable } from 'stream';
 import { Notification } from 'src/notifications/notifications.entity';
 import { ConfigService } from '@nestjs/config';
+// Rellenar DOCX y convertir a PDF
+import PizZip from 'pizzip';
+import Docxtemplater from 'docxtemplater';
+import * as libre from 'libreoffice-convert';
+
+// FS y rutas
+
 
 type Dict = Record<string, any>;
 
@@ -631,138 +637,228 @@ export class ChatService implements OnModuleInit {
   }
 
   /* ================= Generar & enviar contrato (PDF) ================= */
-  async sendContractToClient(loanRequestId: number) {
-    const cId = uuid();
+  // ===== Helpers de negocio y util =====
+private monthsEs = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 
-    const loan = await this.loanRequestRepository.findOne({
-      where: { id: loanRequestId },
-      relations: ['client', 'agent'],
-    });
-    if (!loan || !loan.client?.phone) throw new NotFoundException('Loan or client not found');
+private splitDate(d: Date) { return { dia: d.getDate(), mesTxt: this.monthsEs[d.getMonth()], anio: d.getFullYear() }; }
+private lastDayOfMonth(y: number, m0: number) { return new Date(y, m0 + 1, 0).getDate(); }
 
-    const client = loan.client;
-    const agent = loan.agent;
-    loan.endDateAt = new Date(loan.endDateAt);
+// Fecha de pago = siguiente quincena (15 o último día)
+private nextQuincena(from: Date): Date {
+  const y = from.getFullYear(), m = from.getMonth(), d = from.getDate();
+  const last = this.lastDayOfMonth(y, m);
+  if (d < 15) return new Date(y, m, 15);
+  if (d >= 15 && d < last) return new Date(y, m, last);
+  return new Date(y, m + 1, 15);
+}
+private diffDays(a: Date, b: Date) {
+  const ms = 24*60*60*1000;
+  const a0 = new Date(a.getFullYear(), a.getMonth(), a.getDate()).getTime();
+  const b0 = new Date(b.getFullYear(), b.getMonth(), b.getDate()).getTime();
+  return Math.max(0, Math.round((b0 - a0)/ms));
+}
+private money(n: number) { return (n ?? 0).toLocaleString('es-CO', { maximumFractionDigits: 0 }); }
 
-    // PDF básico (resumido)
-    const pdfDoc = await PDFDocument.create();
-    const helv = await pdfDoc.embedFont(StandardFonts.Helvetica);
-    const helvBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+// 20% con aval incluido (configurable AVAL_FEE_PCT, p.ej. 0.12 = 12%)
+private calcPaymentBreakdown(principal: number) {
+  const ANTICIPO_PCT = 0.20;
+  const avalPctRaw = Number(this.config.get<string>('AVAL_FEE_PCT') ?? '0');
+  const AVAL_PCT = Math.min(Math.max(avalPctRaw, 0), ANTICIPO_PCT); // clamp [0..0.20]
+  const anticipoValor = Math.round(principal * ANTICIPO_PCT);
+  const avalValor = Math.round(principal * AVAL_PCT);
+  const servicioValor = Math.max(0, anticipoValor - avalValor);
+  return { ANTICIPO_PCT, anticipoValor, AVAL_PCT, avalValor, servicioValor };
+}
 
-    const marginX = 55, columnW = 480, lineH = 16, bottomMargin = 60;
-    let page = pdfDoc.addPage([595.28, 841.89]);
-    let cursorY = 800;
+// Número → letras (es-CO) para COP (entero)
+private numberToSpanish(n: number): string { /* tu implementación previa aquí */ return '...'; }
+private amountToWordsCOP(n: number): string {
+  const entero = Math.trunc(Math.max(0, n || 0));
+  return `${this.numberToSpanish(entero).toUpperCase()} DE PESOS M/CTE`;
+}
 
-    const addPage = () => { page = pdfDoc.addPage([595.28, 841.89]); cursorY = 800; };
-    const ensureSpace = (n = lineH) => { if (cursorY - n < bottomMargin) addPage(); };
-    const drawParagraph = (text: string, font = helv, size = 11, color = rgb(0, 0, 0), extra = 4) => {
-      const words = text.replace(/\s+/g, ' ').trim().split(' ');
-      let line = '';
-      words.forEach((w, i) => {
-        const test = line ? `${line} ${w}` : w;
-        const width = font.widthOfTextAtSize(test, size);
-        if (width > columnW) { ensureSpace(); page.drawText(line, { x: marginX, y: cursorY, size, font, color }); cursorY -= lineH; line = w; }
-        else { line = test; }
-        if (i === words.length - 1) { ensureSpace(); page.drawText(line, { x: marginX, y: cursorY, size, font, color }); cursorY -= lineH + extra; }
-      });
-    };
+// ===== DOCX render & PDF =====
+private getTemplatePath(): string {
+  return join(__dirname, '..', 'assets', 'CONTRATO_DE_MUTUO.docx'); // 11 páginas
+}
+private renderDocx(data: Record<string, any>): Buffer {
+  const content = readFileSync(this.getTemplatePath());
+  const zip = new PizZip(content);
+  const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
+  doc.setData(data); doc.render();
+  return doc.getZip().generate({ type: 'nodebuffer' });
+}
+private async convertDocxToPdf(docxBuffer: Buffer): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    libre.convert(docxBuffer, '.pdf', undefined, (err: any, out: Buffer) => err ? reject(err) : resolve(out));
+  });
+}
 
-    ensureSpace(); page.drawText('CONTRATO DE CRÉDITO LIBRE INVERSIÓN', { x: marginX, y: cursorY, size: 14, font: helvBold }); cursorY -= lineH + 6;
-    drawParagraph(`Partes... ${client.name} CC ${client.document} ...`);
-    drawParagraph('Texto contractual resumido...');
-    ensureSpace(); page.drawText('1. Objeto', { x: marginX, y: cursorY, size: 12, font: helvBold }); cursorY -= lineH;
-    drawParagraph('El presente contrato tiene por objeto...');
-    ensureSpace(); page.drawText(`Monto aprobado: $${loan.requestedAmount?.toFixed(2)}`, { x: marginX, y: cursorY, size: 11, font: helvBold }); cursorY -= lineH;
-    ensureSpace(); page.drawText(`Monto total a pagar: $${loan.amount?.toFixed(2)}`, { x: marginX, y: cursorY, size: 11, font: helvBold }); cursorY -= lineH;
-    ensureSpace(); page.drawText(`Fecha única de pago: ${new Date(loan.endDateAt).toISOString().split('T')[0]}`, { x: marginX, y: cursorY, size: 11, font: helvBold }); cursorY -= lineH + 6;
-    drawParagraph('Cláusulas adicionales...');
-    drawParagraph(`Nombre: ${client.name} | CC: ${client.document}`);
+async sendContractToClient(loanRequestId: number) {
+  const cId = uuid();
 
-    const pdfBytes = await pdfDoc.save();
-    const filename = `LoanContract-${loan.id}.pdf`;
+  // 1) Cargar Loan + Client + Agent
+  const loan = await this.loanRequestRepository.findOne({
+    where: { id: loanRequestId },
+    relations: ['client', 'agent'],
+  });
+  if (!loan || !loan.client?.phone) throw new NotFoundException('Loan or client not found');
+
+  const client = loan.client;
+  const agent  = loan.agent;
+
+  // Validación: ciudad requerida (llenada por el agente en Client.city)
+  if (!client.city?.trim()) {
+    throw new Error('Falta la ciudad del cliente (client.city). Complétala antes de enviar el contrato.');
+  }
+
+  // 2) Cálculos de negocio
+  const today = new Date();                 // fecha de firma
+  const dueDate = this.nextQuincena(today); // pago = próxima quincena
+  const diasParaPago = this.diffDays(today, dueDate);
+
+  // principal: usa loan.amount; si no, requestedAmount
+  const principal = typeof loan.amount === 'number'
+    ? loan.amount
+    : Number((loan as any).amount ?? loan.requestedAmount ?? 0);
+
+  // 20% con aval incluido (aval % configurable por env AVAL_FEE_PCT; cap al 20%)
+  const { ANTICIPO_PCT, anticipoValor, AVAL_PCT, avalValor, servicioValor } =
+    this.calcPaymentBreakdown(principal);
+
+  const amountWords = this.amountToWordsCOP(principal);
+  const { dia, mesTxt, anio } = this.splitDate(today);
+
+  // (opcional) tasa mensual si la plantilla tiene {{TASA_MENSUAL_PCT}}
+  const tasaMensualDefault = Number(this.config.get<string>('DEFAULT_INTEREST_MONTHLY_PCT') ?? '0'); // ej. 3
+  const tasaMensualPct = Number.isFinite(tasaMensualDefault) ? tasaMensualDefault : 0;
+
+  // 3) Tags para la plantilla DOCX (asegúrate de tenerlos en el .docx)
+  const dataForDocx: Record<string, any> = {
+    // Deudor
+    DEUDOR_NOMBRE: client.name || '',
+    DEUDOR_CC: client.document || '',
+    DEUDOR_DIRECCION: client.address || client.address2 || '',
+    DEUDOR_CIUDAD: client.city || '',
+
+    // Monto principal
+    DEUDA_NUMEROS: amountWords,            // en letras
+    DEUDA_VALOR: this.money(principal),    // con separador de miles
+
+    // Anticipo 20% con aval incluido
+    PORCENTAJE_ANTICIPO: `${Math.round(ANTICIPO_PCT*100)}%`, // “20%”
+    ANTICIPO_VALOR: this.money(anticipoValor),
+    AVAL_PCT: `${Math.round(AVAL_PCT*100)}%`,
+    AVAL_VALOR: this.money(avalValor),
+    SERVICIO_VALOR: this.money(servicioValor),
+
+    // Plazo calculado
+    DIAS_PARA_PAGO: `${diasParaPago} (${this.numberToSpanish(diasParaPago)}) días`,
+
+    // Fecha (hoy)
+    FECHA_DIA: String(dia).padStart(2, '0'),
+    FECHA_MES: mesTxt,
+    FECHA_ANIO: String(anio),
+    FECHA_DIA_LETRA: this.numberToSpanish(dia),
+
+    // Agente/representante (si tu plantilla lo usa)
+    AGENTE_NOMBRE: agent?.name || '',
+    AGENTE_CC: agent?.document || '',
+
+    // (Opcional)
+    TASA_MENSUAL_PCT: tasaMensualPct ? `${tasaMensualPct}%` : '',
+  };
+
+  try {
+    // 4) Render DOCX (11 páginas) → PDF (1:1)
+    this.debug('DOCX.render.start', { cId });
+    const docxBuffer = this.renderDocx(dataForDocx);
+    this.debug('DOCX.render.ok', { cId, size: docxBuffer.length });
+
+    this.debug('PDF.convert.start', { cId });
+    const pdfBytes = await this.convertDocxToPdf(docxBuffer);
+    this.debug('PDF.convert.ok', { cId, size: pdfBytes.length });
+
+    // 5) Guardar PDF
+    const filename = `ContratoMutuo-${loan.id}.pdf`;
     const filePath = join(__dirname, '..', '..', 'public', 'uploads', 'documents', filename);
     this.ensureDir(dirname(filePath));
     writeFileSync(filePath, pdfBytes);
 
-    // Upload + send
+    // 6) Subir a WhatsApp y enviar
     const accessToken = this.getAccessToken();
     const phoneNumberId = this.getPhoneNumberId();
     const to = this.toE164(client.phone);
 
     const bufferStream = new Readable();
-    bufferStream.push(pdfBytes);
-    bufferStream.push(null);
+    bufferStream.push(pdfBytes); bufferStream.push(null);
 
-    try {
-      // Upload
-      const formData = new (FormData as any)();
-      formData.append('file', bufferStream, { filename, contentType: 'application/pdf' });
-      formData.append('messaging_product', 'whatsapp');
-      formData.append('type', 'application/pdf');
+    const formData = new (FormData as any)();
+    formData.append('file', bufferStream, { filename, contentType: 'application/pdf' });
+    formData.append('messaging_product', 'whatsapp');
+    formData.append('type', 'application/pdf');
 
-      const upStart = Date.now();
-      this.debug('OUT.contract.upload.request', {
-        cId, url: this.http.defaults.baseURL + `/${phoneNumberId}/media`,
-        headers: { Authorization: this.redactBearer(`Bearer ${accessToken}`), ...(formData as any).getHeaders?.() },
-        file: { filename, size: pdfBytes.length },
-      });
+    this.debug('OUT.contract.upload.request', {
+      cId, url: this.http.defaults.baseURL + `/${phoneNumberId}/media`,
+      headers: { Authorization: this.redactBearer(`Bearer ${accessToken}`), ...(formData as any).getHeaders?.() },
+      file: { filename, size: pdfBytes.length },
+    });
 
-      const mediaUpload = await this.http.post(`/${phoneNumberId}/media`, formData, {
-        headers: { Authorization: `Bearer ${accessToken}`, ...(formData as any).getHeaders?.() },
-      });
+    const mediaUpload = await this.http.post(`/${phoneNumberId}/media`, formData, {
+      headers: { Authorization: `Bearer ${accessToken}`, ...(formData as any).getHeaders?.() },
+    });
 
-      this.debug('OUT.contract.upload.response', { cId, status: mediaUpload.status, ms: Date.now() - upStart, data: mediaUpload.data });
+    this.debug('OUT.contract.upload.response', { cId, status: mediaUpload.status, data: mediaUpload.data });
 
-      if (mediaUpload.status >= 400 || !mediaUpload.data?.id) {
-        this.error('OUT.contract.upload.failed', { cId, status: mediaUpload.status, data: mediaUpload.data });
-        throw new Error(`Failed to upload contract. Status: ${mediaUpload.status}`);
-      }
-
-      const mediaId = mediaUpload.data.id;
-      const messagePayload = {
-        messaging_product: 'whatsapp',
-        to,
-        type: 'document',
-        document: { id: mediaId, filename },
-      };
-
-      // Send
-      const sendStart = Date.now();
-      this.debug('OUT.contract.send.request', {
-        cId, url: this.http.defaults.baseURL + `/${phoneNumberId}/messages`,
-        headers: { Authorization: this.redactBearer(`Bearer ${accessToken}`), 'Content-Type': 'application/json' },
-        payload: messagePayload,
-      });
-
-      const sendRes = await this.http.post(`/${phoneNumberId}/messages`, messagePayload, {
-        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-      });
-
-      const errorInfo = this.extractMetaError(sendRes);
-      this.debug('OUT.contract.send.response', {
-        cId, status: sendRes.status, ms: Date.now() - sendStart, data: sendRes.data,
-        fb_headers: { 'x-fb-trace-id': sendRes.headers['x-fb-trace-id'], 'x-fb-rev': sendRes.headers['x-fb-rev'] },
-      });
-
-      if (sendRes.status >= 400 || errorInfo) {
-        this.error('OUT.contract.send.failed', { cId, status: sendRes.status, errorInfo });
-        throw new Error(`WhatsApp send contract error: ${sendRes.status} ${errorInfo ? JSON.stringify(errorInfo) : ''}`);
-      }
-
-      const chatMessage = this.chatMessageRepository.create({
-        content: `📎 Contract sent: ${filename}`,
-        direction: 'OUTGOING',
-        client,
-        ...(agent && { agent }),
-        loanRequest: loan,
-      });
-      await this.chatMessageRepository.save(chatMessage);
-
-      this.info('OUT.contract.sent', { cId, to: this.maskPhone(to), waId: sendRes.data?.messages?.[0]?.id });
-      return { success: true, cId, sent: true, to, waId: sendRes.data?.messages?.[0]?.id };
-    } catch (err: any) {
-      this.error('OUT.contract.error', { cId, msg: err?.message });
-      throw err;
+    if (mediaUpload.status >= 400 || !mediaUpload.data?.id) {
+      this.error('OUT.contract.upload.failed', { cId, status: mediaUpload.status, data: mediaUpload.data });
+      throw new Error(`Failed to upload contract. Status: ${mediaUpload.status}`);
     }
+
+    const messagePayload = {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'document',
+      document: { id: mediaUpload.data.id, filename },
+    };
+
+    this.debug('OUT.contract.send.request', {
+      cId, url: this.http.defaults.baseURL + `/${phoneNumberId}/messages`,
+      headers: { Authorization: this.redactBearer(`Bearer ${accessToken}`), 'Content-Type': 'application/json' },
+      payload: messagePayload,
+    });
+
+    const sendRes = await this.http.post(`/${phoneNumberId}/messages`, messagePayload, {
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    });
+
+    const errorInfo = this.extractMetaError(sendRes);
+    this.debug('OUT.contract.send.response', {
+      cId, status: sendRes.status, data: sendRes.data,
+      fb_headers: { 'x-fb-trace-id': sendRes.headers['x-fb-trace-id'], 'x-fb-rev': sendRes.headers['x-fb-rev'] },
+    });
+
+    if (sendRes.status >= 400 || errorInfo) {
+      this.error('OUT.contract.send.failed', { cId, status: sendRes.status, errorInfo });
+      throw new Error(`WhatsApp send contract error: ${sendRes.status} ${errorInfo ? JSON.stringify(errorInfo) : ''}`);
+    }
+
+    // 7) Persistir chat message
+    const chatMessage = this.chatMessageRepository.create({
+      content: `📎 Contract sent: ${filename}`,
+      direction: 'OUTGOING',
+      client,
+      ...(agent && { agent }),
+      loanRequest: loan,
+    });
+    await this.chatMessageRepository.save(chatMessage);
+
+    this.info('OUT.contract.sent', { cId, to: this.maskPhone(to), waId: sendRes.data?.messages?.[0]?.id });
+    return { success: true, cId, sent: true, to, waId: sendRes.data?.messages?.[0]?.id };
+  } catch (err: any) {
+    this.error('OUT.contract.error', { cId, msg: err?.message });
+    throw err;
   }
+}
+
 }

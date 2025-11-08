@@ -1,5 +1,5 @@
 ///src/chat/chat.controller.ts
-import { Controller, Get, Post, Query, Body, Req, Res, Param, NotFoundException, UseInterceptors, UploadedFile} from '@nestjs/common';
+import { Controller, Get, Post, Query, Body, Req, Res, Param, NotFoundException, UseInterceptors, UploadedFile, ParseIntPipe} from '@nestjs/common';
 import { Response, Request } from 'express';
 import { ChatService } from './chat.service';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -67,6 +67,13 @@ export class ChatController {
     @Body('clientId') clientId: number,
   ) {
     return this.chatService.sendSimulationToClient(+clientId, file);
+  }
+
+  @Post('/send-contract/:loanRequestId')
+  async sendContractToClient(
+    @Param('loanRequestId', ParseIntPipe) loanRequestId: number,
+  ) {
+    return this.chatService.sendContractToClient(loanRequestId);
   }
   
   

@@ -12,6 +12,7 @@ import { User } from './user.entity';
 import { LoanRequest } from './loan-request.entity';
 import { Document } from './document.entity';
 import { ChatMessage } from './chat-message.entity';
+import { Country } from './country.entity';
 
 const jsonArrayTransformer = {
   to(value?: Array<{ key: string; type: 'text' | 'number' | 'link'; value: any }>) {
@@ -127,4 +128,12 @@ export class Client {
     transformer: jsonArrayTransformer,
   })
   customFields: Array<{ key: string; type: 'text'|'number'|'link'; value: any }>;
+
+  @ManyToOne(() => Country, c => c.branches, {
+  nullable: true,            // <── permitir null temporalmente
+  onDelete: 'SET NULL',
+})
+@JoinColumn({ name: 'countryId' })
+country: Country;
+
 }

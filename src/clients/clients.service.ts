@@ -8,15 +8,25 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Client } from '../entities/client.entity';
 import { LoanRequest } from 'src/entities/loan-request.entity';
+import { User } from 'src/entities/user.entity';
+import { Country } from 'src/entities/country.entity';
 
 @Injectable()
 export class ClientsService {
   constructor(
     @InjectRepository(Client)
     private readonly clientRepository: Repository<Client>,
-    
+
     @InjectRepository(LoanRequest)
     private readonly loanRequestRepository: Repository<LoanRequest>,
+
+    // ⬇️ NUEVO: para scoping por rol/branch.country
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
+
+    // ⬇️ NUEVO: para validar que el country exista en create/update
+    @InjectRepository(Country)
+    private readonly countryRepository: Repository<Country>,
   ) {}
   
   // ============================================================
@@ -112,260 +122,295 @@ export class ClientsService {
   // ============================================================
   // =======================  UPDATE  ===========================
   // ============================================================
-  async update(id: number, data: any): Promise<Client> {
-    const client = await this.clientRepository.findOne({
-      where: { id },
-      relations: ['agent'],
-    });
-    
-    if (!client) {
-      throw new NotFoundException('Client not found');
+ async update(id: number, data: any): Promise<Client> {
+  const client = await this.clientRepository.findOne({
+    where: { id },
+    relations: ['agent'], // lo tuyo
+  });
+  if (!client) {
+    throw new NotFoundException('Client not found');
+  }
+
+  // Campos permitidos (agregamos countryId)
+  const allowedFields = [
+    'name',
+    'phone',
+    'email',
+    'document',
+    'documentType',
+    'address',
+    'status',
+    'notes',
+    'notEligible',
+    'lead',
+    'phone2',
+    'address2',
+    'referenceName',
+    'referencePhone',
+    'referenceRelationship',
+    'customFields',
+    'countryId', // ⬅️ NUEVO
+  ];
+
+  // ⬇️ Si viene countryId, validar existencia
+  if ('countryId' in data) {
+    const newCountryId = Number(data.countryId);
+    if (!Number.isFinite(newCountryId)) {
+      throw new BadRequestException('countryId inválido.');
     }
-    
-    // Añadimos 'customFields' a la lista de permitidos
-    const allowedFields = [
-      'name',
-      'phone',
-      'email',
-      'document',
-      'documentType',
-      'address',
-      'status',
-      'notes',
-      'notEligible',
-      'lead',
-      'phone2',
-      'address2',
-      'referenceName',
-      'referencePhone',
-      'referenceRelationship',
-      'customFields',
-    ];
-    
-    for (const key of allowedFields) {
-      if (key in data) {
-        if (key === 'customFields') {
-          client.customFields = this.normalizeCustomFields(data.customFields);
-        } else {
-          // @ts-ignore
-          client[key] = data[key];
-        }
+    const exists = await this.countryRepository.exist({ where: { id: newCountryId } });
+    if (!exists) throw new BadRequestException('El país indicado no existe.');
+
+    // (Opcional) bloqueo seguro: si hay loans activos con agente de otro país
+    // podrías impedir el cambio. Aquí solo verificamos y permitimos;
+    // si quieres bloquear, descomenta:
+    //
+    // const hasMismatch = await this.loanRequestRepository.createQueryBuilder('loan')
+    //   .leftJoin('loan.agent', 'agent')
+    //   .leftJoin('agent.branch', 'branch')
+    //   .where('loan.clientId = :cid', { cid: id })
+    //   .andWhere('LOWER(loan.status) IN (:...active)', { active: ['funded','renewed'] })
+    //   .andWhere('branch.countryId <> :nc', { nc: newCountryId })
+    //   .getExists();
+    // if (hasMismatch) {
+    //   throw new ConflictException('No puedes cambiar el país: hay préstamos activos con agentes de otro país.');
+    // }
+  }
+
+  // Aplicar cambios permitidos
+  for (const key of allowedFields) {
+    if (key in data) {
+      if (key === 'customFields') {
+        client.customFields = this.normalizeCustomFields(data.customFields);
+      } else {
+        // @ts-ignore
+        client[key] = data[key];
       }
     }
-    
-    return this.clientRepository.save(client);
   }
+
+  // Asegurar consistencia mínima
+  if ((client as any).branchId) {
+    // el cliente NO debe tener branch
+    (client as any).branchId = null;
+  }
+
+  client.updatedAt = new Date();
+  return this.clientRepository.save(client);
+}
+
   
   // ============================================================
   // ========================  FIND ALL  ========================
   // ============================================================
-  async findAll(
-    limit: number = 10,
-    page: number = 1,
-    filters?: {
-      status?: 'active' | 'inactive' | 'rejected' | 'prospect';
-      document?: string;
-      name?: string;
-      mode?: string;
-      type?: string;
-      paymentDay?: string;
-      agent?: number;
-      branch?: number;
-    },
-  ): Promise<any> {
-    
-    console.log("AGENTE:", filters?.agent);
-    // ---------- Load loans ----------
-    const loans = await this.loanRequestRepository.find({
-      relations: { client: true, transactions: true, agent: true },
-      order: { createdAt: 'DESC' },
-    });
-    
-    // Normalize numeric filters if present
-    if (filters?.agent) filters.agent = Number(filters.agent);
-    if (filters?.branch) filters.branch = Number(filters.branch);
-    
-    const lower = (s?: string) => String(s ?? '').toLowerCase();
-    
-    // Active means funded OR renewed
-    const isActiveLoan = (s?: string) => {
-      const st = lower(s);
-      return st === 'funded' || st === 'renewed';
-    };
-    
-    // Robust tx type extraction (handles different entity field names/casing)
-    const txTypeOf = (t: any) =>
-      lower((t?.type ?? t?.transactionType ?? t?.Transactiontype) as string);
-    
-    // Days late helper (compares to now)
-    const now = new Date();
-    const daysLateOf = (end?: Date | string | null) => {
-      const d = end ? new Date(end) : null;
-      return d && now > d ? Math.floor((now.getTime() - d.getTime()) / 86_400_000) : 0;
-    };
-    
-    let totalActiveAmountBorrowed = 0;
-    let totalActiveRepayment = 0;
-    const activeClientIds = new Set<number>();
-    let mora15 = 0;
-    let critical20 = 0;
-    let noPayment30 = 0;
-    
-    const items: any[] = [];
-    
-    // ---------- Iterate loans ----------
-    for (const loan of loans) {
-      const client = loan.client;
-      if (!client) continue;
-      
-      // Client-level filters
-      if (filters?.document && !client.document?.includes(filters.document)) continue;
-      if (filters?.name && !client.name?.toLowerCase().includes(filters.name.toLowerCase())) continue;
-      
-      // Derived loan status for filtering
-      const derivedStatus: 'active' | 'inactive' = isActiveLoan(loan.status) ? 'active' : 'inactive';
-      
-      // Status filter logic
-      if (filters?.status && filters.status !== 'prospect') {
-        if (filters.status === 'rejected') {
-          if (lower(loan.status) !== 'rejected') continue;
-        } else {
-          if (filters.status !== derivedStatus) continue;
-        }
-      } else if (filters?.status === 'prospect') {
-        // "prospect" means clients without any loan request — handled later
-        continue;
+async findAll(
+  limit: number = 10,
+  page: number = 1,
+  filters: {
+    status?: 'active' | 'inactive' | 'rejected';
+    document?: string;
+    name?: string;
+    mode?: string;
+    type?: string;
+    paymentDay?: string;
+    agent?: number;
+    branch?: number;     // branch del agente (filtro adicional opcional)
+    countryId?: number;  // país del cliente (filtro adicional opcional)
+  } = {},
+  requesterUserId: number, // ⬅️ SOLO el id del usuario que hace la petición
+): Promise<any> {
+  // ───────────────────────────────────────────────────────────────
+  // 0) Cargar el usuario solicitante y derivar su scope
+  // ───────────────────────────────────────────────────────────────
+  const requester = await this.userRepository.findOne({
+    where: { id: requesterUserId },
+    relations: ['branch', 'managerCountry'],
+  });
+  if (!requester) {
+    throw new BadRequestException('Usuario solicitante no existe.');
+  }
+
+  const role = String(requester.role).toUpperCase();
+  let adminBranchId: number | null = null;
+  let managerCountryId: number | null = null;
+
+  if (role === 'ADMIN') {
+    adminBranchId = (requester as any)?.branch?.id ?? (requester as any)?.branchId ?? null;
+    if (!adminBranchId) {
+      throw new BadRequestException('El ADMIN no tiene branch asignada.');
+    }
+  } else if (role === 'MANAGER') {
+    managerCountryId =
+      (requester as any)?.managerCountryId ??
+      (requester as any)?.managerCountry?.id ??
+      null;
+    if (managerCountryId == null) {
+      throw new BadRequestException('No se pudo determinar managerCountryId para el MANAGER.');
+    }
+  } else if (role !== 'AGENT') {
+    throw new BadRequestException('Rol no soportado. Use AGENT | ADMIN | MANAGER.');
+  }
+
+  // ───────────────────────────────────────────────────────────────
+  // 1) Traer loans con joins para poder filtrar por agente/branch/país
+  // ───────────────────────────────────────────────────────────────
+  const loans = await this.loanRequestRepository.find({
+    relations: { client: true, transactions: true, agent: { branch: true } },
+    order: { createdAt: 'DESC' },
+  });
+
+  // ───────────────────────────────────────────────────────────────
+  // 2) Helpers
+  // ───────────────────────────────────────────────────────────────
+  const lower = (s?: string) => String(s ?? '').toLowerCase();
+  const isActiveLoan = (s?: string) => ['funded', 'renewed'].includes(lower(s));
+  const txTypeOf = (t: any) =>
+    lower((t?.type ?? t?.transactionType ?? t?.Transactiontype) as string);
+  const now = new Date();
+  const daysLateOf = (end?: Date | string | null) => {
+    const d = end ? new Date(end) : null;
+    return d && now > d ? Math.floor((now.getTime() - d.getTime()) / 86_400_000) : 0;
+  };
+
+  // ───────────────────────────────────────────────────────────────
+  // 3) Agregadores y resultado
+  // ───────────────────────────────────────────────────────────────
+  let totalActiveAmountBorrowed = 0;
+  let totalActiveRepayment = 0;
+  const activeClientIds = new Set<number>();
+  let mora15 = 0;
+  let critical20 = 0;
+  let noPayment30 = 0;
+
+  const items: any[] = [];
+
+  // ───────────────────────────────────────────────────────────────
+  // 4) Iterar loans aplicando SCOPE por rol + filtros
+  // ───────────────────────────────────────────────────────────────
+  for (const loan of loans) {
+    const client = loan.client;
+    const agent  = loan.agent;
+    const branch = agent?.branch as any;
+    if (!client || !agent || !branch) continue;
+
+    // ── SCOPE ──
+    if (role === 'AGENT') {
+      if (agent.id !== requester.id) continue;                   // agente: solo sus loans
+    } else if (role === 'ADMIN') {
+      if (branch.id !== adminBranchId) continue;                 // admin: loans de su branch
+    } else if (role === 'MANAGER') {
+      if ((branch as any).countryId !== managerCountryId) continue; // manager: loans de branches de su país
+    }
+
+    // ── FILTROS ADICIONALES (combinados con el scope) ──
+    if (filters.countryId && client.country.id !== filters.countryId) continue;
+    if (filters.branch && branch.id !== filters.branch) continue;
+    if (filters.agent && agent.id !== filters.agent) continue;
+    if (filters.document && !client.document?.includes(filters.document)) continue;
+    if (filters.name && !client.name?.toLowerCase().includes(filters.name.toLowerCase())) continue;
+
+    const derivedStatus: 'active' | 'inactive' =
+      isActiveLoan(loan.status) ? 'active' : 'inactive';
+
+    if (filters.status) {
+      if (filters.status === 'rejected') {
+        if (lower(loan.status) !== 'rejected') continue;
+      } else {
+        if (filters.status !== derivedStatus) continue;
       }
-      
-      // Additional loan-level filters
-      if (filters?.mode && String(loan.mode) !== filters.mode) continue;
-      if (filters?.type && loan.type !== filters.type) continue;
-      if (filters?.paymentDay && loan.paymentDay !== filters.paymentDay) continue;
-      if (filters?.agent && loan.agent?.id !== filters.agent) continue;
-      if (filters?.branch && (loan.agent as any)?.branchId !== filters.branch) continue;
-      
-      // Per-loan numbers
-      const amountBorrowed = Number(loan.amount ?? 0);
-      
-      // Sum only true repayments; add status/void checks if your entity has them
-      const totalRepayment = (loan.transactions ?? [])
+    }
+
+    if (filters.mode && String(loan.mode) !== filters.mode) continue;
+    if (filters.type && loan.type !== filters.type) continue;
+    if (filters.paymentDay && loan.paymentDay !== filters.paymentDay) continue;
+
+    // ── Métricas por loan ──
+    const amountBorrowed  = Number(loan.amount ?? 0);
+    const totalRepayment  = (loan.transactions ?? [])
       .filter((t) => txTypeOf(t) === 'repayment')
       .reduce((s, t) => s + Number(t?.amount ?? 0), 0);
-      
-      // Guard against negatives (overpayments/rounding)
-      const remainingAmount = Math.max(0, amountBorrowed - totalRepayment);
-      
-      const daysLate = daysLateOf(loan.endDateAt);
-      
-      // Global aggregates for active loans only
-      if (derivedStatus === 'active') {
-        totalActiveAmountBorrowed += amountBorrowed;
-        totalActiveRepayment += totalRepayment;
-        if (client.id) activeClientIds.add(client.id);
-        
-        if (daysLate > 0) {
-          if (daysLate >= 30) noPayment30++;
-          else if (daysLate > 20) critical20++;
-          else if (daysLate > 15) mora15++;
-        }
+    const remainingAmount = Math.max(0, amountBorrowed - totalRepayment);
+    const daysLate        = daysLateOf(loan.endDateAt);
+
+    if (derivedStatus === 'active') {
+      totalActiveAmountBorrowed += amountBorrowed;
+      totalActiveRepayment     += totalRepayment;
+      if (client.id) activeClientIds.add(client.id);
+
+      if (daysLate > 0) {
+        if (daysLate >= 30)     noPayment30++;
+        else if (daysLate > 20) critical20++;
+        else if (daysLate > 15) mora15++;
       }
-      
-      const lastTransaction = (loan.transactions ?? [])
+    }
+
+    const lastTransaction = (loan.transactions ?? [])
       .filter(t => txTypeOf(t) === 'repayment')
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-      
-      items.push({
-        client, // includes customFields implicitly if defined on entity
-        agent: loan.agent ? { id: loan.agent.id, name: loan.agent.name } : null,
-        loanRequest: {
-          id: loan.id,
-          status: loan.status,
-          amount: loan.amount,
-          requestedAmount: loan.requestedAmount,
-          createdAt: loan.createdAt,
-          updatedAt: loan.updatedAt,
-          type: loan.type,
-          mode: loan.mode,
-          mora: loan.mora,
-          endDateAt: loan.endDateAt,
-          paymentDay: loan.paymentDay,
-          transactions: loan.transactions,
-          latestPayment : lastTransaction[0] ?? null
-        },
-        totalRepayment,
-        amountBorrowed,
-        remainingAmount,
-        daysLate,
-        status: derivedStatus, // 'active' | 'inactive'
-      });
-    }
-    
-    // ---------- Include clients with NO loan requests ----------
-    const includeClientsWithoutLoans = !filters?.status || filters.status === 'prospect';
-    
-    if (includeClientsWithoutLoans) {
-      const qb = this.clientRepository
-      .createQueryBuilder('client')
-      .leftJoin('client.loanRequests', 'lr')
-      .where('lr.id IS NULL');
-      
-      if (filters?.document) {
-        qb.andWhere('client.document LIKE :doc', { doc: `%${filters.document}%` });
-      }
-      if (filters?.name) {
-        qb.andWhere('LOWER(client.name) LIKE :name', { name: `%${filters.name.toLowerCase()}%` });
-      }
-      if (filters?.status === 'prospect') {
-        qb.andWhere('LOWER(client.status) = :st', { st: 'prospect' });
-      }
-      
-      const clientsWithoutLoans = await qb.getMany();
-      
-      for (const client of clientsWithoutLoans) {
-        items.push({
-          client,
-          agent: null,
-          loanRequest: null,
-          totalRepayment: 0,
-          amountBorrowed: 0,
-          remainingAmount: 0,
-          daysLate: 0,
-          status: 'prospect' as const,
-        });
-      }
-    }
-    
-    // ---------- Sort & paginate ----------
-    items.sort((a, b) => {
-      const aDate = a.loanRequest?.createdAt ?? a.client?.createdAt ?? new Date(0);
-      const bDate = b.loanRequest?.createdAt ?? b.client?.createdAt ?? new Date(0);
-      return new Date(bDate).getTime() - new Date(aDate).getTime();
+
+    // Cada item es un LOAN (el cliente puede repetirse si tiene varios)
+    items.push({
+      client,
+      agent: { id: agent.id, name: agent.name },
+      loanRequest: {
+        id: loan.id,
+        status: loan.status,
+        amount: loan.amount,
+        requestedAmount: loan.requestedAmount,
+        createdAt: loan.createdAt,
+        updatedAt: loan.updatedAt,
+        type: loan.type,
+        mode: loan.mode,
+        mora: loan.mora,
+        endDateAt: loan.endDateAt,
+        paymentDay: loan.paymentDay,
+        transactions: loan.transactions,
+        latestPayment: lastTransaction[0] ?? null,
+      },
+      totalRepayment,
+      amountBorrowed,
+      remainingAmount,
+      daysLate,
+      status: derivedStatus,
     });
-    
-    const totalItems = items.length;
-    const startIndex = (page - 1) * limit;
-    const data = items.slice(startIndex, startIndex + limit);
-    
-    // ---------- Remaining total ONLY for active (funded + renewed) ----------
-    const remainingTotal = items
+  }
+
+  // ───────────────────────────────────────────────────────────────
+  // 5) Orden y paginación
+  // ───────────────────────────────────────────────────────────────
+  items.sort((a, b) => {
+    const aDate = a.loanRequest?.createdAt ?? a.client?.createdAt ?? new Date(0);
+    const bDate = b.loanRequest?.createdAt ?? b.client?.createdAt ?? new Date(0);
+    return new Date(bDate).getTime() - new Date(aDate).getTime();
+  });
+
+  const totalItems = items.length;
+  const startIndex = (page - 1) * limit;
+  const data = items.slice(startIndex, startIndex + limit);
+
+  // ───────────────────────────────────────────────────────────────
+  // 6) Totales de cartera (solo loans activos)
+  // ───────────────────────────────────────────────────────────────
+  const remainingTotal = items
     .filter((it) => it.loanRequest && isActiveLoan(it.loanRequest.status))
     .reduce((sum, it) => sum + Number(it.remainingAmount ?? 0), 0);
-    
-    return {
-      page,
-      limit,
-      totalItems,
-      totalPages: Math.ceil(totalItems / limit),
-      totalActiveAmountBorrowed,
-      totalActiveRepayment,
-      activeClientsCount: activeClientIds.size,
-      mora15,
-      critical20,
-      noPayment30,
-      remainingTotal, // fixed name + logic
-      data,
-    };
-  }
+
+  return {
+    page,
+    limit,
+    totalItems,
+    totalPages: Math.ceil(totalItems / limit),
+    totalActiveAmountBorrowed,
+    totalActiveRepayment,
+    activeClientsCount: activeClientIds.size,
+    mora15,
+    critical20,
+    noPayment30,
+    remainingTotal,
+    data,
+  };
+}
+
   
   
   // ============================================================
@@ -701,6 +746,7 @@ private async sendOnboardingIfConfigured(client: Client): Promise<void> {
 // =========================  CREATE  =========================
 // ============================================================
 async create(data: Partial<Client>): Promise<Client> {
+  // 1) Validación de duplicados por document/email (tu lógica)
   if (data.document || data.email) {
     const dup = await this.clientRepository.findOne({
       where: [
@@ -708,31 +754,56 @@ async create(data: Partial<Client>): Promise<Client> {
         data.email ? { email: data.email } : ({} as any),
       ],
     });
-    
     if (dup) {
       throw new ConflictException(
         'A client with the same document or email already exists',
       );
     }
   }
-  
-  // Normaliza customFields (si no viene, queda [])
-  const customFields = this.normalizeCustomFields(
-    (data as any)?.customFields,
-  );
-  
-  const client = this.clientRepository.create({
+
+  // 2) Resolver countryId desde el payload (countryId o country.id)
+  const rawCountryId =
+    (data as any)?.countryId ??
+    (data as any)?.country?.id ??
+    null;
+
+  const countryIdNum = Number(rawCountryId);
+  if (!rawCountryId || !Number.isFinite(countryIdNum)) {
+    throw new BadRequestException('countryId es obligatorio y debe ser numérico para crear un cliente.');
+  }
+
+  // 3) Verificar que el país exista
+  const country = await this.countryRepository.findOne({ where: { id: countryIdNum } });
+  if (!country) {
+    throw new BadRequestException('El país indicado no existe.');
+  }
+
+  // 4) Normalizar customFields
+  const customFields = this.normalizeCustomFields((data as any)?.customFields);
+
+  // 5) Armar payload "sanitizado"
+  const sanitized: Partial<Client> = {
     ...data,
+    country,        // ← asignar la relación; NO existe client.countryId
     customFields,
     createdAt: new Date(),
     updatedAt: new Date(),
-  });
-  
+  };
+
+  // limpiar claves que no deben llegar
+  delete (sanitized as any).countryId;
+  delete (sanitized as any).branch;
+  delete (sanitized as any).branchId;
+
+  // 6) Persistir
+  const client = this.clientRepository.create(sanitized);
   const saved = await this.clientRepository.save(client);
-  
-  // Dispara WhatsApp (no bloqueante)
-  //this.sendOnboardingIfConfigured(saved).catch(() => {});
-  
+
+  // 7) (Opcional) WhatsApp onboarding
+  // this.sendOnboardingIfConfigured(saved).catch(() => {});
+
   return saved;
 }
+
+
 }

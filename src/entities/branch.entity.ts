@@ -7,9 +7,10 @@ import {
   OneToMany,
   CreateDateColumn,
   UpdateDateColumn,
+  ManyToOne,
 } from 'typeorm';
 import { User } from './user.entity';
-
+import { Country } from './country.entity';
 @Entity()
 export class Branch {
   @PrimaryGeneratedColumn()
@@ -21,6 +22,16 @@ export class Branch {
   /** País de la sede en ISO-2 (p. ej. 'CO', 'CR') */
   @Column({ length: 2, nullable: true })
   countryIso2?: string;
+
+@ManyToOne(() => Country, c => c.branches, {
+  nullable: true,            // <── permitir null temporalmente
+  onDelete: 'SET NULL',
+})
+@JoinColumn({ name: 'countryId' })
+country: Country;
+
+@Column({ type: 'int', nullable: true }) // <── permitir null temporalmente
+countryId: number;
 
   /** Indicativo telefónico del país que atiende esta sede (p. ej. '57', '506') */
   @Column({ length: 6, nullable: true })

@@ -9,12 +9,12 @@ import { User } from 'src/entities/user.entity'
 import { Notification } from 'src/notifications/notifications.entity';
 import { BadRequestException } from '@nestjs/common';
 import { Client, ClientStatus } from 'src/entities/client.entity';
- 
+
 
 
 @Injectable()
 export class LoanRequestService {
-
+  
   constructor(
     @InjectRepository(LoanRequest)
     private readonly loanRequestRepository: Repository<LoanRequest>,
@@ -32,7 +32,10 @@ export class LoanRequestService {
   
   
   async create(data: Partial<LoanRequest>): Promise<LoanRequest> {
-    // ── 0) Validar cliente y traer su teléfono ────────────────────────────────
+    // ────────────────────────────────────────────────────────────────
+    // 0) Obtener y validar el CLIENTE
+    //    Acepta id numérico o un objeto { id: ... }
+    // ────────────────────────────────────────────────────────────────
     const clientId =
     typeof data.client === 'number'
     ? data.client
@@ -43,136 +46,90 @@ export class LoanRequestService {
     }
     
     const client = await this.clientRepository.findOne({ where: { id: clientId } });
-    if (!client || !client.phone) {
-      throw new BadRequestException('Cliente no encontrado o sin teléfono.');
+    if (!client) {
+      throw new BadRequestException('Cliente no encontrado.');
     }
+    // Se asume que client.countryId existe (según tus entidades)
     
-    // ── 1) Normalizar teléfono y extraer código de país (indicativo) ─────────
-    // 1) Mueve los indicativos conocidos arriba para reutilizarlos
-    const KNOWN_CCS = ['57', '506']; // CO, CR (agrega más si abres países)
-    
-    // ── 1) Normalizar teléfono y extraer código de país (indicativo) ─────────
-    const toE164Basic = (phone: string, fallbackCc = '57'): string => {
-      const raw = (phone || '').trim();
-      if (!raw) return '';
-      
-      // +E164
-      if (raw.startsWith('+')) {
-        return raw.replace(/[^\d+]/g, '');
-      }
-      
-      // 00 internacional
-      if (raw.startsWith('00')) {
-        const digits = raw.replace(/\D/g, '').slice(2);
-        return digits ? `+${digits}` : '';
-      }
-      
-      // Solo dígitos
-      const digitsOnly = raw.replace(/\D/g, '');
-      if (!digitsOnly) return '';
-      
-      // Si ya empieza con un indicativo conocido (p.ej. 57 o 506) -> anteponer '+'
-      for (const cc of KNOWN_CCS) {
-        if (digitsOnly.startsWith(cc)) {
-          return `+${digitsOnly}`;
-        }
-      }
-      
-      // Heurística CO: 10 dígitos y empieza por '3' => celular CO
-      if (digitsOnly.length === 10 && digitsOnly.startsWith('3')) {
-        return `+57${digitsOnly}`;
-      }
-      
-      // Si parece internacional (>=11 dígitos), anteponer '+'
-      if (digitsOnly.length >= 11) {
-        return `+${digitsOnly}`;
-      }
-      
-      // Fallback
-      return `+${fallbackCc}${digitsOnly}`;
-    };
-    
-    // ❗ Nueva versión: NO regex codiciosa; valida contra KNOWN_CCS
-    const getCountryCallingCode = (e164: string): string | null => {
-      const digits = (e164 || '').replace(/[^\d]/g, ''); // quita '+'
-      if (!digits) return null;
-      // prioriza coincidencias de 3, luego 2, luego 1 (si tuvieras otras)
-      const ordered = [...KNOWN_CCS].sort((a, b) => b.length - a.length);
-      for (const cc of ordered) {
-        if (digits.startsWith(cc)) return cc;
-      }
-      // Si no está en la lista, como último recurso toma 1–3 dígitos (no recomendado)
-      return digits.slice(0, Math.min(3, digits.length));
-    };
-    
-    
-    const e164 = toE164Basic(client.phone);
-    const ccode = getCountryCallingCode(e164);
-    if (!ccode) {
-      throw new BadRequestException('No se pudo determinar el país del teléfono del cliente.');
-    }
-    
-    // ── 2) (Opcional) Bloqueo si ya tiene una solicitud abierta ───────────────
-    // Mantengo tu lógica original comentada:
-    if (clientId) {
-      const hasOpen = await this.loanRequestRepository.exist({
-        where: {
-          client: { id: clientId },
-          status: Not(In([LoanRequestStatus.COMPLETED, LoanRequestStatus.REJECTED])),
-        },
-      });
-      // if (hasOpen) {
-      //   throw new BadRequestException('El cliente ya tiene una solicitud abierta.');
-      // }
-    }
-    
-    // ── 3) Selección de agente por país (branch.phoneCountryCode) ─────────────
+    // ────────────────────────────────────────────────────────────────
+    // 1) Resolver/validar el AGENTE por país:
+    //    Regla: agent.branch.countryId === client.countryId
+    // ────────────────────────────────────────────────────────────────
     if (!data.agent) {
-      // Tomar un AGENTE aleatorio de sedes que acepten ese indicativo
+      // No se envió agente: elegimos uno aleatorio del MISMO país del cliente
       const randomAgent = await this.userRepository
       .createQueryBuilder('user')
       .leftJoinAndSelect('user.branch', 'branch')
       .where('user.role = :role', { role: 'AGENT' })
-      .andWhere('branch.acceptsInbound = :acc', { acc: true })
-      .andWhere('branch.phoneCountryCode = :pcc', { pcc: ccode })
-      .orderBy('RANDOM()')
+      .andWhere('branch.countryId = :cid', { cid: client.country.id })
+      // Si usas alguna bandera en branch (como acceptsInbound), la puedes añadir:
+      // .andWhere('branch.acceptsInbound = :acc', { acc: true })
+      .orderBy('RANDOM()') // SQLite/Postgres; en MySQL sería RAND()
       .limit(1)
       .getOne();
       
       if (!randomAgent) {
-        // Si no hay agente/sede para ese país → NO crear solicitud
-        throw new BadRequestException(
-          `No hay sedes/agentes configurados para el país con indicativo +${ccode}. No se crea la solicitud.`
-        );
+        throw new BadRequestException('No hay agentes disponibles en el país del cliente.');
       }
       
-      data.agent = randomAgent;
+      data.agent = randomAgent; // normaliza a objeto
     } else {
-      // Si viene agente, validar que su branch coincida con el país detectado
+      // Se envió agente: validamos su branch contra el país del cliente
       const agentId = (data.agent as any)?.id ?? (data.agent as any);
       const agent = await this.userRepository.findOne({
         where: { id: agentId },
         relations: ['branch'],
       });
       
-      if (!agent?.branch?.phoneCountryCode || agent.branch.phoneCountryCode !== ccode) {
+      if (!agent) {
+        throw new BadRequestException('Agente no existe.');
+      }
+      if (!agent.branch?.id) {
+        throw new BadRequestException('El agente no tiene branch asignada.');
+      }
+      if (agent.branch.countryId !== client.country.id) {
         throw new BadRequestException(
-          `El agente provisto no pertenece a una sede que atienda el país +${ccode}.`
+          'El agente debe pertenecer a una branch del mismo país que el cliente.',
         );
       }
+      
+      data.agent = agent; // normaliza a objeto
     }
     
-    // ── 4) Completar y persistir ──────────────────────────────────────────────
-    data.client = client; // asegurar referencia
-data.mode = (
-  data.amount
-    ? (data.amount < 1000 ? data.amount : data.amount / 1000)
-    : 100
-).toString().concat('X1');
+    // ────────────────────────────────────────────────────────────────
+    // 2) (Opcional) Chequeo de “ya tiene solicitud abierta”
+    //    Dejo tu lógica tal cual (descomentá si quieres bloquear)
+    // ────────────────────────────────────────────────────────────────
+    const hasOpen = await this.loanRequestRepository.exist({
+      where: {
+        client: { id: clientId },
+        status: Not(In([LoanRequestStatus.COMPLETED, LoanRequestStatus.REJECTED])),
+      },
+    });
+    // if (hasOpen) {
+    //   throw new BadRequestException('El cliente ya tiene una solicitud abierta.');
+    // }
+    
+    // ────────────────────────────────────────────────────────────────
+    // 3) Completar datos derivados y persistir
+    // ────────────────────────────────────────────────────────────────
+    data.client = client; // asegurar relación
+    
+    // Conserva tu cálculo de 'mode'
+    data.mode = (
+      data.amount
+      ? (data.amount < 1000 ? data.amount : (data.amount as number) / 1000)
+      : 100
+    ).toString().concat('X1');
+    
+    // ⚠️ No seteo ningún estado por defecto (no invento 'PENDING')
+    //    Si tu flujo necesita un estado inicial, lo envías en `data.status`
+    //    desde el controller y aquí se respeta tal cual.
     
     const loanRequest = this.loanRequestRepository.create(data);
     return await this.loanRequestRepository.save(loanRequest);
   }
+  
   
   async renewLoanRequest(
     loanRequestId: number,
@@ -256,6 +213,7 @@ data.mode = (
       agentId?: number;
       branchId?: number;
     },
+    currentUser?: User, // <- pásalo opcionalmente desde el controller
   ): Promise<{
     data: LoanRequest[];
     totalItems: number;
@@ -263,22 +221,40 @@ data.mode = (
     page: number;
     limit: number;
   }> {
-    console.log(filters)
-    /* ───── Base query ───── */
     const qb = this.loanRequestRepository
     .createQueryBuilder('loan')
     .leftJoinAndSelect('loan.client', 'client')
     .leftJoinAndSelect('loan.agent',  'agent')
-    /* Join the branch table; we do not need to select its columns */
     .leftJoinAndSelect('agent.branch', 'branch')
     .select([
       'loan',
       'client',
       'agent',
-      'branch'
-    ])
+      'branch',
+    ]);
     
-    /* ───── Dynamic filters ───── */
+    /* ───── Scope por rol ─────
+    AGENT   -> solo sus loans
+    MANAGER -> por país (client.countryId = manager.branch.countryId)
+    ADMIN   -> sin restricción
+    */
+    if (currentUser?.role === 'AGENT') {
+      qb.andWhere('loan.agentId = :me', { me: currentUser.id });
+    } else if (currentUser?.role === 'MANAGER') {
+      // cargar manager con su branch para inferir countryId (sin repos extra)
+      const me = await this.userRepository.findOne({
+        where: { id: currentUser.id },
+        relations: ['branch'],
+      });
+      if (!me?.branch?.id) {
+        throw new BadRequestException('El manager no tiene branch asignada para inferir su país.');
+      }
+      const managerCountryId = (me.branch as any).countryId;
+      qb.andWhere('client.countryId = :mc', { mc: managerCountryId });
+    }
+    // ADMIN/otros: sin restricción
+    
+    /* ───── Dynamic filters (igual que los tenías) ───── */
     if (filters?.id !== undefined)               qb.andWhere('loan.id = :id', { id: filters.id });
     if (filters?.amount !== undefined)           qb.andWhere('loan.amount = :amount', { amount: filters.amount });
     if (filters?.requestedAmount !== undefined)  qb.andWhere('loan.requestedAmount = :reqAmt', { reqAmt: filters.requestedAmount });
@@ -294,12 +270,9 @@ data.mode = (
     if (filters?.agentId !== undefined)          qb.andWhere('loan.agentId  = :agentId',  { agentId:  filters.agentId });
     if (filters?.branchId !== undefined)         qb.andWhere('branch.id     = :branchId', { branchId: filters.branchId });
     
-    /* ───── Sort & pagination ───── */
     qb.orderBy('loan.createdAt', 'DESC');
     
-    if (limit > 0 && page > 0) {
-      qb.skip((page - 1) * limit).take(limit);
-    }
+    if (limit > 0 && page > 0) qb.skip((page - 1) * limit).take(limit);
     
     const [data, totalItems] = await qb.getManyAndCount();
     
@@ -330,7 +303,8 @@ data.mode = (
       createdAt?: Date;
       updatedAt?: Date;
       clientId?: number;
-    }
+    },
+    currentUser?: User, // <- opcional para scoping
   ): Promise<{
     data: LoanRequest[];
     totalItems: number;
@@ -342,6 +316,7 @@ data.mode = (
     .createQueryBuilder('loan')
     .leftJoinAndSelect('loan.client', 'client')
     .leftJoinAndSelect('loan.agent',  'agent')
+    .leftJoinAndSelect('agent.branch', 'branch') // necesario para joins y (si quisieras) filtros por branch
     .leftJoinAndSelect('loan.transactions', 'tx')
     .select([
       'loan',
@@ -357,85 +332,70 @@ data.mode = (
       'tx.reference',
       'tx.daysLate',
     ])
-    // fixed agent filter
     .where('loan.agentId = :agentId', { agentId });
     
-    // ---------- dynamic filters on loan columns ----------
-    if (filters?.id !== undefined) {
-      qb.andWhere('loan.id = :id', { id: filters.id });
-    }
-    if (filters?.amount !== undefined) {
-      qb.andWhere('loan.amount = :amount', { amount: filters.amount });
-    }
-    if (filters?.requestedAmount !== undefined) {
-      qb.andWhere('loan.requestedAmount = :req', {
-        req: filters.requestedAmount,
+    /* ───── Scope por rol ───── */
+    if (currentUser?.role === 'AGENT') {
+      if (currentUser.id !== agentId) {
+        throw new BadRequestException('No autorizado para ver préstamos de otro agente');
+      }
+    } else if (currentUser?.role === 'MANAGER') {
+      const me = await this.userRepository.findOne({
+        where: { id: currentUser.id },
+        relations: ['branch'],
       });
+      if (!me?.branch?.id) {
+        throw new BadRequestException('El manager no tiene branch asignada para inferir su país.');
+      }
+      const managerCountryId = (me.branch as any).countryId;
+      // Filtramos por país a través del cliente (incluye TODAS las branches del país)
+      qb.andWhere('client.countryId = :mc', { mc: managerCountryId });
     }
-    if (filters?.status) {
-      qb.andWhere('loan.status = :status', { status: filters.status });
-    }
-    if (filters?.type) {
-      qb.andWhere('loan.type = :type', { type: filters.type });
-    }
-    if (filters?.mode) {
-      qb.andWhere('loan.mode = :mode', { mode: filters.mode });
-    }
-    if (filters?.mora !== undefined) {
-      qb.andWhere('loan.mora = :mora', { mora: filters.mora });
-    }
-    if (filters?.endDateAt) {
-      qb.andWhere('loan.endDateAt = :endDate', {
-        endDate: filters.endDateAt,
-      });
-    }
-    if (filters?.paymentDay) {
-      qb.andWhere('loan.paymentDay = :pd', { pd: filters.paymentDay });
-    }
-    if (filters?.createdAt) {
-      qb.andWhere('loan.createdAt = :ca', { ca: filters.createdAt });
-    }
-    if (filters?.updatedAt) {
-      qb.andWhere('loan.updatedAt = :ua', { ua: filters.updatedAt });
-    }
-    if (filters?.clientId !== undefined) {
-      qb.andWhere('loan.clientId = :cid', { cid: filters.clientId });
-    }
+    // ADMIN/otros: sin restricción
     
-    // pagination & ordering
+    // ---------- dynamic filters (sin cambios estructurales) ----------
+    if (filters?.id !== undefined)               qb.andWhere('loan.id = :id', { id: filters.id });
+    if (filters?.amount !== undefined)           qb.andWhere('loan.amount = :amount', { amount: filters.amount });
+    if (filters?.requestedAmount !== undefined)  qb.andWhere('loan.requestedAmount = :req', { req: filters.requestedAmount });
+    if (filters?.status)                         qb.andWhere('loan.status = :status', { status: filters.status });
+    if (filters?.type)                           qb.andWhere('loan.type = :type', { type: filters.type });
+    if (filters?.mode)                           qb.andWhere('loan.mode = :mode', { mode: filters.mode });
+    if (filters?.mora !== undefined)             qb.andWhere('loan.mora = :mora', { mora: filters.mora });
+    if (filters?.endDateAt)                      qb.andWhere('loan.endDateAt = :endDate', { endDate: filters.endDateAt });
+    if (filters?.paymentDay)                     qb.andWhere('loan.paymentDay = :pd', { pd: filters.paymentDay });
+    if (filters?.createdAt)                      qb.andWhere('loan.createdAt = :ca', { ca: filters.createdAt });
+    if (filters?.updatedAt)                      qb.andWhere('loan.updatedAt = :ua', { ua: filters.updatedAt });
+    if (filters?.clientId !== undefined)         qb.andWhere('loan.clientId = :cid', { cid: filters.clientId });
+    
+    // paginación y orden
     qb.orderBy('loan.createdAt', 'DESC')
     .addOrderBy('tx.date', 'ASC')
     .skip((page - 1) * limit)
     .take(limit);
     
-    const [data, totalItems] = await qb.getManyAndCount();
-
-    // helper exactamente igual al tuyo
+    const [rows, totalItems] = await qb.getManyAndCount();
+    
+    // helper exacto al tuyo
     const txTypeOf = (t: any) =>
       String(t?.type ?? t?.transactionType ?? t?.Transactiontype ?? '').toLowerCase();
-
-    // agregar campo lastRepayment a cada loan
-    const enhancedData = data.map(loan => {
+    
+    const data = rows.map(loan => {
       const repaymentTx = (loan.transactions ?? [])
-        .filter(tx => txTypeOf(tx) === 'repayment')
-        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
+      .filter(tx => txTypeOf(tx) === 'repayment')
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       const latestPayment = repaymentTx[0] ?? null;
-
-      return {
-        ...loan,
-        latestPayment
-      };
+      return { ...loan, latestPayment };
     });
-
+    
     return {
-      data: enhancedData,
+      data,
       totalItems,
       totalPages: Math.ceil(totalItems / limit),
       page,
       limit,
     };
   }
+  
   
   /** Returns the single open loan request for the client */
   async findOpenByClientId(clientId: number) {
@@ -455,6 +415,7 @@ data.mode = (
     }
     return openRequest;
   }
+  
   async findAllByClient(clientId: number) {
     const openRequest = await this.loanRequestRepository.find({
       where: {
@@ -473,22 +434,40 @@ data.mode = (
     return openRequest;
   }
   
-  async findById(id: number): Promise<LoanRequest | null> {
-    return this.loanRequestRepository
+  async findById(id: number, currentUser?: User): Promise<LoanRequest | null> {
+    const qb = this.loanRequestRepository
     .createQueryBuilder('loan')
     .leftJoinAndSelect('loan.client', 'client')
     .leftJoinAndSelect('loan.agent', 'agent')
-    .leftJoinAndSelect('loan.transactions', 'tx') // ← agregamos las transacciones
+    .leftJoinAndSelect('agent.branch', 'branch') // para joins y scoping
+    .leftJoinAndSelect('loan.transactions', 'tx')
     .select([
       'loan',
       'client',
       'agent.id', 'agent.name', 'agent.email', 'agent.role',
-      'tx.id', 'tx.amount', 'tx.Transactiontype', 'tx.date', 'tx.reference', 'tx.daysLate' // ← columnas reales de la entidad Transaction
+      'tx.id', 'tx.amount', 'tx.Transactiontype', 'tx.date', 'tx.reference', 'tx.daysLate',
     ])
-    .where('loan.id = :id', { id })
-    .orderBy('tx.date', 'ASC') // ← opcional para que salgan cronológicamente
-    .getOne();
+    .where('loan.id = :id', { id });
+    
+    // Scope por rol
+    if (currentUser?.role === 'AGENT') {
+      qb.andWhere('loan.agentId = :me', { me: currentUser.id });
+    } else if (currentUser?.role === 'MANAGER') {
+      const me = await this.userRepository.findOne({
+        where: { id: currentUser.id },
+        relations: ['branch'],
+      });
+      if (!me?.branch?.id) {
+        throw new BadRequestException('El manager no tiene branch asignada para inferir su país.');
+      }
+      const managerCountryId = (me.branch as any).countryId;
+      qb.andWhere('client.countryId = :mc', { mc: managerCountryId });
+    }
+    // ADMIN/otros: sin restricción
+    
+    return qb.getOne();
   }
+  
   
   
   async update(id: number, updateLoanRequestDto: UpdateLoanRequestDto): Promise<LoanRequest> {
@@ -513,10 +492,10 @@ data.mode = (
             payload:      { author :  { id: updated.agent.id, name: updated.agent.name },  loanRequestId: loanRequest.id},
             description : `El agente ${updated.agent.name} ha aprobado una nueva solicitud, revisa las solicitudes pendientes de desembolso.`
           }),
-
-
+          
+          
         );
-         
+        
       }
       return await this.loanRequestRepository.save(updated);
     }

@@ -679,8 +679,29 @@ private amountToWordsCOP(n: number): string {
 
 // ===== DOCX render & PDF =====
 private getTemplatePath(): string {
-  return join(__dirname, '..', 'assets', 'CONTRATO_DE_MUTUO.docx'); // 11 páginas
+  // 1) Permite sobrescribir por .env si quieres (ruta absoluta o relativa)
+  const envPath = this.config.get<string>('CONTRACT_TEMPLATE_PATH');
+  if (envPath && existsSync(envPath)) return envPath;
+
+  // 2) Candidatos portables (dist -> src -> relativo al archivo)
+  const candidates = [
+    // runtime en build
+    join(process.cwd(), 'dist', 'chat', 'assets', 'CONTRATO DE MUTUO.docx'),
+    // desarrollo
+    join(process.cwd(), 'src', 'chat', 'assets', 'CONTRATO DE MUTUO.docx'),
+    // fallback relativo a este archivo
+    join(__dirname, 'assets', 'CONTRATO DE MUTUO.docx'),
+  ];
+
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  throw new Error(
+    'No se encontró la plantilla DOCX. Asegúrate de tener "src/chat/assets/CONTRATO DE MUTUO.docx" ' +
+    'y de copiar assets a dist en nest-cli.json, o define CONTRACT_TEMPLATE_PATH en .env.'
+  );
 }
+
 private renderDocx(data: Record<string, any>): Buffer {
   const content = readFileSync(this.getTemplatePath());
   const zip = new PizZip(content);

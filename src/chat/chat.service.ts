@@ -735,7 +735,7 @@ async sendContractToClient(loanRequestId: number) {
 
   // 2) Cálculos de negocio
   const today = new Date();                 // fecha de firma
-  const dueDate = this.nextQuincena(today); // pago = próxima quincena
+  const dueDate = this.nextQuincena(today); // pago = próxima quincena (15 o último día)
   const diasParaPago = this.diffDays(today, dueDate);
 
   // principal: usa loan.amount; si no, requestedAmount
@@ -747,25 +747,24 @@ async sendContractToClient(loanRequestId: number) {
   const { ANTICIPO_PCT, anticipoValor, AVAL_PCT, avalValor, servicioValor } =
     this.calcPaymentBreakdown(principal);
 
-  // Monto en letras (fallback simple para 1..31 en caso de que numberToSpanish aún no esté)
-  const safeNumberToSpanish = (n: number) => {
-    try { return this.numberToSpanish(n); } catch { return String(n); }
-  };
-  const amountWords = this.amountToWordsCOP(principal);
+  // Tasa mensual (para interés remuneratorio) — prorrateada por días al vencimiento
+  const tasaMensualDefault = Number(this.config.get<string>('DEFAULT_INTEREST_MONTHLY_PCT') ?? '0'); // ej. "3"
+  const tasaMensualPct = Number.isFinite(tasaMensualDefault) ? tasaMensualDefault : 0;
+  const interes = Math.round(principal * (tasaMensualPct / 100) * (diasParaPago / 30));
+  const totalAPagar = Math.max(0, Math.round(principal + interes));
+
+  // Monto en letras para el VALOR A PAGAR
+  const amountWordsPagar = this.amountToWordsCOP(totalAPagar);
 
   const { dia, mesTxt, anio } = this.splitDate(today);
 
-  // Día en letras (1..31) por si tu numberToSpanish no está listo
+  // Día en letras (1..31) respaldo simple
   const dayToWords: Record<number,string> = {
     1:'uno',2:'dos',3:'tres',4:'cuatro',5:'cinco',6:'seis',7:'siete',8:'ocho',9:'nueve',10:'diez',
     11:'once',12:'doce',13:'trece',14:'catorce',15:'quince',16:'dieciséis',17:'diecisiete',18:'dieciocho',19:'diecinueve',20:'veinte',
     21:'veintiuno',22:'veintidós',23:'veintitrés',24:'veinticuatro',25:'veinticinco',26:'veintiséis',27:'veintisiete',28:'veintiocho',29:'veintinueve',30:'treinta',31:'treinta y uno'
   };
-  const diaEnLetras = dayToWords[dia] ?? safeNumberToSpanish(dia);
-
-  // (opcional) tasa mensual si la plantilla la usa
-  const tasaMensualDefault = Number(this.config.get<string>('DEFAULT_INTEREST_MONTHLY_PCT') ?? '0'); // ej. 3
-  const tasaMensualPct = Number.isFinite(tasaMensualDefault) ? tasaMensualDefault : 0;
+  const diaEnLetras = dayToWords[dia] ?? this.numberToSpanish(dia);
 
   // 3) Tags para la plantilla DOCX (todos los que aparecen en tu documento)
   const dataForDocx: Record<string, any> = {
@@ -775,9 +774,9 @@ async sendContractToClient(loanRequestId: number) {
     DEUDOR_DIRECCION: (client.address || client.address2 || '').trim(),
     DEUDOR_CIUDAD: client.city || '',
 
-    // Monto principal
-    DEUDA_NUMEROS: amountWords,            // en letras (ya con "PESOS M/CTE")
-    DEUDA_VALOR: this.money(principal),    // con separador de miles, sin $
+    // === VALOR A PAGAR (solicitud expresa) ===
+    DEUDA_NUMEROS: amountWordsPagar,        // en letras (valor a pagar)
+    DEUDA_VALOR: this.money(totalAPagar),   // en números (valor a pagar), sin símbolo $
 
     // Anticipo 20% con aval incluido
     PORCENTAJE_ANTICIPO: `${Math.round(ANTICIPO_PCT*100)}%`, // “20%”
@@ -794,10 +793,9 @@ async sendContractToClient(loanRequestId: number) {
     FECHA_MES: mesTxt,
     FECHA_ANIO: String(anio),
     FECHA_DIA_LETRA: diaEnLetras,
-    // Alias por si quedó alguna referencia antigua
-    FECHA_DIA_LETRAS: diaEnLetras,
+    FECHA_DIA_LETRAS: diaEnLetras, // alias por si quedó en algún párrafo
 
-    // Agente/avalista (si falta, queda vacío)
+    // Agente/Avalista (si falta, queda vacío)
     AGENTE_NOMBRE: agent?.name || '',
     AGENTE_CC: (agent as any)?.document || '',
 
@@ -815,7 +813,7 @@ async sendContractToClient(loanRequestId: number) {
     const pdfBytes = await this.convertDocxToPdf(docxBuffer);
     this.debug('PDF.convert.ok', { cId, size: pdfBytes.length });
 
-    // 5) Guardar PDF
+    // 5) Guardar PDF local
     const filename = `ContratoMutuo-${loan.id}.pdf`;
     const filePath = join(__dirname, '..', '..', 'public', 'uploads', 'documents', filename);
     this.ensureDir(dirname(filePath));
@@ -896,6 +894,7 @@ async sendContractToClient(loanRequestId: number) {
     throw err;
   }
 }
+
 
 
 }

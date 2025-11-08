@@ -9,71 +9,73 @@ export class ClientsController {
   
   
 @Get()
-  async findAll(
-    @Query('u_id') uId: string,                 // ⬅️ único dato del “current user”
-    @Query('limit') limit = '10',
-    @Query('page') page = '1',
-    @Query('status') status?: string,
-    @Query('document') document?: string,
-    @Query('name') name?: string,
-    @Query('type') type?: string,
-    @Query('mode') mode?: string,
-    @Query('agent') agent?: string,
-    @Query('branch') branch?: string,
-    @Query('paymentDay') paymentDay?: string,
-    @Query('countryId') countryId?: string,
-  ): Promise<any> {
-    if (!uId || !String(uId).trim()) {
-      throw new BadRequestException('u_id es obligatorio.');
-    }
-    const requesterUserId = Number(uId);
-    if (!Number.isFinite(requesterUserId)) {
-      throw new BadRequestException('u_id debe ser numérico.');
-    }
-
-    const n = (v?: string) =>
-      v !== undefined && v !== null && String(v).trim() !== '' ? Number(v) : undefined;
-
-    const filters: {
-      status?: 'active' | 'inactive' | 'rejected';
-      document?: string;
-      name?: string;
-      mode?: string;
-      type?: string;
-      paymentDay?: string;
-      agent?: number;
-      branch?: number;
-      countryId?: number;
-    } = {};
-
-    if (status) {
-      const st = status.toLowerCase();
-      if (!['active', 'inactive', 'rejected'].includes(st)) {
-        throw new BadRequestException('status inválido. Use active|inactive|rejected');
-      }
-      filters.status = st as any;
-    }
-    if (document)   filters.document   = document;
-    if (name)       filters.name       = name;
-    if (mode)       filters.mode       = mode;
-    if (type)       filters.type       = type;
-    if (paymentDay) filters.paymentDay = paymentDay;
-
-    const nAgent     = n(agent);
-    const nBranch    = n(branch);
-    const nCountryId = n(countryId);
-
-    if (Number.isFinite(nAgent!))     filters.agent     = nAgent!;
-    if (Number.isFinite(nBranch!))    filters.branch    = nBranch!;
-    if (Number.isFinite(nCountryId!)) filters.countryId = nCountryId!;
-
-    return this.clientsService.findAll(
-      Number(limit) || 10,
-      Number(page)  || 1,
-      filters,
-      requesterUserId,               // ⬅️ solo pasamos el ID del usuario
-    );
+async findAll(
+  @Query('u_id') uId: string | string[],   // <-- puede venir como array
+  @Query('limit') limit = '10',
+  @Query('page') page = '1',
+  @Query('status') status?: string,
+  @Query('document') document?: string,
+  @Query('name') name?: string,
+  @Query('type') type?: string,
+  @Query('mode') mode?: string,
+  @Query('agent') agent?: string,
+  @Query('branch') branch?: string,
+  @Query('paymentDay') paymentDay?: string,
+  @Query('countryId') countryId?: string,
+): Promise<any> {
+  const uRaw = Array.isArray(uId) ? uId[0] : uId;           // <-- normaliza
+  if (!uRaw || !String(uRaw).trim()) {
+    throw new BadRequestException('u_id es obligatorio.');
   }
+  const requesterUserId = Number(uRaw);
+  if (!Number.isFinite(requesterUserId)) {
+    throw new BadRequestException('u_id debe ser numérico.');
+  }
+
+  const n = (v?: string) =>
+    v !== undefined && v !== null && String(v).trim() !== '' ? Number(v) : undefined;
+
+  const filters: {
+    status?: 'active' | 'inactive' | 'rejected';
+    document?: string;
+    name?: string;
+    mode?: string;
+    type?: string;
+    paymentDay?: string;
+    agent?: number;
+    branch?: number;
+    countryId?: number;
+  } = {};
+
+  if (status) {
+    const st = status.toLowerCase();
+    if (!['active', 'inactive', 'rejected'].includes(st)) {
+      throw new BadRequestException('status inválido. Use active|inactive|rejected');
+    }
+    filters.status = st as any;
+  }
+  if (document)   filters.document   = document;
+  if (name)       filters.name       = name;
+  if (mode)       filters.mode       = mode;
+  if (type)       filters.type       = type;
+  if (paymentDay) filters.paymentDay = paymentDay;
+
+  const nAgent     = n(agent);
+  const nBranch    = n(branch);
+  const nCountryId = n(countryId);
+
+  if (Number.isFinite(nAgent!))     filters.agent     = nAgent!;
+  if (Number.isFinite(nBranch!))    filters.branch    = nBranch!;
+  if (Number.isFinite(nCountryId!)) filters.countryId = nCountryId!;
+
+  return this.clientsService.findAll(
+    Number(limit) || 10,
+    Number(page)  || 1,
+    filters,
+    requesterUserId,    // <-- solo el ID del usuario que hace la petición
+  );
+}
+
 
   
   @Get('agent/:agentId')

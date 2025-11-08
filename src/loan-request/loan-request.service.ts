@@ -410,9 +410,27 @@ data.mode = (
     .take(limit);
     
     const [data, totalItems] = await qb.getManyAndCount();
-    
+
+    // helper exactamente igual al tuyo
+    const txTypeOf = (t: any) =>
+      String(t?.type ?? t?.transactionType ?? t?.Transactiontype ?? '').toLowerCase();
+
+    // agregar campo lastRepayment a cada loan
+    const enhancedData = data.map(loan => {
+      const repaymentTx = (loan.transactions ?? [])
+        .filter(tx => txTypeOf(tx) === 'repayment')
+        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+      const latestPayment = repaymentTx[0] ?? null;
+
+      return {
+        ...loan,
+        latestPayment
+      };
+    });
+
     return {
-      data,
+      data: enhancedData,
       totalItems,
       totalPages: Math.ceil(totalItems / limit),
       page,

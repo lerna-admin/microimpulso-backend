@@ -290,7 +290,7 @@ async findAll(
         endDateAt: loan.endDateAt,
         paymentDay: loan.paymentDay,
         transactions: loan.transactions,
-        latestPayment : lastTransaction
+        latestPayment : lastTransaction[0] ?? null
       },
       totalRepayment,
       amountBorrowed,

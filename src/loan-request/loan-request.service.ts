@@ -9,13 +9,12 @@ import { User } from 'src/entities/user.entity'
 import { Notification } from 'src/notifications/notifications.entity';
 import { BadRequestException } from '@nestjs/common';
 import { Client, ClientStatus } from 'src/entities/client.entity';
+ 
 
 
 @Injectable()
 export class LoanRequestService {
-  sendContract(id: number) {
-    throw new Error('Method not implemented.');
-  }
+
   constructor(
     @InjectRepository(LoanRequest)
     private readonly loanRequestRepository: Repository<LoanRequest>,
@@ -513,7 +512,10 @@ data.mode = (
             payload:      { author :  { id: updated.agent.id, name: updated.agent.name },  loanRequestId: loanRequest.id},
             description : `El agente ${updated.agent.name} ha aprobado una nueva solicitud, revisa las solicitudes pendientes de desembolso.`
           }),
+
+
         );
+         
       }
       return await this.loanRequestRepository.save(updated);
     }

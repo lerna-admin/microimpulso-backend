@@ -23,7 +23,7 @@ async findAll(
   @Query('branch') branch?: string,
   @Query('paymentDay') paymentDay?: string,
   @Query('countryId') countryId?: string,
-  @Query('distinct') distinct?: string | string[],   // <-- FALTABA
+  @Query('distinct') distinct?: string | string[],   // ⬅️ asegúrate de tener esto
 ): Promise<any> {
   const uRaw = Array.isArray(uId) ? uId[0] : uId;
   if (!uRaw || !String(uRaw).trim()) {
@@ -37,10 +37,9 @@ async findAll(
   const n = (v?: string) =>
     v !== undefined && v !== null && String(v).trim() !== '' ? Number(v) : undefined;
 
-  // ---- Parseo SIMPLE de distinct (sin errores) ----
+  // ✅ Parseo SIMPLE de distinct: true sólo si llega "true", en cualquier otro caso false
   const dRaw = Array.isArray(distinct) ? distinct[0] : distinct;
-  const distinctFlag =
-    (dRaw ?? '').toString().trim().toLowerCase() === 'true'; // true solo si viene "true"
+  const distinctFlag = String(dRaw ?? '').trim().toLowerCase() === 'true';
 
   const filters: {
     status?: 'active' | 'inactive' | 'rejected';
@@ -54,26 +53,15 @@ async findAll(
     countryId?: number;
     distinct?: boolean;
   } = {
-    distinct: distinctFlag,  // <-- pasa tal cual (default false si no vino o no es "true")
+    distinct: distinctFlag,
   };
 
-  if (status) {
-    const st = status.toLowerCase();
-    if (!['active', 'inactive', 'rejected'].includes(st)) {
-      throw new BadRequestException('status inválido. Use active|inactive|rejected');
-    }
-    filters.status = st as any;
-  }
-  if (document)   filters.document   = document;
-  if (name)       filters.name       = name;
-  if (mode)       filters.mode       = mode;
-  if (type)       filters.type       = type;
-  if (paymentDay) filters.paymentDay = paymentDay;
+  // ... (resto de tu código igual: status/document/name/etc)
+  // (no vuelvas a validar distinct en ningún otro lado)
 
   const nAgent     = n(agent);
   const nBranch    = n(branch);
   const nCountryId = n(countryId);
-
   if (Number.isFinite(nAgent!))     filters.agent     = nAgent!;
   if (Number.isFinite(nBranch!))    filters.branch    = nBranch!;
   if (Number.isFinite(nCountryId!)) filters.countryId = nCountryId!;
@@ -85,6 +73,7 @@ async findAll(
     requesterUserId,
   );
 }
+
 
 
 

@@ -384,10 +384,31 @@ async findAll(
     return new Date(bDate).getTime() - new Date(aDate).getTime();
   });
 
+  // Si filters.distinct === true → dejar solo un registro por cliente
+  let listForPaging = items;
+  if (filters && (filters as any).distinct === true) {
+    const seen = new Set<number>();
+    const dedup: any[] = [];
+    for (const it of items) {
+      const cid = Number(it?.client?.id);
+      if (!cid) continue;
+      if (!seen.has(cid)) {
+        dedup.push(it);   // el primero ya es el más reciente por el sort previo
+        seen.add(cid);
+      }
+    }
+    listForPaging = dedup;
+  }
+
+  /**
   const totalItems = items.length;
   const startIndex = (page - 1) * limit;
   const data = items.slice(startIndex, startIndex + limit);
+  */
 
+  const totalItems = listForPaging.length;
+  const startIndex = (page - 1) * limit;
+  const data = listForPaging.slice(startIndex, startIndex + limit);
   // ───────────────────────────────────────────────────────────────
   // 6) Totales de cartera (solo loans activos)
   // ───────────────────────────────────────────────────────────────

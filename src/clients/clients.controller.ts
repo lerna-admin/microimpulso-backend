@@ -1,6 +1,7 @@
 import { Controller, Get, Post, Param, Body, Patch, Query, ParseIntPipe, BadRequestException, Req } from '@nestjs/common';
 import { ClientsService } from './clients.service';
 import { Client } from 'src/entities/client.entity';
+import { distinct, filter } from 'rxjs';
 
 @Controller('clients')
 export class ClientsController {
@@ -35,6 +36,17 @@ async findAll(
   const n = (v?: string) =>
     v !== undefined && v !== null && String(v).trim() !== '' ? Number(v) : undefined;
 
+  const dRaw = Array.isArray(distinct) ? distinct[0] : distinct;
+  let distinctFlag = false;
+  if (dRaw !== undefined) {
+    const val = String(dRaw).trim().toLowerCase();
+    if (val === 'true') distinctFlag = true;
+    else if (val === 'false') distinctFlag = false;
+    else {
+      throw new BadRequestException('distinct inválido. Use true|false');
+    }
+  }
+
   const filters: {
     status?: 'active' | 'inactive' | 'rejected';
     document?: string;
@@ -45,7 +57,10 @@ async findAll(
     agent?: number;
     branch?: number;
     countryId?: number;
-  } = {};
+    distinct?: boolean;
+    } = {
+      distinct: distinctFlag,
+    };
 
   if (status) {
     const st = status.toLowerCase();

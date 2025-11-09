@@ -23,8 +23,8 @@ async findAll(
   @Query('branch') branch?: string,
   @Query('paymentDay') paymentDay?: string,
   @Query('countryId') countryId?: string,
-  @Query('distinct') distinct?: string | string[],   // ⬅️ asegúrate de tener esto
-): Promise<any> {
+  @Query('distinct') distinct?: string | string[],
+) {
   const uRaw = Array.isArray(uId) ? uId[0] : uId;
   if (!uRaw || !String(uRaw).trim()) {
     throw new BadRequestException('u_id es obligatorio.');
@@ -37,10 +37,10 @@ async findAll(
   const n = (v?: string) =>
     v !== undefined && v !== null && String(v).trim() !== '' ? Number(v) : undefined;
 
-  // ✅ Parseo SIMPLE de distinct: true sólo si llega "true", en cualquier otro caso false
   const dRaw = Array.isArray(distinct) ? distinct[0] : distinct;
   const distinctFlag = String(dRaw ?? '').trim().toLowerCase() === 'true';
 
+  // ⬇️ construir filters correctamente
   const filters: {
     status?: 'active' | 'inactive' | 'rejected';
     document?: string;
@@ -52,12 +52,29 @@ async findAll(
     branch?: number;
     countryId?: number;
     distinct?: boolean;
-  } = {
-    distinct: distinctFlag,
-  };
+  } = { distinct: distinctFlag };
 
-  // ... (resto de tu código igual: status/document/name/etc)
-  // (no vuelvas a validar distinct en ningún otro lado)
+  if (typeof name === 'string' && name.trim() !== '') {
+    filters.name = name.trim();
+  }
+  if (typeof document === 'string' && document.trim() !== '') {
+    filters.document = document.trim();
+  }
+  if (typeof mode === 'string' && mode.trim() !== '') {
+    filters.mode = mode.trim();
+  }
+  if (typeof type === 'string' && type.trim() !== '') {
+    filters.type = type.trim();
+  }
+  if (typeof paymentDay === 'string' && paymentDay.trim() !== '') {
+    filters.paymentDay = paymentDay.trim();
+  }
+  if (typeof status === 'string' && status.trim() !== '') {
+    const s = status.trim().toLowerCase();
+    if (s === 'active' || s === 'inactive' || s === 'rejected') {
+      filters.status = s as 'active' | 'inactive' | 'rejected';
+    }
+  }
 
   const nAgent     = n(agent);
   const nBranch    = n(branch);
@@ -66,13 +83,20 @@ async findAll(
   if (Number.isFinite(nBranch!))    filters.branch    = nBranch!;
   if (Number.isFinite(nCountryId!)) filters.countryId = nCountryId!;
 
+  const l = Number(limit) || 10;
+  const p = Number(page)  || 1;
+
+  // Opcional: log temporal para verificar que name llega
+  // console.log('filters=', filters);
+
   return this.clientsService.findAll(
-    Number(limit) || 10,
-    Number(page)  || 1,
+    l,
+    p,
     filters,
     requesterUserId,
   );
 }
+
 
 
 

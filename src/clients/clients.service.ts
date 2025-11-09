@@ -217,29 +217,26 @@ async findAll(
     agent?: number;
     branch?: number;     // branch del agente (filtro adicional opcional)
     countryId?: number;  // país del cliente (filtro adicional opcional)
+    distinct?: boolean;
   } = {},
-  requesterUserId: number, // ⬅️ SOLO el id del usuario que hace la petición
+  requesterUserId: number,
 ): Promise<any> {
-  // ───────────────────────────────────────────────────────────────
-  // 0) Cargar el usuario solicitante y derivar su scope
-  // ───────────────────────────────────────────────────────────────
+  // 0) Scope
   const requester = await this.userRepository.findOne({
     where: { id: requesterUserId },
     relations: ['branch', 'managerCountry'],
   });
-  if (!requester) {
-    throw new BadRequestException('Usuario solicitante no existe.');
-  }
+  if (!requester) throw new BadRequestException('Usuario solicitante no existe.');
 
   const role = String(requester.role).toUpperCase();
   let adminBranchId: number | null = null;
+  let adminBranchCountryId: number | null = null;   // ← NUEVO
   let managerCountryId: number | null = null;
 
   if (role === 'ADMIN') {
     adminBranchId = (requester as any)?.branch?.id ?? (requester as any)?.branchId ?? null;
-    if (!adminBranchId) {
-      throw new BadRequestException('El ADMIN no tiene branch asignada.');
-    }
+    adminBranchCountryId = (requester as any)?.branch?.countryId ?? null; // ← NUEVO
+    if (!adminBranchId) throw new BadRequestException('El ADMIN no tiene branch asignada.');
   } else if (role === 'MANAGER') {
     managerCountryId =
       (requester as any)?.managerCountryId ??
@@ -252,17 +249,13 @@ async findAll(
     throw new BadRequestException('Rol no soportado. Use AGENT | ADMIN | MANAGER.');
   }
 
-  // ───────────────────────────────────────────────────────────────
-  // 1) Traer loans (con country del cliente) para poder filtrar por agente/branch/país
-  // ───────────────────────────────────────────────────────────────
+  // 1) Loans (con country) — igual
   const loans = await this.loanRequestRepository.find({
     relations: { client: { country: true }, transactions: true, agent: { branch: true } },
     order: { createdAt: 'DESC' },
   });
 
-  // ───────────────────────────────────────────────────────────────
   // 2) Helpers
-  // ───────────────────────────────────────────────────────────────
   const lower = (s?: string) => String(s ?? '').toLowerCase();
   const isActiveLoan = (s?: string) => ['funded', 'renewed'].includes(lower(s));
   const txTypeOf = (t: any) =>
@@ -273,9 +266,7 @@ async findAll(
     return d && now > d ? Math.floor((now.getTime() - d.getTime()) / 86_400_000) : 0;
   };
 
-  // ───────────────────────────────────────────────────────────────
-  // 3) Agregadores y resultado
-  // ───────────────────────────────────────────────────────────────
+  // 3) Agregadores / resultado
   let totalActiveAmountBorrowed = 0;
   let totalActiveRepayment = 0;
   const activeClientIds = new Set<number>();
@@ -286,33 +277,28 @@ async findAll(
   const items: any[] = [];
   const seenClientIds = new Set<number>();
 
-  // ───────────────────────────────────────────────────────────────
-  // 4) Iterar loans aplicando SCOPE por rol + filtros (lógica original)
-  // ───────────────────────────────────────────────────────────────
+  // 4) Iterar loans (tu lógica intacta)
   for (const loan of loans) {
     const client = loan.client;
     const agent  = loan.agent;
     const branch = agent?.branch as any;
     if (!client || !agent || !branch) continue;
 
-    // ── SCOPE ──
     if (role === 'AGENT') {
-      if (agent.id !== requester.id) continue;                   // agente: solo sus loans
+      if (agent.id !== requester.id) continue;
     } else if (role === 'ADMIN') {
-      if (branch.id !== adminBranchId) continue;                 // admin: loans de su branch
+      if (branch.id !== adminBranchId) continue;
     } else if (role === 'MANAGER') {
-      if ((branch as any).countryId !== managerCountryId) continue; // manager: loans de branches de su país
+      if ((branch as any).countryId !== managerCountryId) continue;
     }
 
-    // ── FILTROS ADICIONALES (combinados con el scope) ──
     if (filters.countryId && (client.country?.id ?? null) !== filters.countryId) continue;
     if (filters.branch && branch.id !== filters.branch) continue;
     if (filters.agent && agent.id !== filters.agent) continue;
     if (filters.document && !client.document?.includes(filters.document)) continue;
     if (filters.name && !client.name?.toLowerCase().includes(filters.name.toLowerCase())) continue;
 
-    const derivedStatus: 'active' | 'inactive' =
-      isActiveLoan(loan.status) ? 'active' : 'inactive';
+    const derivedStatus: 'active' | 'inactive' = isActiveLoan(loan.status) ? 'active' : 'inactive';
 
     if (filters.status) {
       if (filters.status === 'rejected') {
@@ -326,7 +312,6 @@ async findAll(
     if (filters.type && loan.type !== filters.type) continue;
     if (filters.paymentDay && loan.paymentDay !== filters.paymentDay) continue;
 
-    // ── Métricas por loan ──
     const amountBorrowed  = Number(loan.amount ?? 0);
     const totalRepayment  = (loan.transactions ?? [])
       .filter((t) => txTypeOf(t) === 'repayment' && t?.amount != null)
@@ -378,40 +363,50 @@ async findAll(
     if (client.id) seenClientIds.add(client.id);
   }
 
-  // ───────────────────────────────────────────────────────────────
-  // 4.b) Agregar CLIENTES sin loans (novedad) respetando el mismo SCOPE y filtros de cliente
-  // ───────────────────────────────────────────────────────────────
-  // Construimos un query de clientes en el mismo scope
-  const cq = this.clientRepository.createQueryBuilder('c')
-    .leftJoinAndSelect('c.agent', 'agent')
-    .leftJoinAndSelect('agent.branch', 'branch')
-    .leftJoinAndSelect('c.country', 'country');
+  // 4.b) CLIENTES SIN LOANS que matchean NAME y respetan scope incluso sin agent/branch
+  const mustIncludeNoLoanByName = Boolean((filters.name ?? '').trim()) && filters.status !== 'rejected';
+  if (mustIncludeNoLoanByName) {
+    const cq = this.clientRepository.createQueryBuilder('c')
+      .leftJoinAndSelect('c.agent', 'agent')
+      .leftJoinAndSelect('agent.branch', 'branch')
+      .leftJoinAndSelect('c.country', 'country')
+      .leftJoin('c.loanRequests', 'lr')
+      .where('lr.id IS NULL') // sin loans
+      .andWhere('LOWER(c.name) LIKE :nm', { nm: `%${filters.name!.toLowerCase()}%` });
 
-  if (role === 'AGENT') {
-    cq.andWhere('agent.id = :reqId', { reqId: requester.id });
-  } else if (role === 'ADMIN') {
-    cq.andWhere('branch.id = :bId', { bId: adminBranchId });
-  } else if (role === 'MANAGER') {
-    cq.andWhere('branch.countryId = :cId', { cId: managerCountryId });
-  }
+    // ── Scope con tolerancia a NULLs ─────────────────────────────
+    if (role === 'AGENT') {
+      // incluir sin agente
+      cq.andWhere('(agent.id = :reqId OR agent.id IS NULL)', { reqId: requester.id });
+    } else if (role === 'ADMIN') {
+      // incluir sin agente si el país del cliente = país de la branch del admin
+      if (adminBranchCountryId != null) {
+        cq.andWhere('(branch.id = :bId OR (agent.id IS NULL AND country.id = :abCountryId))', {
+          bId: adminBranchId,
+          abCountryId: adminBranchCountryId,
+        });
+      } else {
+        cq.andWhere('(branch.id = :bId OR agent.id IS NULL)', { bId: adminBranchId });
+      }
+    } else if (role === 'MANAGER') {
+      // incluir sin agente si el país del cliente = managerCountryId
+      cq.andWhere('(branch.countryId = :cId OR (agent.id IS NULL AND country.id = :cId))', {
+        cId: managerCountryId,
+      });
+    }
 
-  if (filters.countryId) cq.andWhere('country.id = :countryId', { countryId: filters.countryId });
-  if (filters.branch)    cq.andWhere('branch.id = :branchId',   { branchId: filters.branch });
-  if (filters.agent)     cq.andWhere('agent.id = :agentId',     { agentId: filters.agent });
-  if (filters.document)  cq.andWhere('c.document LIKE :doc',    { doc: `%${filters.document}%` });
-  if (filters.name)      cq.andWhere('LOWER(c.name) LIKE :nm',  { nm: `%${filters.name.toLowerCase()}%` });
+    // Filtros de cliente
+    if (filters.countryId) cq.andWhere('country.id = :countryId', { countryId: filters.countryId });
+    if (filters.branch)    cq.andWhere('branch.id = :branchId',   { branchId: filters.branch });
+    if (filters.agent)     cq.andWhere('agent.id = :agentId',     { agentId: filters.agent });
+    if (filters.document)  cq.andWhere('c.document LIKE :doc',    { doc: `%${filters.document}%` });
 
-  // Excluir los que ya vimos por loans
-  if (seenClientIds.size > 0) {
-    cq.andWhere('c.id NOT IN (:...ids)', { ids: Array.from(seenClientIds) });
-  }
+    if (seenClientIds.size > 0) {
+      cq.andWhere('c.id NOT IN (:...ids)', { ids: Array.from(seenClientIds) });
+    }
 
-  // Si el filtro de STATUS exige 'active' o 'rejected', un cliente sin loans no califica
-  if (filters.status === 'active' || filters.status === 'rejected') {
-    // nada que agregar: no habrá clientes sin loans que cumplan
-  } else {
-    // 'inactive' o sin status: sí agregamos
     const clientsNoLoan = await cq.getMany();
+
     for (const client of clientsNoLoan) {
       const agent = client.agent ?? null;
       items.push({
@@ -422,22 +417,19 @@ async findAll(
         amountBorrowed: 0,
         remainingAmount: 0,
         daysLate: 0,
-        status: 'inactive' as const, // sin loans = inactive
+        status: 'inactive' as const,
       });
       if (client.id) seenClientIds.add(client.id);
     }
   }
 
-  // ───────────────────────────────────────────────────────────────
-  // 5) Orden y paginación (misma lógica tuya)
-  // ───────────────────────────────────────────────────────────────
+  // 5) Orden + distinct + paginación
   items.sort((a, b) => {
     const aDate = a.loanRequest?.createdAt ?? a.client?.createdAt ?? new Date(0);
     const bDate = b.loanRequest?.createdAt ?? b.client?.createdAt ?? new Date(0);
     return new Date(bDate).getTime() - new Date(aDate).getTime();
   });
 
-  // Si filters.distinct === true → dejar solo un registro por cliente (tu lógica original)
   let listForPaging = items;
   if (filters && (filters as any).distinct === true) {
     const seen = new Set<number>();
@@ -446,7 +438,7 @@ async findAll(
       const cid = Number(it?.client?.id);
       if (!cid) continue;
       if (!seen.has(cid)) {
-        dedup.push(it);   // el primero ya es el más reciente por el sort previo
+        dedup.push(it);
         seen.add(cid);
       }
     }
@@ -457,9 +449,7 @@ async findAll(
   const startIndex = (page - 1) * limit;
   const data = listForPaging.slice(startIndex, startIndex + limit);
 
-  // ───────────────────────────────────────────────────────────────
-  // 6) Totales de cartera (solo loans activos) — sin cambios
-  // ───────────────────────────────────────────────────────────────
+  // 6) Totales (solo loans activos)
   const remainingTotal = items
     .filter((it) => it.loanRequest && isActiveLoan(it.loanRequest.status))
     .reduce((sum, it) => sum + Number(it.remainingAmount ?? 0), 0);
@@ -479,7 +469,6 @@ async findAll(
     data,
   };
 }
-
 
   
   

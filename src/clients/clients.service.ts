@@ -203,6 +203,7 @@ export class ClientsService {
   // ============================================================
   // ========================  FIND ALL  ========================
   // ============================================================
+
 async findAll(
   limit: number = 10,
   page: number = 1,
@@ -252,10 +253,10 @@ async findAll(
   }
 
   // ───────────────────────────────────────────────────────────────
-  // 1) Traer loans con joins para poder filtrar por agente/branch/país
+  // 1) Traer loans (con country del cliente) para poder filtrar por agente/branch/país
   // ───────────────────────────────────────────────────────────────
   const loans = await this.loanRequestRepository.find({
-    relations: { client: true, transactions: true, agent: { branch: true } },
+    relations: { client: { country: true }, transactions: true, agent: { branch: true } },
     order: { createdAt: 'DESC' },
   });
 
@@ -283,9 +284,10 @@ async findAll(
   let noPayment30 = 0;
 
   const items: any[] = [];
+  const seenClientIds = new Set<number>();
 
   // ───────────────────────────────────────────────────────────────
-  // 4) Iterar loans aplicando SCOPE por rol + filtros
+  // 4) Iterar loans aplicando SCOPE por rol + filtros (lógica original)
   // ───────────────────────────────────────────────────────────────
   for (const loan of loans) {
     const client = loan.client;
@@ -303,7 +305,7 @@ async findAll(
     }
 
     // ── FILTROS ADICIONALES (combinados con el scope) ──
-    if (filters.countryId && client.country.id !== filters.countryId) continue;
+    if (filters.countryId && (client.country?.id ?? null) !== filters.countryId) continue;
     if (filters.branch && branch.id !== filters.branch) continue;
     if (filters.agent && agent.id !== filters.agent) continue;
     if (filters.document && !client.document?.includes(filters.document)) continue;
@@ -327,7 +329,7 @@ async findAll(
     // ── Métricas por loan ──
     const amountBorrowed  = Number(loan.amount ?? 0);
     const totalRepayment  = (loan.transactions ?? [])
-      .filter((t) => txTypeOf(t) === 'repayment')
+      .filter((t) => txTypeOf(t) === 'repayment' && t?.amount != null)
       .reduce((s, t) => s + Number(t?.amount ?? 0), 0);
     const remainingAmount = Math.max(0, amountBorrowed - totalRepayment);
     const daysLate        = daysLateOf(loan.endDateAt);
@@ -345,10 +347,9 @@ async findAll(
     }
 
     const lastTransaction = (loan.transactions ?? [])
-      .filter(t => txTypeOf(t) === 'repayment')
+      .filter(t => txTypeOf(t) === 'repayment' && t?.date)
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-    // Cada item es un LOAN (el cliente puede repetirse si tiene varios)
     items.push({
       client,
       agent: { id: agent.id, name: agent.name },
@@ -373,10 +374,62 @@ async findAll(
       daysLate,
       status: derivedStatus,
     });
+
+    if (client.id) seenClientIds.add(client.id);
   }
 
   // ───────────────────────────────────────────────────────────────
-  // 5) Orden y paginación
+  // 4.b) Agregar CLIENTES sin loans (novedad) respetando el mismo SCOPE y filtros de cliente
+  // ───────────────────────────────────────────────────────────────
+  // Construimos un query de clientes en el mismo scope
+  const cq = this.clientRepository.createQueryBuilder('c')
+    .leftJoinAndSelect('c.agent', 'agent')
+    .leftJoinAndSelect('agent.branch', 'branch')
+    .leftJoinAndSelect('c.country', 'country');
+
+  if (role === 'AGENT') {
+    cq.andWhere('agent.id = :reqId', { reqId: requester.id });
+  } else if (role === 'ADMIN') {
+    cq.andWhere('branch.id = :bId', { bId: adminBranchId });
+  } else if (role === 'MANAGER') {
+    cq.andWhere('branch.countryId = :cId', { cId: managerCountryId });
+  }
+
+  if (filters.countryId) cq.andWhere('country.id = :countryId', { countryId: filters.countryId });
+  if (filters.branch)    cq.andWhere('branch.id = :branchId',   { branchId: filters.branch });
+  if (filters.agent)     cq.andWhere('agent.id = :agentId',     { agentId: filters.agent });
+  if (filters.document)  cq.andWhere('c.document LIKE :doc',    { doc: `%${filters.document}%` });
+  if (filters.name)      cq.andWhere('LOWER(c.name) LIKE :nm',  { nm: `%${filters.name.toLowerCase()}%` });
+
+  // Excluir los que ya vimos por loans
+  if (seenClientIds.size > 0) {
+    cq.andWhere('c.id NOT IN (:...ids)', { ids: Array.from(seenClientIds) });
+  }
+
+  // Si el filtro de STATUS exige 'active' o 'rejected', un cliente sin loans no califica
+  if (filters.status === 'active' || filters.status === 'rejected') {
+    // nada que agregar: no habrá clientes sin loans que cumplan
+  } else {
+    // 'inactive' o sin status: sí agregamos
+    const clientsNoLoan = await cq.getMany();
+    for (const client of clientsNoLoan) {
+      const agent = client.agent ?? null;
+      items.push({
+        client,
+        agent: agent ? { id: agent.id, name: agent.name } : null,
+        loanRequest: null,
+        totalRepayment: 0,
+        amountBorrowed: 0,
+        remainingAmount: 0,
+        daysLate: 0,
+        status: 'inactive' as const, // sin loans = inactive
+      });
+      if (client.id) seenClientIds.add(client.id);
+    }
+  }
+
+  // ───────────────────────────────────────────────────────────────
+  // 5) Orden y paginación (misma lógica tuya)
   // ───────────────────────────────────────────────────────────────
   items.sort((a, b) => {
     const aDate = a.loanRequest?.createdAt ?? a.client?.createdAt ?? new Date(0);
@@ -384,7 +437,7 @@ async findAll(
     return new Date(bDate).getTime() - new Date(aDate).getTime();
   });
 
-  // Si filters.distinct === true → dejar solo un registro por cliente
+  // Si filters.distinct === true → dejar solo un registro por cliente (tu lógica original)
   let listForPaging = items;
   if (filters && (filters as any).distinct === true) {
     const seen = new Set<number>();
@@ -400,17 +453,12 @@ async findAll(
     listForPaging = dedup;
   }
 
-  /**
-  const totalItems = items.length;
-  const startIndex = (page - 1) * limit;
-  const data = items.slice(startIndex, startIndex + limit);
-  */
-
   const totalItems = listForPaging.length;
   const startIndex = (page - 1) * limit;
   const data = listForPaging.slice(startIndex, startIndex + limit);
+
   // ───────────────────────────────────────────────────────────────
-  // 6) Totales de cartera (solo loans activos)
+  // 6) Totales de cartera (solo loans activos) — sin cambios
   // ───────────────────────────────────────────────────────────────
   const remainingTotal = items
     .filter((it) => it.loanRequest && isActiveLoan(it.loanRequest.status))
@@ -431,6 +479,7 @@ async findAll(
     data,
   };
 }
+
 
   
   

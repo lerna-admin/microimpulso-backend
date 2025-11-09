@@ -11,7 +11,7 @@ export class ClientsController {
   
 @Get()
 async findAll(
-  @Query('u_id') uId: string | string[],   // <-- puede venir como array
+  @Query('u_id') uId: string | string[],
   @Query('limit') limit = '10',
   @Query('page') page = '1',
   @Query('status') status?: string,
@@ -23,8 +23,9 @@ async findAll(
   @Query('branch') branch?: string,
   @Query('paymentDay') paymentDay?: string,
   @Query('countryId') countryId?: string,
+  @Query('distinct') distinct?: string | string[],   // <-- FALTABA
 ): Promise<any> {
-  const uRaw = Array.isArray(uId) ? uId[0] : uId;           // <-- normaliza
+  const uRaw = Array.isArray(uId) ? uId[0] : uId;
   if (!uRaw || !String(uRaw).trim()) {
     throw new BadRequestException('u_id es obligatorio.');
   }
@@ -36,16 +37,10 @@ async findAll(
   const n = (v?: string) =>
     v !== undefined && v !== null && String(v).trim() !== '' ? Number(v) : undefined;
 
+  // ---- Parseo SIMPLE de distinct (sin errores) ----
   const dRaw = Array.isArray(distinct) ? distinct[0] : distinct;
-  let distinctFlag = false;
-  if (dRaw !== undefined) {
-    const val = String(dRaw).trim().toLowerCase();
-    if (val === 'true') distinctFlag = true;
-    else if (val === 'false') distinctFlag = false;
-    else {
-      throw new BadRequestException('distinct inválido. Use true|false');
-    }
-  }
+  const distinctFlag =
+    (dRaw ?? '').toString().trim().toLowerCase() === 'true'; // true solo si viene "true"
 
   const filters: {
     status?: 'active' | 'inactive' | 'rejected';
@@ -58,9 +53,9 @@ async findAll(
     branch?: number;
     countryId?: number;
     distinct?: boolean;
-    } = {
-      distinct: distinctFlag,
-    };
+  } = {
+    distinct: distinctFlag,  // <-- pasa tal cual (default false si no vino o no es "true")
+  };
 
   if (status) {
     const st = status.toLowerCase();
@@ -87,9 +82,10 @@ async findAll(
     Number(limit) || 10,
     Number(page)  || 1,
     filters,
-    requesterUserId,    // <-- solo el ID del usuario que hace la petición
+    requesterUserId,
   );
 }
+
 
 
   

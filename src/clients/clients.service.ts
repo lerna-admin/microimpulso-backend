@@ -204,6 +204,7 @@ export class ClientsService {
   // ========================  FIND ALL  ========================
   // ============================================================
 
+
 async findAll(
   limit: number = 10,
   page: number = 1,
@@ -221,7 +222,9 @@ async findAll(
   } = {},
   requesterUserId: number,
 ): Promise<any> {
-  // 0) Scope
+  // ───────────────────────────────────────────────────────────────
+  // 0) Scope por rol
+  // ───────────────────────────────────────────────────────────────
   const requester = await this.userRepository.findOne({
     where: { id: requesterUserId },
     relations: ['branch', 'managerCountry'],
@@ -230,12 +233,12 @@ async findAll(
 
   const role = String(requester.role).toUpperCase();
   let adminBranchId: number | null = null;
-  let adminBranchCountryId: number | null = null;   // ← NUEVO
+  let adminBranchCountryId: number | null = null;
   let managerCountryId: number | null = null;
 
   if (role === 'ADMIN') {
     adminBranchId = (requester as any)?.branch?.id ?? (requester as any)?.branchId ?? null;
-    adminBranchCountryId = (requester as any)?.branch?.countryId ?? null; // ← NUEVO
+    adminBranchCountryId = (requester as any)?.branch?.countryId ?? null;
     if (!adminBranchId) throw new BadRequestException('El ADMIN no tiene branch asignada.');
   } else if (role === 'MANAGER') {
     managerCountryId =
@@ -249,13 +252,36 @@ async findAll(
     throw new BadRequestException('Rol no soportado. Use AGENT | ADMIN | MANAGER.');
   }
 
-  // 1) Loans (con country) — igual
+  // ───────────────────────────────────────────────────────────────
+  // Helpers para normalizar strings (tildes/espacios)
+  // ───────────────────────────────────────────────────────────────
+  const norm = (s?: string) =>
+    String(s ?? '')
+      .normalize('NFD')
+      // quita diacríticos
+      .replace(/\p{Diacritic}/gu, '')
+      // colapsa espacios
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+
+  const normIncludes = (haystack?: string, needle?: string) => {
+    const h = norm(haystack);
+    const n = norm(needle);
+    return n ? h.includes(n) : true;
+  };
+
+  // ───────────────────────────────────────────────────────────────
+  // 1) Traer LOANS (con country) para filtrar como hacías
+  // ───────────────────────────────────────────────────────────────
   const loans = await this.loanRequestRepository.find({
     relations: { client: { country: true }, transactions: true, agent: { branch: true } },
     order: { createdAt: 'DESC' },
   });
 
-  // 2) Helpers
+  // ───────────────────────────────────────────────────────────────
+  // 2) Helpers de estado
+  // ───────────────────────────────────────────────────────────────
   const lower = (s?: string) => String(s ?? '').toLowerCase();
   const isActiveLoan = (s?: string) => ['funded', 'renewed'].includes(lower(s));
   const txTypeOf = (t: any) =>
@@ -266,7 +292,9 @@ async findAll(
     return d && now > d ? Math.floor((now.getTime() - d.getTime()) / 86_400_000) : 0;
   };
 
-  // 3) Agregadores / resultado
+  // ───────────────────────────────────────────────────────────────
+  // 3) Agregadores
+  // ───────────────────────────────────────────────────────────────
   let totalActiveAmountBorrowed = 0;
   let totalActiveRepayment = 0;
   const activeClientIds = new Set<number>();
@@ -277,13 +305,16 @@ async findAll(
   const items: any[] = [];
   const seenClientIds = new Set<number>();
 
-  // 4) Iterar loans (tu lógica intacta)
+  // ───────────────────────────────────────────────────────────────
+  // 4) Iterar LOANS (tu lógica), usando normIncludes para name/doc
+  // ───────────────────────────────────────────────────────────────
   for (const loan of loans) {
     const client = loan.client;
     const agent  = loan.agent;
     const branch = agent?.branch as any;
     if (!client || !agent || !branch) continue;
 
+    // Scope
     if (role === 'AGENT') {
       if (agent.id !== requester.id) continue;
     } else if (role === 'ADMIN') {
@@ -292,13 +323,15 @@ async findAll(
       if ((branch as any).countryId !== managerCountryId) continue;
     }
 
+    // Filtros
     if (filters.countryId && (client.country?.id ?? null) !== filters.countryId) continue;
     if (filters.branch && branch.id !== filters.branch) continue;
     if (filters.agent && agent.id !== filters.agent) continue;
-    if (filters.document && !client.document?.includes(filters.document)) continue;
-    if (filters.name && !client.name?.toLowerCase().includes(filters.name.toLowerCase())) continue;
+    if (filters.document && !normIncludes(client.document, filters.document)) continue;
+    if (filters.name && !normIncludes(client.name, filters.name)) continue;
 
-    const derivedStatus: 'active' | 'inactive' = isActiveLoan(loan.status) ? 'active' : 'inactive';
+    const derivedStatus: 'active' | 'inactive' =
+      isActiveLoan(loan.status) ? 'active' : 'inactive';
 
     if (filters.status) {
       if (filters.status === 'rejected') {
@@ -312,6 +345,7 @@ async findAll(
     if (filters.type && loan.type !== filters.type) continue;
     if (filters.paymentDay && loan.paymentDay !== filters.paymentDay) continue;
 
+    // Métricas
     const amountBorrowed  = Number(loan.amount ?? 0);
     const totalRepayment  = (loan.transactions ?? [])
       .filter((t) => txTypeOf(t) === 'repayment' && t?.amount != null)
@@ -363,7 +397,11 @@ async findAll(
     if (client.id) seenClientIds.add(client.id);
   }
 
-  // 4.b) CLIENTES SIN LOANS que matchean NAME y respetan scope incluso sin agent/branch
+  // ───────────────────────────────────────────────────────────────
+  // 4.b) CLIENTES SIN LOANS que coinciden por NAME (insensible a tildes)
+  //     Incluímos aunque no tengan agent/branch/country
+  //     (si status=rejected, no aplican por definición al no tener loans)
+  // ───────────────────────────────────────────────────────────────
   const mustIncludeNoLoanByName = Boolean((filters.name ?? '').trim()) && filters.status !== 'rejected';
   if (mustIncludeNoLoanByName) {
     const cq = this.clientRepository.createQueryBuilder('c')
@@ -371,31 +409,21 @@ async findAll(
       .leftJoinAndSelect('agent.branch', 'branch')
       .leftJoinAndSelect('c.country', 'country')
       .leftJoin('c.loanRequests', 'lr')
-      .where('lr.id IS NULL') // sin loans
-      .andWhere('LOWER(c.name) LIKE :nm', { nm: `%${filters.name!.toLowerCase()}%` });
+      .where('lr.id IS NULL'); // sin loans
 
-    // ── Scope con tolerancia a NULLs ─────────────────────────────
+    // Scope permisivo con NULLs:
     if (role === 'AGENT') {
-      // incluir sin agente
+      // agente dueño o sin agente
       cq.andWhere('(agent.id = :reqId OR agent.id IS NULL)', { reqId: requester.id });
     } else if (role === 'ADMIN') {
-      // incluir sin agente si el país del cliente = país de la branch del admin
-      if (adminBranchCountryId != null) {
-        cq.andWhere('(branch.id = :bId OR (agent.id IS NULL AND country.id = :abCountryId))', {
-          bId: adminBranchId,
-          abCountryId: adminBranchCountryId,
-        });
-      } else {
-        cq.andWhere('(branch.id = :bId OR agent.id IS NULL)', { bId: adminBranchId });
-      }
+      // branch del admin, o sin agente (sin requerir país; si quieres, limita por país)
+      cq.andWhere('(branch.id = :bId OR agent.id IS NULL)', { bId: adminBranchId });
     } else if (role === 'MANAGER') {
-      // incluir sin agente si el país del cliente = managerCountryId
-      cq.andWhere('(branch.countryId = :cId OR (agent.id IS NULL AND country.id = :cId))', {
-        cId: managerCountryId,
-      });
+      // branches de su país, o sin agente (sin requerir país; si quieres, limita por país=managerCountryId)
+      cq.andWhere('(branch.countryId = :cId OR agent.id IS NULL)', { cId: managerCountryId });
     }
 
-    // Filtros de cliente
+    // Filtros de cliente (NO usamos LIKE aquí para name; filtramos en JS con normIncludes)
     if (filters.countryId) cq.andWhere('country.id = :countryId', { countryId: filters.countryId });
     if (filters.branch)    cq.andWhere('branch.id = :branchId',   { branchId: filters.branch });
     if (filters.agent)     cq.andWhere('agent.id = :agentId',     { agentId: filters.agent });
@@ -405,7 +433,10 @@ async findAll(
       cq.andWhere('c.id NOT IN (:...ids)', { ids: Array.from(seenClientIds) });
     }
 
-    const clientsNoLoan = await cq.getMany();
+    const clientsNoLoanRaw = await cq.getMany();
+
+    // ✅ Filtro por nombre insensible a tildes/espacios en JS
+    const clientsNoLoan = clientsNoLoanRaw.filter(c => normIncludes(c?.name, filters.name));
 
     for (const client of clientsNoLoan) {
       const agent = client.agent ?? null;
@@ -423,7 +454,9 @@ async findAll(
     }
   }
 
-  // 5) Orden + distinct + paginación
+  // ───────────────────────────────────────────────────────────────
+  // 5) Orden + distinct + paginación (igual que tenías)
+  // ───────────────────────────────────────────────────────────────
   items.sort((a, b) => {
     const aDate = a.loanRequest?.createdAt ?? a.client?.createdAt ?? new Date(0);
     const bDate = b.loanRequest?.createdAt ?? b.client?.createdAt ?? new Date(0);
@@ -449,7 +482,9 @@ async findAll(
   const startIndex = (page - 1) * limit;
   const data = listForPaging.slice(startIndex, startIndex + limit);
 
+  // ───────────────────────────────────────────────────────────────
   // 6) Totales (solo loans activos)
+  // ───────────────────────────────────────────────────────────────
   const remainingTotal = items
     .filter((it) => it.loanRequest && isActiveLoan(it.loanRequest.status))
     .reduce((sum, it) => sum + Number(it.remainingAmount ?? 0), 0);
@@ -469,6 +504,7 @@ async findAll(
     data,
   };
 }
+
 
   
   

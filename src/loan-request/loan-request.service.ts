@@ -32,6 +32,7 @@ export class LoanRequestService {
   
   
   async create(data: Partial<LoanRequest>): Promise<LoanRequest> {
+    let loanRequest = {}
     try {
     // ────────────────────────────────────────────────────────────────
     // 0) Obtener y validar el CLIENTE
@@ -127,13 +128,12 @@ export class LoanRequestService {
     //    Si tu flujo necesita un estado inicial, lo envías en `data.status`
     //    desde el controller y aquí se respeta tal cual.
     
-    const loanRequest = this.loanRequestRepository.create(data);
-
+     loanRequest = this.loanRequestRepository.create(data);
+  }catch(err){
+    console.log(err, data);
+    throw({err, data});
+  }
     return await this.loanRequestRepository.save(loanRequest);
-        } catch(err){
-
-          return err;
-        }
   }
   
   

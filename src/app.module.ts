@@ -19,6 +19,7 @@ import { PaymentAccountModule } from './payment-accounts/payment-account.module'
 import { ConfigParamModule } from './config-param/config-param.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { ReportsModule } from './reports/reports.module';
+import { CountriesModule } from './country/coumtry.module';
 
 @Module({
   imports: [
@@ -52,6 +53,7 @@ import { ReportsModule } from './reports/reports.module';
     PaymentAccountModule,
     NotificationsModule,
     ReportsModule,
+    CountriesModule
   ],
 })
 export class AppModule {}

@@ -89,11 +89,14 @@ export class LoanRequestService {
       if (!agent.branch?.id) {
         throw new BadRequestException('El agente no tiene branch asignada.');
       }
+      console.log(agent)
+      console.log(client)
+      /**
       if (agent.branch.countryId !== client.country.id) {
         throw new BadRequestException(
           'El agente debe pertenecer a una branch del mismo país que el cliente.',
         );
-      }
+      }*/
       
       data.agent = agent; // normaliza a objeto
     }

@@ -11,6 +11,10 @@ export class Country {
   @Column({ unique: true })
   code: string;   // "CO", "PE", etc.
 
+  @Column({ unique: true, default : null})
+  phoneCode: string;   // "57", "506", etc.
+
+
   @Column()
   name: string;   // "Colombia", "Perú", etc.
 
@@ -22,5 +26,6 @@ export class Country {
   
   @OneToMany(() => User, (u) => u.managerCountry)
   managers: User[];
+
   
 }

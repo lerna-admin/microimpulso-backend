@@ -177,16 +177,42 @@ export class CashService {
   }
   
   /** Paginated movement list with optional search */
+  // Reemplaza COMPLETO este método dentro de CashService
   async getMovements(
     branchId: number,
     limit = 10,
     page = 1,
     search?: string,
     date?: string,
+    currentUser?: User, // ← opcional: si viene y es MANAGER, se filtra por país
   ) {
+    const isManager = String(currentUser?.role ?? '').toUpperCase() === 'MANAGER';
+    console.log('[CashService.getMovements] branchId=', branchId, 'isManager=', isManager, 'userId=', currentUser?.id);
+    
+    let managerCountryId: number | null = null;
+    
+    if (isManager) {
+      const me = await this.userRepository.findOne({
+        where: { id: currentUser!.id },
+        relations: { branch: true },
+      });
+      managerCountryId = (me as any)?.branch?.countryId ?? null;
+      if (!managerCountryId) {
+        throw new BadRequestException('Manager sin país (branch.countryId) asignado');
+      }
+      console.log('[CashService.getMovements] managerCountryId=', managerCountryId);
+    }
+    
+    // Usamos QB para soportar join con branch cuando sea por país
     const qb = this.cashRepo
-    .createQueryBuilder('movement')
-    .where('movement.branchId = :branchId', { branchId });
+    .createQueryBuilder('movement');
+    
+    if (isManager) {
+      qb.leftJoin('movement.branch', 'branch')
+      .where('branch.countryId = :cid', { cid: managerCountryId });
+    } else {
+      qb.where('movement.branchId = :branchId', { branchId });
+    }
     
     if (search && typeof search === 'string' && search.trim()) {
       qb.andWhere('LOWER(movement.reference) LIKE :search', {
@@ -195,8 +221,8 @@ export class CashService {
     }
     
     if (date) {
-      const day = typeof date === 'string' ? date : format(date, 'yyyy-MM-dd');
-      qb.andWhere('DATE(movement.createdAt) = :day', { day });
+      // yyyy-MM-dd
+      qb.andWhere('DATE(movement.createdAt) = :day', { day: date });
     }
     
     qb.orderBy('movement.createdAt', 'DESC')
@@ -204,6 +230,7 @@ export class CashService {
     .take(Math.max(1, limit));
     
     const [rows, total] = await qb.getManyAndCount();
+    console.log('[CashService.getMovements] rows=', rows.length, 'total=', total);
     
     // batch load users for origen/destino
     const ids = Array.from(
@@ -239,11 +266,21 @@ export class CashService {
     };
   }
   
+  
   /**
   * Dashboard totals by branch and date.
   * (Optionally we can exclude admin-made disbursements from KPIs. Kept excluded for coherence.)
   */
-  async getDailyTotals(branchId: number, rawDate: Date | string) {
+  // Reemplaza COMPLETO este método dentro de CashService
+  // Reemplaza COMPLETO este método dentro de CashService
+  async getDailyTotals(
+    branchId: number,
+    rawDate: Date | string,
+    currentUser?: User, // ← si viene y es MANAGER, se filtra por país
+  ) {
+    const isManager = String(currentUser?.role ?? '').toUpperCase() === 'MANAGER';
+    console.log('[CashService.getDailyTotals] branchId=', branchId, 'isManager=', isManager, 'userId=', currentUser?.id);
+    
     let start: Date;
     if (typeof rawDate === 'string') {
       const [y, m, d] = rawDate.split('-').map(Number);
@@ -255,20 +292,54 @@ export class CashService {
     const end = new Date(start);
     end.setHours(23, 59, 59, 999);
     
-    const [movements, previousMovements] = await Promise.all([
-      this.cashRepo.find({
-        where: {
-          branch: { id: branchId },
-          createdAt: Between(start, end),
-        },
-      }),
-      this.cashRepo.find({
-        where: {
-          branch: { id: branchId },
-          createdAt: LessThan(start),
-        },
-      }),
-    ]);
+    let managerCountryId: number | null = null;
+    
+    if (isManager) {
+      const me = await this.userRepository.findOne({
+        where: { id: currentUser!.id },
+        relations: { branch: true },
+      });
+      managerCountryId = (me as any)?.branch?.countryId ?? null;
+      if (!managerCountryId) {
+        throw new BadRequestException('Manager sin país (branch.countryId) asignado');
+      }
+      console.log('[CashService.getDailyTotals] managerCountryId=', managerCountryId);
+    }
+    
+    // -------- Movimientos (por branch o por país) --------
+    let movements: CashMovement[] = [];
+    let previousMovements: CashMovement[] = [];
+    
+    if (isManager) {
+      movements = await this.cashRepo
+      .createQueryBuilder('m')
+      .leftJoin('m.branch', 'b')
+      .where('b.countryId = :cid', { cid: managerCountryId! })
+      .andWhere('m.createdAt BETWEEN :start AND :end', { start, end })
+      .getMany();
+      
+      previousMovements = await this.cashRepo
+      .createQueryBuilder('m')
+      .leftJoin('m.branch', 'b')
+      .where('b.countryId = :cid', { cid: managerCountryId! })
+      .andWhere('m.createdAt < :start', { start })
+      .getMany();
+    } else {
+      [movements, previousMovements] = await Promise.all([
+        this.cashRepo.find({
+          where: {
+            branch: { id: branchId },
+            createdAt: Between(start, end),
+          },
+        }),
+        this.cashRepo.find({
+          where: {
+            branch: { id: branchId },
+            createdAt: LessThan(start),
+          },
+        }),
+      ]);
+    }
     
     const cajaAnterior = previousMovements.reduce((tot, m) => {
       const amt = +m.amount;
@@ -286,34 +357,61 @@ export class CashService {
     const cajaReal = cajaAnterior + totalEntradas - totalSalidas;
     
     const byCategory = (cat: string) =>
-      movements
-    .filter((m) => m.category === cat)
-    .reduce((s, m) => s + +m.amount, 0);
+      movements.filter((m) => m.category === cat).reduce((s, m) => s + +m.amount, 0);
     
     const entraCaja = byCategory('ENTRADA_GERENCIA');
     const totalCobros = byCategory('COBRO_CLIENTE');
     const totalDesembolsos = byCategory('PRESTAMO');
     const totalGastos = byCategory('GASTO_PROVEEDOR');
     
-    // Optional coherence: exclude admin-made disbursements from branch KPIs
-    const disbursements = await this.loanTransactionRepo.find({
-      where: {
-        Transactiontype: TransactionType.DISBURSEMENT,
-        date: Between(start, end),
-        loanRequest: { agent: { branch: { id: branchId } } },
-        isAdminTransaction: false as any,
-      },
-      relations: { loanRequest: { client: true, agent: { branch: true } } },
-    });
+    // ---------- Disbursements / Penalties ----------
+    let disbursements: LoanTransaction[] = [];
+    let penalties: LoanTransaction[] = [];
     
-    const penalties = await this.loanTransactionRepo.find({
-      where: {
-        Transactiontype: TransactionType.PENALTY,
-        date: Between(start, end),
-        loanRequest: { agent: { branch: { id: branchId } } },
-      },
-      relations: { loanRequest: { client: true, agent: { branch: true } } },
-    });
+    if (isManager) {
+      // Usamos QB para evitar el typing issue del where anidado
+      disbursements = await this.loanTransactionRepo
+      .createQueryBuilder('tx')
+      .innerJoinAndSelect('tx.loanRequest', 'lr')
+      .innerJoinAndSelect('lr.agent', 'agent')
+      .innerJoinAndSelect('agent.branch', 'branch')
+      .where('LOWER(tx.Transactiontype) = :type', { type: 'disbursement' })
+      .andWhere('tx.date BETWEEN :start AND :end', { start, end })
+      .andWhere('branch.countryId = :cid', { cid: managerCountryId! })
+      .andWhere('(tx.isAdminTransaction IS NULL OR tx.isAdminTransaction = :f)', { f: false })
+      .getMany();
+      
+      penalties = await this.loanTransactionRepo
+      .createQueryBuilder('tx')
+      .innerJoinAndSelect('tx.loanRequest', 'lr')
+      .innerJoinAndSelect('lr.agent', 'agent')
+      .innerJoinAndSelect('agent.branch', 'branch')
+      .where('LOWER(tx.Transactiontype) = :type', { type: 'penalty' })
+      .andWhere('tx.date BETWEEN :start AND :end', { start, end })
+      .andWhere('branch.countryId = :cid', { cid: managerCountryId! })
+      .getMany();
+    } else {
+      disbursements = await this.loanTransactionRepo
+      .createQueryBuilder('tx')
+      .innerJoinAndSelect('tx.loanRequest', 'lr')
+      .innerJoinAndSelect('lr.agent', 'agent')
+      .innerJoinAndSelect('agent.branch', 'branch')
+      .where('LOWER(tx.Transactiontype) = :type', { type: 'disbursement' })
+      .andWhere('tx.date BETWEEN :start AND :end', { start, end })
+      .andWhere('branch.id = :bid', { bid: branchId })
+      .andWhere('(tx.isAdminTransaction IS NULL OR tx.isAdminTransaction = :f)', { f: false })
+      .getMany();
+      
+      penalties = await this.loanTransactionRepo
+      .createQueryBuilder('tx')
+      .innerJoinAndSelect('tx.loanRequest', 'lr')
+      .innerJoinAndSelect('lr.agent', 'agent')
+      .innerJoinAndSelect('agent.branch', 'branch')
+      .where('LOWER(tx.Transactiontype) = :type', { type: 'penalty' })
+      .andWhere('tx.date BETWEEN :start AND :end', { start, end })
+      .andWhere('branch.id = :bid', { bid: branchId })
+      .getMany();
+    }
     
     const renewedByRequest = new Map<number, LoanRequest>();
     for (const pen of penalties) {
@@ -333,6 +431,8 @@ export class CashService {
     const totalNuevos = nuevosHoy.reduce((sum, m) => sum + +m.amount, 0);
     const countNuevos = nuevosHoy.length;
     
+    console.log('[CashService.getDailyTotals] cajaAnterior=', cajaAnterior, 'cajaReal=', cajaReal);
+    
     return [
       { label: 'Caja anterior', value: cajaAnterior, trend: '' },
       { label: 'Entra caja', value: entraCaja, trend: 'increase' },
@@ -344,6 +444,8 @@ export class CashService {
       { label: 'Nuevos', value: totalNuevos, trend: 'decrease', amount: countNuevos },
     ];
   }
+  
+  
   
   /**
   * Dashboard tiles by user + date (agent view).
@@ -504,16 +606,16 @@ export class CashService {
     const tiles = [
       { label: 'Caja anterior', value: opening },
       { label: 'Entra caja', value: entraCaja, trend: 'increase' },
-            { label: 'Nuevos', value: totalNuevos, trend: 'decrease', amount: countNuevos },
-
-
+      { label: 'Nuevos', value: totalNuevos, trend: 'decrease', amount: countNuevos },
+      
+      
       { label: 'Préstamos', value: totalDesembolsos + totalRenovados, trend: 'decrease', amount : countNuevos + countRenovados },
       { label: 'Caja real', value: realCash },
-            { label: 'Cobro', value: totalCobros, trend: 'increase' },
-
+      { label: 'Cobro', value: totalCobros, trend: 'increase' },
+      
       { label: 'Renovados', value: totalRenovados, trend: 'decrease', amount: countRenovados },
-                  { label: 'Gastos', value: totalGastos, trend: 'decrease', hideForAgent: true },
-
+      { label: 'Gastos', value: totalGastos, trend: 'decrease', hideForAgent: true },
+      
     ];
     
     return role === 'AGENT' ? tiles.filter((t) => !t.hideForAgent) : tiles;
@@ -1483,18 +1585,18 @@ export class CashService {
       { header: 'Días mora', key: 'diasMora', width: 10 },
     ];
     
- const fmtDT = (d: Date | string | null | undefined): string => {
-  if (!d) return '';
-  const x = d instanceof Date ? d : new Date(d);
-  if (!(x instanceof Date) || isNaN(x.getTime())) return '';
-  const y = x.getFullYear();
-  const m = String(x.getMonth() + 1).padStart(2, '0');
-  const dd = String(x.getDate()).padStart(2, '0');
-  const hh = String(x.getHours()).padStart(2, '0');
-  const mi = String(x.getMinutes()).padStart(2, '0');
-  const ss = String(x.getSeconds()).padStart(2, '0');
-  return `${y}-${m}-${dd} ${hh}:${mi}:${ss}`;
-};
+    const fmtDT = (d: Date | string | null | undefined): string => {
+      if (!d) return '';
+      const x = d instanceof Date ? d : new Date(d);
+      if (!(x instanceof Date) || isNaN(x.getTime())) return '';
+      const y = x.getFullYear();
+      const m = String(x.getMonth() + 1).padStart(2, '0');
+      const dd = String(x.getDate()).padStart(2, '0');
+      const hh = String(x.getHours()).padStart(2, '0');
+      const mi = String(x.getMinutes()).padStart(2, '0');
+      const ss = String(x.getSeconds()).padStart(2, '0');
+      return `${y}-${m}-${dd} ${hh}:${mi}:${ss}`;
+    };
     wsPrestamos.addRows(
       filas.map((r) => ({
         ...r,

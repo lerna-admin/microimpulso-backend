@@ -31,113 +31,168 @@ export class LoanRequestService {
   
   
   
-  async create(data: Partial<LoanRequest>): Promise<LoanRequest> {
-    let loanRequest = {}
-    try {
+  async create(data: any): Promise<LoanRequest> {
+  console.log('[LoanRequestService.create] INPUT =', JSON.stringify(data));
+
+  try {
     // ────────────────────────────────────────────────────────────────
-    // 0) Obtener y validar el CLIENTE
-    //    Acepta id numérico o un objeto { id: ... }
+    // 0) CLIENTE: obtener ID y cargar con country (evita TypeError)
     // ────────────────────────────────────────────────────────────────
     const clientId =
-    typeof data.client === 'number'
-    ? data.client
-    : (data.client as any)?.id;
-    
+      typeof data?.client === 'number'
+        ? data.client
+        : (data?.client as any)?.id;
+
+    console.log('[create] parsed clientId =', clientId);
+
     if (!clientId) {
+      console.log('[create] ERROR: falta client');
       throw new BadRequestException('Falta cliente en la solicitud.');
     }
-    
-    const client = await this.clientRepository.findOne({ where: { id: clientId } });
+
+    const client = await this.clientRepository.findOne({
+      where: { id: clientId },
+      relations: ['country'],
+    });
+
+    console.log(
+      '[create] loaded client =',
+      client ? { id: client.id, countryRelId: client.country?.id } : null,
+    );
+
     if (!client) {
+      console.log('[create] ERROR: cliente no encontrado');
       throw new BadRequestException('Cliente no encontrado.');
     }
-    // Se asume que client.countryId existe (según tus entidades)
-    
+    if (!client.country?.id) {
+      console.log('[create] ERROR: cliente sin país');
+      throw new BadRequestException('El cliente no tiene país asignado.');
+    }
+
+    const clientCountryId = Number(client.country.id);
+
     // ────────────────────────────────────────────────────────────────
-    // 1) Resolver/validar el AGENTE por país:
-    //    Regla: agent.branch.countryId === client.countryId
+    // 1) AGENTE: resolver
+    //    - si NO viene -> elegir el MÁS DESOCUPADO en el MISMO PAÍS
+    //    - si SÍ viene -> usarlo (validar existencia)
     // ────────────────────────────────────────────────────────────────
-    if (!data.agent) {
-      // No se envió agente: elegimos uno aleatorio del MISMO país del cliente
-      const randomAgent = await this.userRepository
-      .createQueryBuilder('user')
-      .leftJoinAndSelect('user.branch', 'branch')
-      .where('user.role = :role', { role: 'AGENT' })
-      .andWhere('branch.countryId = :cid', { cid: client.country.id })
-      // Si usas alguna bandera en branch (como acceptsInbound), la puedes añadir:
-      // .andWhere('branch.acceptsInbound = :acc', { acc: true })
-      .orderBy('RANDOM()') // SQLite/Postgres; en MySQL sería RAND()
-      .limit(1)
-      .getOne();
-      
-      if (!randomAgent) {
+    let resolvedAgent: User | null = null;
+    const incomingAgentRaw = data?.agent;
+    const incomingAgent = (incomingAgentRaw ?? '').toString().trim();
+    console.log('[create] incomingAgent (raw)=', incomingAgentRaw, 'trim=', incomingAgent);
+
+    if (!incomingAgent) {
+      // Estados que consideramos "abiertos" para medir carga
+      const OPEN_STATES = ['new', 'approved', 'active'];
+      console.log('[create] picking least-busy AGENT in country =', clientCountryId, 'openStates =', OPEN_STATES);
+
+      // Query: usuarios con role=AGENT y branch del país del cliente,
+      // con conteo de loans abiertos, orden ascendente (menos ocupados primero).
+      const qb = this.userRepository
+        .createQueryBuilder('user')
+        .leftJoinAndSelect('user.branch', 'branch')
+        .where('user.role = :role', { role: 'AGENT' })
+        .andWhere('branch.countryId = :cid', { cid: clientCountryId })
+        .leftJoin(
+          this.loanRequestRepository.metadata.target as any,
+          'lr',
+          'lr.agentId = user.id AND lr.status IN (:...open)',
+          { open: OPEN_STATES },
+        )
+        .groupBy('user.id')
+        .orderBy('COUNT(lr.id)', 'ASC') // menos ocupados primero
+        .addOrderBy('user.id', 'ASC')   // desempate estable
+        .limit(1);
+
+      resolvedAgent = await qb.getOne();
+      console.log('[create] picked agent =', resolvedAgent ? { id: resolvedAgent.id, name: resolvedAgent.name } : null);
+
+      if (!resolvedAgent) {
+        console.log('[create] ERROR: no hay agentes disponibles en ese país');
         throw new BadRequestException('No hay agentes disponibles en el país del cliente.');
       }
-      
-      data.agent = randomAgent; // normaliza a objeto
+      data.agent = resolvedAgent; // normaliza a objeto
     } else {
-      // Se envió agente: validamos su branch contra el país del cliente
-      const agentId = (data.agent as any)?.id ?? (data.agent as any);
-      const agent = await this.userRepository.findOne({
-        where: { id: agentId },
-        relations: ['branch'],
+      const providedAgentId = Number(incomingAgent);
+      console.log('[create] providedAgentId =', providedAgentId);
+
+      if (!providedAgentId || Number.isNaN(providedAgentId)) {
+        console.log('[create] ERROR: agent inválido');
+        throw new BadRequestException('agent: ID de agente inválido.');
+      }
+
+      resolvedAgent = await this.userRepository.findOne({
+        where: { id: providedAgentId },
       });
-      
-      if (!agent) {
+      console.log('[create] loaded provided agent =', resolvedAgent ? { id: resolvedAgent.id } : null);
+
+      if (!resolvedAgent) {
+        console.log('[create] ERROR: agente no existe');
         throw new BadRequestException('Agente no existe.');
       }
-      if (!agent.branch?.id) {
-        throw new BadRequestException('El agente no tiene branch asignada.');
-      }
-      console.log(agent)
-      console.log(client)
-      /**
-      if (agent.branch.countryId !== client.country.id) {
-        throw new BadRequestException(
-          'El agente debe pertenecer a una branch del mismo país que el cliente.',
-        );
-      }*/
-      
-      data.agent = agent; // normaliza a objeto
+      data.agent = resolvedAgent; // normaliza a objeto
     }
-    
+
     // ────────────────────────────────────────────────────────────────
-    // 2) (Opcional) Chequeo de “ya tiene solicitud abierta”
-    //    Dejo tu lógica tal cual (descomentá si quieres bloquear)
+    // 2) Chequeo opcional: ya tiene solicitud abierta (respetando tu lógica)
     // ────────────────────────────────────────────────────────────────
     const hasOpen = await this.loanRequestRepository.exist({
       where: {
         client: { id: clientId },
-        status: Not(In([LoanRequestStatus.COMPLETED, LoanRequestStatus.REJECTED])),
+        status: In(['new', 'approved', 'active']), // ajusta si usas enum LoanRequestStatus
       },
     });
-    // if (hasOpen) {
-    //   throw new BadRequestException('El cliente ya tiene una solicitud abierta.');
-    // }
-    
+    console.log('[create] client has open request? =', hasOpen);
+    // if (hasOpen) throw new BadRequestException('El cliente ya tiene una solicitud abierta.');
+
     // ────────────────────────────────────────────────────────────────
-    // 3) Completar datos derivados y persistir
+    // 3) Completar datos y persistir
     // ────────────────────────────────────────────────────────────────
-    data.client = client; // asegurar relación
-    
-    // Conserva tu cálculo de 'mode'
-    data.mode = (
-      data.amount
-      ? (data.amount < 1000 ? data.amount : (data.amount as number) / 1000)
-      : 100
-    ).toString().concat('X1');
-    
-    // ⚠️ No seteo ningún estado por defecto (no invento 'PENDING')
-    //    Si tu flujo necesita un estado inicial, lo envías en `data.status`
-    //    desde el controller y aquí se respeta tal cual.
-    
-     loanRequest = this.loanRequestRepository.create(data);
-  }catch(err){
-    console.log(err, data);
-    throw({err, data});
+    data.client = client;
+
+    // Tu cálculo de 'mode' original
+    const amountNum = Number(data?.amount ?? 0);
+    const base = amountNum ? (amountNum < 1000 ? amountNum : amountNum / 1000) : 100;
+    data.mode = String(base).concat('X1');
+
+    // Normaliza fecha
+    const endDate = data?.endDateAt ? new Date(data.endDateAt) : null;
+    if (endDate && Number.isNaN(endDate.getTime())) {
+      console.log('[create] WARNING: endDateAt inválida, se dejará null');
+      data.endDateAt = null as any;
+    }
+
+    const payload: Partial<LoanRequest> = {
+      status: data?.status ?? 'new',
+      requestedAmount: data?.requestedAmount,
+      endDateAt: data.endDateAt,
+      amount: data?.amount,
+      paymentDay: data?.paymentDay,
+      type: data?.type,
+      client: data.client,
+      agent: data.agent,
+      mode: data.mode,
+      notes: data?.notes,
+      // incluye otros campos si los estás enviando
+    };
+
+    console.log('[create] persist payload =', {
+      ...payload,
+      client: client.id,
+      agent: (data.agent as User)?.id,
+    });
+
+    const entity = this.loanRequestRepository.create(payload);
+    const saved = await this.loanRequestRepository.save(entity);
+
+    console.log('[create] SUCCESS loanRequest saved =', { id: saved.id });
+    return saved;
+  } catch (err) {
+    console.error('[create] ERROR =', err);
+    console.error('[create] CONTEXT data =', JSON.stringify(data));
+    throw err;
   }
-    return await this.loanRequestRepository.save(loanRequest);
-  }
+}
   
   
   async renewLoanRequest(

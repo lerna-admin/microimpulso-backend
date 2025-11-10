@@ -32,6 +32,7 @@ export class LoanRequestService {
   
   
   async create(data: Partial<LoanRequest>): Promise<LoanRequest> {
+    try {
     // ────────────────────────────────────────────────────────────────
     // 0) Obtener y validar el CLIENTE
     //    Acepta id numérico o un objeto { id: ... }
@@ -127,7 +128,12 @@ export class LoanRequestService {
     //    desde el controller y aquí se respeta tal cual.
     
     const loanRequest = this.loanRequestRepository.create(data);
+
     return await this.loanRequestRepository.save(loanRequest);
+        } catch(err){
+
+          return err;
+        }
   }
   
   

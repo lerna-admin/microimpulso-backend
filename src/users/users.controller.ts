@@ -71,6 +71,7 @@ async findAll(
     if (!updated) throw new NotFoundException('User not found');
     return updated;
   }
+  
   @Patch(':id/inactivate')
   async inactivateUser(
     @Param('id') id: string,

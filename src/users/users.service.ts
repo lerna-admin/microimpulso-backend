@@ -248,7 +248,7 @@ async inactivateUser(
   body: any,
   currentUser: any,
 ) {
-  // Helpers locales SOLO con console.*
+  // ===== Helpers (solo console.*) =====
   const safeBody = (b: any) => {
     try {
       const clone: any = JSON.parse(JSON.stringify(b ?? {}));
@@ -262,36 +262,28 @@ async inactivateUser(
       };
       redact(clone);
       return clone;
-    } catch {
-      return b;
-    }
-  };
-  const logCtx = {
-    targetUserId,
-    currentUserId: currentUser?.id,
-    currentUserRole: currentUser?.role,
-    body: safeBody(body),
+    } catch { return b; }
   };
   const logErrorAndRethrow = (e: any, where: string, extra?: Record<string, any>) => {
     console.error(`[inactivateUser][ERROR] ${where} ::`, {
-      msg: e?.message,
-      name: e?.name,
-      code: e?.code,
-      driverError: e?.driverError,
-      ...logCtx,
-      ...(extra || {}),
+      msg: e?.message, name: e?.name, code: e?.code, driverError: e?.driverError, ...extra,
     });
     throw e;
   };
 
-  console.log('[inactivateUser] called ::', logCtx);
+  // Determinar el "actor" (quien ejecuta), SIN exigir autenticación previa
+  const actorUserId =
+    Number(currentUser?.id ?? body?.currentUserId ?? body?.currentUser ?? NaN);
+
+  const ctx = {
+    targetUserId,
+    actorUserId: isNaN(actorUserId) ? undefined : actorUserId,
+    body: safeBody(body),
+  };
+
+  console.log('[inactivateUser] called ::', ctx);
 
   try {
-    if (!currentUser?.id || !currentUser?.role) {
-      console.error('[inactivateUser] Auth inválida ::', logCtx);
-      throw new ForbiddenException('Usuario no autenticado o sin rol.');
-    }
-
     // Cargar target con relaciones necesarias
     let target: User | null = null;
     try {
@@ -301,27 +293,21 @@ async inactivateUser(
       });
       console.log('[inactivateUser] loaded target ::', target ? { id: target.id, role: target.role, branchId: target.branch?.id } : null);
     } catch (e) {
-      return logErrorAndRethrow(e, 'findOne(target)');
+      return logErrorAndRethrow(e, 'findOne(target)', ctx);
     }
 
     if (!target) {
-      console.error('[inactivateUser] Target no existe ::', logCtx);
+      console.error('[inactivateUser] Target no existe ::', ctx);
       throw new NotFoundException('Usuario a inactivar no existe.');
     }
-    if (target.id === currentUser.id) {
-      console.error('[inactivateUser] Auto-inactivación bloqueada ::', { ...logCtx, targetId: target.id });
+
+    // Proteger contra auto-inactivación si el actor es el mismo target (solo si conocemos actorUserId)
+    if (!isNaN(actorUserId) && target.id === actorUserId) {
+      console.error('[inactivateUser] Auto-inactivación bloqueada ::', { ...ctx, targetId: target.id });
       throw new BadRequestException('No puedes inactivarte a ti mismo.');
     }
 
-    const role = String(target.role).toUpperCase();
-
-    const ensureActiveUser = (u: User | null, msg: string) => {
-      if (!u) {
-        console.error('[inactivateUser] ensureActiveUser failed ::', { msg, ...logCtx });
-        throw new NotFoundException(msg);
-      }
-      return u;
-    };
+    const targetRole = String(target.role).toUpperCase();
 
     // ===== TRANSACCIÓN =====
     try {
@@ -337,19 +323,24 @@ async inactivateUser(
         const branchTx = trx.getRepository(Branch);
         const loanTx = trx.getRepository(LoanRequest);
 
-        // Cargar currentUser completo si se requiere (por branch)
+        // Cargar "me" (actor) solo si tenemos id; si no, se seguirá fallando al validar permisos explícitos
         let me: User | null = null;
-        try {
-          me = await userTx.findOne({ where: { id: currentUser.id }, relations: ['branch'] });
-          txLog('currentUser loaded', me ? { id: me.id, role: me.role, branchId: me.branch?.id } : { me: null });
-        } catch (e) {
-          logErrorAndRethrow(e, 'TX findOne(currentUser)', { txnId });
+        if (!isNaN(actorUserId)) {
+          try {
+            me = await userTx.findOne({ where: { id: actorUserId }, relations: ['branch'] });
+            txLog('actor loaded', me ? { id: me.id, role: me.role, branchId: me.branch?.id } : { me: null, actorUserId });
+          } catch (e) {
+            logErrorAndRethrow(e, 'TX findOne(actor)', { txnId, actorUserId });
+          }
+        } else {
+          txLog('actorUserId not provided, will rely on explicit permission checks', { actorUserId });
         }
 
         // ========= CASO 1: ADMIN inactiva AGENTE (misma branch) =========
-        if (role === 'AGENT') {
-          if (String(me?.role).toUpperCase() !== 'ADMIN') {
-            console.error('[inactivateUser] Rol no autorizado para AGENT ::', { txnId, meRole: me?.role, ...logCtx });
+        if (targetRole === 'AGENT') {
+          // Validar SOLO rol ADMIN del actor
+          if (!me || String(me.role).toUpperCase() !== 'ADMIN') {
+            console.error('[inactivateUser] Permiso denegado (se requiere ADMIN) ::', { txnId, actorId: me?.id, actorRole: me?.role });
             throw new ForbiddenException('Solo un ADMIN puede inactivar agentes.');
           }
           if (!target.branch?.id) {
@@ -357,6 +348,7 @@ async inactivateUser(
             throw new BadRequestException('El agente no tiene branch asignada.');
           }
 
+          // Verificar que el ADMIN sea administrator de la branch del target
           let branchOfTarget: Branch | null = null;
           try {
             branchOfTarget = await branchTx.findOne({
@@ -368,14 +360,14 @@ async inactivateUser(
             logErrorAndRethrow(e, 'TX findOne(branchOfTarget)', { txnId, branchId: target.branch.id });
           }
 
-          if (!branchOfTarget?.administrator?.id || branchOfTarget.administrator.id !== me!.id) {
+          if (!branchOfTarget?.administrator?.id || branchOfTarget.administrator.id !== me.id) {
             console.error('[inactivateUser] ADMIN no coincide con branch del AGENT ::', {
-              txnId, branchId: branchOfTarget?.id, adminOfBranch: branchOfTarget?.administrator?.id, meId: me?.id,
+              txnId, branchId: branchOfTarget?.id, adminOfBranch: branchOfTarget?.administrator?.id, actorId: me?.id,
             });
             throw new ForbiddenException('No eres el administrador de la sede de este agente.');
           }
 
-          // Resolver reemplazo: mismo rol (AGENT) y misma branch
+          // Resolver reemplazo AGENT
           let replacement: User | null = null;
 
           if (body?.replacementUserId) {
@@ -388,7 +380,10 @@ async inactivateUser(
             } catch (e) {
               logErrorAndRethrow(e, 'TX findOne(replacement AGENT)', { txnId, replacementUserId: body?.replacementUserId });
             }
-            replacement = ensureActiveUser(replacement, 'Agente de reemplazo no existe.');
+            if (!replacement) {
+              console.error('[inactivateUser] Replacement AGENT no existe ::', { txnId, replacementUserId: body?.replacementUserId });
+              throw new NotFoundException('Agente de reemplazo no existe.');
+            }
             if (String(replacement.role).toUpperCase() !== 'AGENT') {
               console.error('[inactivateUser] Replacement no es AGENT ::', { txnId, replacementId: replacement.id, replacementRole: replacement.role });
               throw new BadRequestException('El reemplazo debe ser un AGENT.');
@@ -415,11 +410,11 @@ async inactivateUser(
               logErrorAndRethrow(e, 'TX create/save(replacement AGENT)', { txnId, payload: safeBody(payload) });
             }
           } else {
-            console.error('[inactivateUser] Falta replacement AGENT ::', { txnId, ...logCtx });
+            console.error('[inactivateUser] Falta replacement AGENT ::', { txnId, ...ctx });
             throw new BadRequestException('Debes elegir o crear un agente de reemplazo.');
           }
 
-          // Reasignar loan requests abiertas del agente saliente
+          // Reasignar loans abiertas
           let toReassign: LoanRequest[] = [];
           try {
             const CLOSED = new Set<any>(['completed', 'rejected', LoanRequestStatus.COMPLETED, LoanRequestStatus.REJECTED].filter(Boolean));
@@ -454,13 +449,14 @@ async inactivateUser(
         }
 
         // ========= CASO 2: MANAGER inactiva ADMIN =========
-        if (role === 'ADMIN') {
-          if (String(me?.role).toUpperCase() !== 'MANAGER') {
-            console.error('[inactivateUser] Rol no autorizado para ADMIN ::', { txnId, meRole: me?.role, ...logCtx });
+        if (targetRole === 'ADMIN') {
+          // Validar SOLO rol MANAGER del actor
+          if (!me || String(me.role).toUpperCase() !== 'MANAGER') {
+            console.error('[inactivateUser] Permiso denegado (se requiere MANAGER) ::', { txnId, actorId: me?.id, actorRole: me?.role });
             throw new ForbiddenException('Solo un MANAGER puede inactivar admins.');
           }
 
-          // Branches que administra el admin objetivo
+          // Branches del admin target
           let targetBranches: Branch[] = [];
           try {
             targetBranches = await branchTx.find({
@@ -472,7 +468,7 @@ async inactivateUser(
             logErrorAndRethrow(e, 'TX find(targetBranches by admin)', { txnId, targetAdminId: target.id });
           }
 
-          // Resolver replacement de admin si corresponde
+          // Resolver replacement ADMIN si corresponde
           let replacement: User | null = null;
 
           if (targetBranches.length > 0) {
@@ -483,7 +479,10 @@ async inactivateUser(
               } catch (e) {
                 logErrorAndRethrow(e, 'TX findOne(replacement ADMIN)', { txnId, replacementUserId: body?.replacementUserId });
               }
-              replacement = ensureActiveUser(replacement, 'Admin de reemplazo no existe.');
+              if (!replacement) {
+                console.error('[inactivateUser] Replacement ADMIN no existe ::', { txnId, replacementUserId: body?.replacementUserId });
+                throw new NotFoundException('Admin de reemplazo no existe.');
+              }
               if (String(replacement.role).toUpperCase() !== 'ADMIN') {
                 console.error('[inactivateUser] Replacement no es ADMIN ::', { txnId, replacementId: replacement.id, replacementRole: replacement.role });
                 throw new BadRequestException('El reemplazo debe ser un ADMIN.');
@@ -512,12 +511,12 @@ async inactivateUser(
                 logErrorAndRethrow(e, 'TX create/save(replacement ADMIN)', { txnId, payload: safeBody(payload) });
               }
             } else {
-              console.error('[inactivateUser] Falta replacement ADMIN para sedes ::', { txnId, countBranches: targetBranches.length, ...logCtx });
+              console.error('[inactivateUser] Falta replacement ADMIN para sedes ::', { txnId, countBranches: targetBranches.length, ...ctx });
               throw new BadRequestException('Debes elegir o crear un admin de reemplazo para las sedes que administra.');
             }
           }
 
-          // Si hay sedes, asignar administrator al replacement
+          // Reasignar branches al replacement
           if (targetBranches.length > 0 && replacement) {
             try {
               for (const b of targetBranches) b.administrator = replacement!;
@@ -542,18 +541,19 @@ async inactivateUser(
         }
 
         // Otros roles: no soportado en este flujo
-        console.error('[inactivateUser] Rol no soportado ::', { role: target.role, ...logCtx });
+        console.error('[inactivateUser] Rol no soportado ::', { role: target.role, ...ctx });
         throw new BadRequestException('Solo se permite inactivar usuarios con rol AGENT o ADMIN.');
       });
     } catch (e) {
       // Errores dentro de la transacción
-      return logErrorAndRethrow(e, 'TRANSACTION WRAPPER');
+      return logErrorAndRethrow(e, 'TRANSACTION WRAPPER', ctx);
     }
   } catch (e) {
     // Errores fuera/previos a la transacción
-    logErrorAndRethrow(e, 'TOP-LEVEL CATCH');
+    logErrorAndRethrow(e, 'TOP-LEVEL CATCH', ctx);
   }
 }
+
 
 
 }

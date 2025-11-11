@@ -203,9 +203,7 @@ export class ClientsService {
   // ============================================================
   // ========================  FIND ALL  ========================
   // ============================================================
-
-
-async findAll(
+async findAllORI(
   limit: number = 10,
   page: number = 1,
   filters: {
@@ -505,6 +503,307 @@ async findAll(
   };
 }
 
+async findAll(
+  limit: number = 10,
+  page: number = 1,
+  filters: {
+    status?: 'active' | 'inactive' | 'rejected';
+    document?: string;
+    name?: string;
+    mode?: string;
+    type?: string;
+    paymentDay?: string;
+    agent?: number;
+    branch?: number;     // branch del agente (filtro adicional opcional)
+    countryId?: number;  // país del cliente (filtro adicional opcional)
+    distinct?: boolean;
+  } = {},
+  requesterUserId: number,
+): Promise<any> {
+  // ───────────────────────────────────────────────────────────────
+  // 0) Scope por rol
+  // ───────────────────────────────────────────────────────────────
+  const requester = await this.userRepository.findOne({
+    where: { id: requesterUserId },
+    relations: ['branch', 'managerCountry'],
+  });
+  if (!requester) throw new BadRequestException('Usuario solicitante no existe.');
+
+  const role = String(requester.role).toUpperCase();
+  let adminBranchId: number | null = null;
+  let adminBranchCountryId: number | null = null;
+  let managerCountryId: number | null = null;
+
+  if (role === 'ADMIN') {
+    adminBranchId = (requester as any)?.branch?.id ?? (requester as any)?.branchId ?? null;
+    adminBranchCountryId = (requester as any)?.branch?.countryId ?? null;
+    if (!adminBranchId) throw new BadRequestException('El ADMIN no tiene branch asignada.');
+  } else if (role === 'MANAGER') {
+    const raw =
+      (requester as any)?.managerCountryId ??
+      (requester as any)?.managerCountry?.id ??
+      null;
+
+    managerCountryId = raw != null ? Number(raw) : null;
+    if (!Number.isFinite(managerCountryId)) {
+      throw new BadRequestException('No se pudo determinar managerCountryId para el MANAGER.');
+    }
+  } else if (role !== 'AGENT') {
+    throw new BadRequestException('Rol no soportado. Use AGENT | ADMIN | MANAGER.');
+  }
+
+  // ───────────────────────────────────────────────────────────────
+  // Helpers para normalizar strings (tildes/espacios)
+  // ───────────────────────────────────────────────────────────────
+  const norm = (s?: string) =>
+    String(s ?? '')
+      .normalize('NFD')
+      .replace(/\p{Diacritic}/gu, '') // quita diacríticos
+      .replace(/\s+/g, ' ')           // colapsa espacios
+      .trim()
+      .toLowerCase();
+
+  const normIncludes = (haystack?: string, needle?: string) => {
+    const h = norm(haystack);
+    const n = norm(needle);
+    return n ? h.includes(n) : true;
+  };
+
+  // ───────────────────────────────────────────────────────────────
+  // 1) Traer LOANS (con country) — con where SOLO para MANAGER
+  // ───────────────────────────────────────────────────────────────
+  const findOptions: any = {
+    relations: { client: { country: true }, transactions: true, agent: { branch: true } },
+    order: { createdAt: 'DESC' },
+  };
+
+  if (role === 'MANAGER') {
+    // Limita desde BD por país de la branch del agente
+    findOptions.where = { agent: { branch: { countryId: managerCountryId } } };
+  }
+
+  const loans = await this.loanRequestRepository.find(findOptions);
+
+  // ───────────────────────────────────────────────────────────────
+  // 2) Helpers de estado
+  // ───────────────────────────────────────────────────────────────
+  const lower = (s?: string) => String(s ?? '').toLowerCase();
+  const isActiveLoan = (s?: string) => ['funded', 'renewed'].includes(lower(s));
+  const txTypeOf = (t: any) =>
+    lower((t?.type ?? t?.transactionType ?? t?.Transactiontype) as string);
+  const now = new Date();
+  const daysLateOf = (end?: Date | string | null) => {
+    const d = end ? new Date(end) : null;
+    return d && now > d ? Math.floor((now.getTime() - d.getTime()) / 86_400_000) : 0;
+  };
+
+  // ───────────────────────────────────────────────────────────────
+  // 3) Agregadores
+  // ───────────────────────────────────────────────────────────────
+  let totalActiveAmountBorrowed = 0;
+  let totalActiveRepayment = 0;
+  const activeClientIds = new Set<number>();
+  let mora15 = 0;
+  let critical20 = 0;
+  let noPayment30 = 0;
+
+  const items: any[] = [];
+  const seenClientIds = new Set<number>();
+
+  // ───────────────────────────────────────────────────────────────
+  // 4) Iterar LOANS (tu lógica), usando normIncludes para name/doc
+  // ───────────────────────────────────────────────────────────────
+  for (const loan of loans) {
+    const client = loan.client;
+    const agent  = loan.agent;
+    const branch = agent?.branch as any;
+    if (!client || !agent || !branch) continue;
+
+    // Scope
+    if (role === 'AGENT') {
+      if (agent.id !== requester.id) continue;
+    } else if (role === 'ADMIN') {
+      if (branch.id !== adminBranchId) continue;
+    } else if (role === 'MANAGER') {
+      // Verificación defensiva por si alguna relación vino parcial
+      const branchCountryId = Number(branch?.countryId ?? branch?.country?.id ?? NaN);
+      if (!Number.isFinite(branchCountryId) || branchCountryId !== managerCountryId) continue;
+    }
+
+    // Filtros
+    if (filters.countryId && (client.country?.id ?? null) !== filters.countryId) continue;
+    if (filters.branch && branch.id !== filters.branch) continue;
+    if (filters.agent && agent.id !== filters.agent) continue;
+    if (filters.document && !normIncludes(client.document, filters.document)) continue;
+    if (filters.name && !normIncludes(client.name, filters.name)) continue;
+
+    const derivedStatus: 'active' | 'inactive' =
+      isActiveLoan(loan.status) ? 'active' : 'inactive';
+
+    if (filters.status) {
+      if (filters.status === 'rejected') {
+        if (lower(loan.status) !== 'rejected') continue;
+      } else {
+        if (filters.status !== derivedStatus) continue;
+      }
+    }
+
+    if (filters.mode && String(loan.mode) !== filters.mode) continue;
+    if (filters.type && loan.type !== filters.type) continue;
+    if (filters.paymentDay && loan.paymentDay !== filters.paymentDay) continue;
+
+    // Métricas
+    const amountBorrowed  = Number(loan.amount ?? 0);
+    const totalRepayment  = (loan.transactions ?? [])
+      .filter((t) => txTypeOf(t) === 'repayment' && t?.amount != null)
+      .reduce((s, t) => s + Number(t?.amount ?? 0), 0);
+    const remainingAmount = Math.max(0, amountBorrowed - totalRepayment);
+    const daysLate        = daysLateOf(loan.endDateAt);
+
+    if (derivedStatus === 'active') {
+      totalActiveAmountBorrowed += amountBorrowed;
+      totalActiveRepayment     += totalRepayment;
+      if (client.id) activeClientIds.add(client.id);
+
+      if (daysLate > 0) {
+        if (daysLate >= 30)     noPayment30++;
+        else if (daysLate > 20) critical20++;
+        else if (daysLate > 15) mora15++;
+      }
+    }
+
+    const lastTransaction = (loan.transactions ?? [])
+      .filter(t => txTypeOf(t) === 'repayment' && t?.date)
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    items.push({
+      client,
+      agent: { id: agent.id, name: agent.name },
+      loanRequest: {
+        id: loan.id,
+        status: loan.status,
+        amount: loan.amount,
+        requestedAmount: loan.requestedAmount,
+        createdAt: loan.createdAt,
+        updatedAt: loan.updatedAt,
+        type: loan.type,
+        mode: loan.mode,
+        mora: loan.mora,
+        endDateAt: loan.endDateAt,
+        paymentDay: loan.paymentDay,
+        transactions: loan.transactions,
+        latestPayment: lastTransaction[0] ?? null,
+      },
+      totalRepayment,
+      amountBorrowed,
+      remainingAmount,
+      daysLate,
+      status: derivedStatus,
+    });
+
+    if (client.id) seenClientIds.add(client.id);
+  }
+
+  // ───────────────────────────────────────────────────────────────
+  // 4.b) CLIENTES SIN LOANS por NAME (se conserva tu lógica actual)
+  // ───────────────────────────────────────────────────────────────
+  const mustIncludeNoLoanByName = Boolean((filters.name ?? '').trim()) && filters.status !== 'rejected';
+  if (mustIncludeNoLoanByName) {
+    const cq = this.clientRepository.createQueryBuilder('c')
+      .leftJoinAndSelect('c.agent', 'agent')
+      .leftJoinAndSelect('agent.branch', 'branch')
+      .leftJoinAndSelect('c.country', 'country')
+      .leftJoin('c.loanRequests', 'lr')
+      .where('lr.id IS NULL'); // sin loans
+
+    // Scope (se mantiene igual que lo tenías)
+    if (role === 'AGENT') {
+      cq.andWhere('(agent.id = :reqId OR agent.id IS NULL)', { reqId: requester.id });
+    } else if (role === 'ADMIN') {
+      cq.andWhere('(branch.id = :bId OR agent.id IS NULL)', { bId: adminBranchId });
+    } else if (role === 'MANAGER') {
+      cq.andWhere('(branch.countryId = :cId OR agent.id IS NULL)', { cId: managerCountryId });
+    }
+
+    // Filtros de cliente
+    if (filters.countryId) cq.andWhere('country.id = :countryId', { countryId: filters.countryId });
+    if (filters.branch)    cq.andWhere('branch.id = :branchId',   { branchId: filters.branch });
+    if (filters.agent)     cq.andWhere('agent.id = :agentId',     { agentId: filters.agent });
+    if (filters.document)  cq.andWhere('c.document LIKE :doc',    { doc: `%${filters.document}%` });
+
+    if (seenClientIds.size > 0) {
+      cq.andWhere('c.id NOT IN (:...ids)', { ids: Array.from(seenClientIds) });
+    }
+
+    const clientsNoLoanRaw = await cq.getMany();
+    const clientsNoLoan = clientsNoLoanRaw.filter(c => normIncludes(c?.name, filters.name));
+
+    for (const client of clientsNoLoan) {
+      const agent = client.agent ?? null;
+      items.push({
+        client,
+        agent: agent ? { id: agent.id, name: agent.name } : null,
+        loanRequest: null,
+        totalRepayment: 0,
+        amountBorrowed: 0,
+        remainingAmount: 0,
+        daysLate: 0,
+        status: 'inactive' as const,
+      });
+      if (client.id) seenClientIds.add(client.id);
+    }
+  }
+
+  // ───────────────────────────────────────────────────────────────
+  // 5) Orden + distinct + paginación (igual que tenías)
+  // ───────────────────────────────────────────────────────────────
+  items.sort((a, b) => {
+    const aDate = a.loanRequest?.createdAt ?? a.client?.createdAt ?? new Date(0);
+    const bDate = b.loanRequest?.createdAt ?? b.client?.createdAt ?? new Date(0);
+    return new Date(bDate).getTime() - new Date(aDate).getTime();
+  });
+
+  let listForPaging = items;
+  if (filters && (filters as any).distinct === true) {
+    const seen = new Set<number>();
+    const dedup: any[] = [];
+    for (const it of items) {
+      const cid = Number(it?.client?.id);
+      if (!cid) continue;
+      if (!seen.has(cid)) {
+        dedup.push(it);
+        seen.add(cid);
+      }
+    }
+    listForPaging = dedup;
+  }
+
+  const totalItems = listForPaging.length;
+  const startIndex = (page - 1) * limit;
+  const data = listForPaging.slice(startIndex, startIndex + limit);
+
+  // ───────────────────────────────────────────────────────────────
+  // 6) Totales (solo loans activos)
+  // ───────────────────────────────────────────────────────────────
+  const remainingTotal = items
+    .filter((it) => it.loanRequest && isActiveLoan(it.loanRequest.status))
+    .reduce((sum, it) => sum + Number(it.remainingAmount ?? 0), 0);
+
+  return {
+    page,
+    limit,
+    totalItems,
+    totalPages: Math.ceil(totalItems / limit),
+    totalActiveAmountBorrowed,
+    totalActiveRepayment,
+    activeClientsCount: activeClientIds.size,
+    mora15,
+    critical20,
+    noPayment30,
+    remainingTotal,
+    data,
+  };
+}
 
   
   

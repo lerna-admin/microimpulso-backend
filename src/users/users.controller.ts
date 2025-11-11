@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Query, DefaultValuePipe, ParseIntPipe, NotFoundException, Patch } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Query, DefaultValuePipe, ParseIntPipe, NotFoundException, Patch, Req } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { User, UserRole} from '../entities/user.entity';
 
@@ -70,5 +70,14 @@ async findAll(
     const updated = await this.usersService.unblock(id);
     if (!updated) throw new NotFoundException('User not found');
     return updated;
+  }
+  @Patch(':id/inactivate')
+  async inactivateUser(
+    @Param('id') id: string,
+    @Body() body: any,
+    @Req() req: any, // se asume que req.user viene del guard de auth
+  ) {
+    const currentUser = req.user;
+    return this.usersService.inactivateUser(Number(id), body, currentUser);
   }
 }

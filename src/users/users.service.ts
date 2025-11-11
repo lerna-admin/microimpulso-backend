@@ -359,15 +359,14 @@ async inactivateUser(
           } catch (e) {
             logErrorAndRethrow(e, 'TX findOne(branchOfTarget)', { txnId, branchId: target.branch.id });
           }
-          /**
 
+          /**
           if (!branchOfTarget?.administrator?.id || branchOfTarget.administrator.id !== me.id) {
             console.error('[inactivateUser] ADMIN no coincide con branch del AGENT ::', {
               txnId, branchId: branchOfTarget?.id, adminOfBranch: branchOfTarget?.administrator?.id, actorId: me?.id,
             });
             throw new ForbiddenException('No eres el administrador de la sede de este agente.');
-          }
-            */
+          }*/
 
           // Resolver reemplazo AGENT
           let replacement: User | null = null;
@@ -390,12 +389,13 @@ async inactivateUser(
               console.error('[inactivateUser] Replacement no es AGENT ::', { txnId, replacementId: replacement.id, replacementRole: replacement.role });
               throw new BadRequestException('El reemplazo debe ser un AGENT.');
             }
+            /**
             if (replacement.branch?.id !== branchOfTarget.id) {
               console.error('[inactivateUser] Replacement AGENT en otra branch ::', {
                 txnId, replacementId: replacement.id, replacementBranch: replacement.branch?.id, targetBranch: branchOfTarget.id,
               });
               throw new BadRequestException('El reemplazo debe pertenecer a la misma sede.');
-            }
+            }*/
           } else if (body?.createReplacement) {
             const payload = body.createReplacement || {};
             try {

@@ -359,6 +359,7 @@ async inactivateUser(
           } catch (e) {
             logErrorAndRethrow(e, 'TX findOne(branchOfTarget)', { txnId, branchId: target.branch.id });
           }
+          /**
 
           if (!branchOfTarget?.administrator?.id || branchOfTarget.administrator.id !== me.id) {
             console.error('[inactivateUser] ADMIN no coincide con branch del AGENT ::', {
@@ -366,6 +367,7 @@ async inactivateUser(
             });
             throw new ForbiddenException('No eres el administrador de la sede de este agente.');
           }
+            */
 
           // Resolver reemplazo AGENT
           let replacement: User | null = null;

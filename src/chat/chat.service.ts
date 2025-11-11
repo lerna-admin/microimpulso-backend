@@ -890,7 +890,7 @@ private fmtPct(dec: number, digits = 2): string {
     const today = new Date();                 // fecha de firma
     const dueDate = this.nextQuincena(today); // próxima quincentodaya (15 o último día)
     
-    const diasParaPago = this.diffDays(today, loan.endDateAt);
+    const diasParaPago = this.diffDays(today, dueDate);
     
     // Capital (principal)
     const principal = typeof loan.amount === 'number'

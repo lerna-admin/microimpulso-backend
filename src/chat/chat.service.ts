@@ -888,8 +888,9 @@ private fmtPct(dec: number, digits = 2): string {
     
     // 2) Cálculos de negocio
     const today = new Date();                 // fecha de firma
-    const dueDate = this.nextQuincena(today); // próxima quincena (15 o último día)
-    const diasParaPago = this.diffDays(today, dueDate);
+    const dueDate = this.nextQuincena(today); // próxima quincentodaya (15 o último día)
+    
+    const diasParaPago = this.diffDays(today, loan.endDateAt);
     
     // Capital (principal)
     const principal = typeof loan.amount === 'number'

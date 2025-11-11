@@ -896,7 +896,7 @@ private fmtPct(dec: number, digits = 2): string {
     
     // 2) Cálculos de negocio
     const today = new Date();                 // fecha de firma
-    const dueDateFromDb = this.parseDbDate((loan as any).loanEndDateAt);
+    const dueDateFromDb = this.parseDbDate((loan as any).endDateAt);
     const dueDate = dueDateFromDb ?? this.nextQuincena(today); // fallback por si viene vacío/invalid
     const diasParaPago = this.diffDays(today, dueDate);
     

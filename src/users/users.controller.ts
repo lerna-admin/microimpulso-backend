@@ -77,7 +77,7 @@ async findAll(
     @Body() body: any,
     @Req() req: any, // se asume que req.user viene del guard de auth
   ) {
-    const currentUser = req.user;
+    const currentUser = body.currentUser;
     return this.usersService.inactivateUser(Number(id), body, currentUser);
   }
 }

@@ -11,6 +11,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { BranchService } from './branch.service';
+import { filter } from 'rxjs';
 
 // ----------------- helpers -----------------
 type AnyObj = Record<string, any>;
@@ -110,6 +111,7 @@ export class BranchController {
     @Query('name') name?: string,
     @Query('administratorId') administratorId?: string,
     @Query('countryIso2') countryIso2?: string,
+    @Query('countryId') countryId?: number,
     @Query('acceptsInbound') acceptsInbound?: string,
   ) {
     const filters: AnyObj = {};
@@ -119,6 +121,7 @@ export class BranchController {
       if (!Number.isFinite(n)) throw new BadRequestException('administratorId debe ser numérico');
       filters.administratorId = n;
     }
+    if(countryId) filters.countryId = countryId;
     if (countryIso2) filters.countryIso2 = countryIso2.toUpperCase();
     if (acceptsInbound !== undefined) {
       const b = parseBool(acceptsInbound);

@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, ILike } from 'typeorm';
 import { Branch } from 'src/entities/branch.entity';
 import { User } from 'src/entities/user.entity';
+import { filter } from 'rxjs';
 
 type CreateBranchInput = {
   name: string;
@@ -92,12 +93,13 @@ export class BranchService {
   }
 
   // ---------- READ ----------
-  async findAll(filters?: { name?: string; administratorId?: number; countryIso2?: string; acceptsInbound?: boolean }) {
+  async findAll(filters?: { name?: string; administratorId?: number; countryIso2?: string; acceptsInbound?: boolean , countryId? : number}) {
     const where: any = {};
     if (filters?.name) where.name = ILike(`%${filters.name}%`);
     if (filters?.administratorId) where.administrator = { id: filters.administratorId };
     if (filters?.countryIso2) where.countryIso2 = normIso2(filters.countryIso2);
     if (typeof filters?.acceptsInbound === 'boolean') where.acceptsInbound = filters.acceptsInbound;
+    if (filters?.countryId) where.countryId=filters.countryId;
 
     const rows = await this.branchRepository.find({
       where,

@@ -838,6 +838,30 @@ export class ChatService implements OnModuleInit {
     });
     return anyAval ?? null;
   }
+
+  /** Tasa mensual efectiva (decimal).
+ *  Prioriza ED: (1+ED)^(30)-1. Si no hay ED, usa EA: (1+EA)^(1/12)-1.
+ */
+private getMonthlyRate(): number {
+  // 1) Si hay ED explícita (DEFAULT_INTEREST_DAILY_PCT o derivada), úsala
+  const ed = this.getDailyRate(); // decimal
+  if (ed > 0) return Math.pow(1 + ed, 30) - 1;
+
+  // 2) Si no hay ED, intenta con EA
+  const eaPct = Number(this.config.get<string>('DEFAULT_INTEREST_EA_PCT') ?? '');
+  if (Number.isFinite(eaPct) && eaPct > 0) {
+    const ea = eaPct / 100;
+    return Math.pow(1 + ea, 1 / 12) - 1;
+  }
+  return 0;
+}
+
+/** Formatea un decimal (0.034) como "3.40%" con n decimales. */
+private fmtPct(dec: number, digits = 2): string {
+  if (!Number.isFinite(dec) || dec <= 0) return '';
+  return `${(dec * 100).toFixed(digits)}%`;
+}
+
   
   /* ================= FUNCIÓN ACTUALIZADA ================= */
   
@@ -907,6 +931,12 @@ export class ChatService implements OnModuleInit {
     };
     const diaEnLetras = dayToWords[dia] ?? this.numberToSpanish(dia);
     const diasParaPagoEnLetras = dayToWords[diasParaPago] ?? this.numberToSpanish(diasParaPago);
+
+    // Tasas
+
+    const monthlyRate = this.getMonthlyRate();          // decimal
+    const tasaMensualPctStr = this.fmtPct(monthlyRate); // "3.00%" por ejemplo
+
     
     // 3) Tags para la plantilla DOCX
     // Nota: mantenemos las claves AGENTE_* para no tocar la plantilla; metemos ahí los datos del AVAL.
@@ -953,6 +983,7 @@ export class ChatService implements OnModuleInit {
       // (opcionales)
       TASA_DIARIA_PCT: dailyRate ? `${(dailyRate*100).toFixed(6)}%` : '',
       TASA_EA_PCT: this.config.get<string>('DEFAULT_INTEREST_EA_PCT') || '',
+      TASA_MENSUAL_PCT: tasaMensualPctStr,   
     };
     
     

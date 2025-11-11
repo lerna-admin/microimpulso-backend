@@ -243,198 +243,317 @@ async findByDocument(document: string): Promise<User | null> {
    * @param body { replacementUserId?, createReplacement?, reason? }
    * @param currentUser Usuario autenticado (req.user)
    */
-  async inactivateUser(
-    targetUserId: number,
-    body: any,
-    currentUser: any,
-  ) {
-    console.log('[UserService.inactivateUser] targetUserId=', targetUserId, ' body=', body, ' currentUser=', currentUser?.id, currentUser?.role);
+async inactivateUser(
+  targetUserId: number,
+  body: any,
+  currentUser: any,
+) {
+  // Helpers locales SOLO con console.*
+  const safeBody = (b: any) => {
+    try {
+      const clone: any = JSON.parse(JSON.stringify(b ?? {}));
+      const SENSITIVE = ['password', 'pass', 'pwd', 'token', 'accessToken', 'secret', 'authorization'];
+      const redact = (obj: any) => {
+        if (!obj || typeof obj !== 'object') return;
+        for (const k of Object.keys(obj)) {
+          if (SENSITIVE.includes(k)) obj[k] = '***REDACTED***';
+          else if (typeof obj[k] === 'object') redact(obj[k]);
+        }
+      };
+      redact(clone);
+      return clone;
+    } catch {
+      return b;
+    }
+  };
+  const logCtx = {
+    targetUserId,
+    currentUserId: currentUser?.id,
+    currentUserRole: currentUser?.role,
+    body: safeBody(body),
+  };
+  const logErrorAndRethrow = (e: any, where: string, extra?: Record<string, any>) => {
+    console.error(`[inactivateUser][ERROR] ${where} ::`, {
+      msg: e?.message,
+      name: e?.name,
+      code: e?.code,
+      driverError: e?.driverError,
+      ...logCtx,
+      ...(extra || {}),
+    });
+    throw e;
+  };
 
+  console.log('[inactivateUser] called ::', logCtx);
+
+  try {
     if (!currentUser?.id || !currentUser?.role) {
+      console.error('[inactivateUser] Auth inválida ::', logCtx);
       throw new ForbiddenException('Usuario no autenticado o sin rol.');
     }
 
     // Cargar target con relaciones necesarias
-    const target = await this.userRepository.findOne({
-      where: { id: targetUserId },
-      relations: ['branch', 'branch.administrator'],
-    });
-    console.log('[inactivateUser] loaded target=', target ? { id: target.id, role: target.role, branchId: target.branch?.id } : null);
+    let target: User | null = null;
+    try {
+      target = await this.userRepository.findOne({
+        where: { id: targetUserId },
+        relations: ['branch', 'branch.administrator'],
+      });
+      console.log('[inactivateUser] loaded target ::', target ? { id: target.id, role: target.role, branchId: target.branch?.id } : null);
+    } catch (e) {
+      return logErrorAndRethrow(e, 'findOne(target)');
+    }
 
-    if (!target) throw new NotFoundException('Usuario a inactivar no existe.');
-    if (target.id === currentUser.id) throw new BadRequestException('No puedes inactivarte a ti mismo.');
+    if (!target) {
+      console.error('[inactivateUser] Target no existe ::', logCtx);
+      throw new NotFoundException('Usuario a inactivar no existe.');
+    }
+    if (target.id === currentUser.id) {
+      console.error('[inactivateUser] Auto-inactivación bloqueada ::', { ...logCtx, targetId: target.id });
+      throw new BadRequestException('No puedes inactivarte a ti mismo.');
+    }
 
     const role = String(target.role).toUpperCase();
 
-    // Helpers
     const ensureActiveUser = (u: User | null, msg: string) => {
-      if (!u) throw new NotFoundException(msg);
-      // si tu entidad tiene "active", úsalo; si tiene "status", ajústalo aquí.
+      if (!u) {
+        console.error('[inactivateUser] ensureActiveUser failed ::', { msg, ...logCtx });
+        throw new NotFoundException(msg);
+      }
       return u;
     };
 
-    // transacción para hacer todo atómico
-    return await this.userRepository.manager.transaction(async (trx) => {
-      // Repos transaccionales
-      const userTx = trx.getRepository(User);
-      const branchTx = trx.getRepository(Branch);
-      const loanTx = trx.getRepository(LoanRequest);
+    // ===== TRANSACCIÓN =====
+    try {
+      return await this.userRepository.manager.transaction(async (trx) => {
+        const txnId =
+          (trx as any)?.queryRunner?.connection?.name ||
+          (trx as any)?.queryRunner?.id ||
+          `tx_${Date.now()}`;
+        const txLog = (m: string, extra?: any) =>
+          console.log(`[inactivateUser][TX:${txnId}] ${m} ::`, extra ?? {});
 
-      // Cargar currentUser completo si se requiere (por branch)
-      const me = await userTx.findOne({ where: { id: currentUser.id }, relations: ['branch'] });
-      console.log('[inactivateUser] currentUser loaded=', me ? { id: me.id, role: me.role, branchId: me.branch?.id } : null);
+        const userTx = trx.getRepository(User);
+        const branchTx = trx.getRepository(Branch);
+        const loanTx = trx.getRepository(LoanRequest);
 
-      // ========= CASO 1: ADMIN inactiva AGENTE (misma branch) =========
-      if (role === 'AGENT') {
-        if (String(me?.role).toUpperCase() !== 'ADMIN') {
-          throw new ForbiddenException('Solo un ADMIN puede inactivar agentes.');
-        }
-        if (!target.branch?.id) {
-          throw new BadRequestException('El agente no tiene branch asignada.');
-        }
-
-        // Verificar que el current admin es administrator de la misma branch del target
-        const branchOfTarget = await branchTx.findOne({
-          where: { id: target.branch.id },
-          relations: ['administrator'],
-        });
-        console.log('[inactivateUser][AGENT] branchOfTarget=', branchOfTarget ? { id: branchOfTarget.id, adminId: branchOfTarget.administrator?.id } : null);
-
-        if (!branchOfTarget?.administrator?.id || branchOfTarget.administrator.id !== me!.id) {
-          throw new ForbiddenException('No eres el administrador de la sede de este agente.');
+        // Cargar currentUser completo si se requiere (por branch)
+        let me: User | null = null;
+        try {
+          me = await userTx.findOne({ where: { id: currentUser.id }, relations: ['branch'] });
+          txLog('currentUser loaded', me ? { id: me.id, role: me.role, branchId: me.branch?.id } : { me: null });
+        } catch (e) {
+          logErrorAndRethrow(e, 'TX findOne(currentUser)', { txnId });
         }
 
-        // Resolver reemplazo: mismo rol (AGENT) y misma branch
-        let replacement: User | null = null;
-
-        if (body?.replacementUserId) {
-          replacement = await userTx.findOne({
-            where: { id: Number(body.replacementUserId) },
-            relations: ['branch'],
-          });
-          replacement = ensureActiveUser(replacement, 'Agente de reemplazo no existe.');
-          if (String(replacement.role).toUpperCase() !== 'AGENT') {
-            throw new BadRequestException('El reemplazo debe ser un AGENT.');
+        // ========= CASO 1: ADMIN inactiva AGENTE (misma branch) =========
+        if (role === 'AGENT') {
+          if (String(me?.role).toUpperCase() !== 'ADMIN') {
+            console.error('[inactivateUser] Rol no autorizado para AGENT ::', { txnId, meRole: me?.role, ...logCtx });
+            throw new ForbiddenException('Solo un ADMIN puede inactivar agentes.');
           }
-          if (replacement.branch?.id !== branchOfTarget.id) {
-            throw new BadRequestException('El reemplazo debe pertenecer a la misma sede.');
+          if (!target.branch?.id) {
+            console.error('[inactivateUser] AGENT sin branch ::', { txnId, targetId: target.id });
+            throw new BadRequestException('El agente no tiene branch asignada.');
           }
-        } else if (body?.createReplacement) {
-          // Crear un nuevo agente en la misma branch
-          const payload = body.createReplacement || {};
-          const newAgent = userTx.create({
-            name: payload.name || 'Nuevo Agente',
-            email: payload.email || `agent_${Date.now()}@example.com`,
-            password: payload.password || 'changeme', // si tienes hashing por subscriber, se aplicará
-            role: 'AGENT',
-            branch: branchOfTarget,
-            // active: true, // si tu entidad tiene este flag, setéalo
-            // status: 'ACTIVE',
-          } as Partial<User>);
-          replacement = await userTx.save(newAgent);
-          console.log('[inactivateUser][AGENT] created replacement agent=', { id: replacement.id, email: replacement.email });
-        } else {
-          throw new BadRequestException('Debes elegir o crear un agente de reemplazo.');
-        }
 
-        console.log('[inactivateUser][AGENT] replacement=', { id: replacement!.id });
-
-        // Reasignar loan requests abiertas del agente saliente
-        const openStatuses = [LoanRequestStatus.NEW, LoanRequestStatus.APPROVED, LoanRequestStatus.FUNDED].filter(Boolean) as any[];
-        // fallback por si el enum no tiene esos (ajusta si tus strings difieren)
-        const CLOSED = new Set(['completed', 'rejected', LoanRequestStatus.COMPLETED, LoanRequestStatus.REJECTED] as any[]);
-
-        const toReassign = await loanTx.find({
-          where: {
-            agent: { id: target.id },
-            status: Not(In(Array.from(CLOSED) as any[])),
-          },
-          relations: ['agent'],
-        });
-
-        console.log('[inactivateUser][AGENT] loans to reassign count=', toReassign.length);
-
-        if (toReassign.length > 0) {
-          for (const lr of toReassign) {
-            lr.agent = replacement!;
+          let branchOfTarget: Branch | null = null;
+          try {
+            branchOfTarget = await branchTx.findOne({
+              where: { id: target.branch.id },
+              relations: ['administrator'],
+            });
+            txLog('branchOfTarget loaded', branchOfTarget ? { id: branchOfTarget.id, adminId: branchOfTarget.administrator?.id } : { branchOfTarget: null });
+          } catch (e) {
+            logErrorAndRethrow(e, 'TX findOne(branchOfTarget)', { txnId, branchId: target.branch.id });
           }
-          await loanTx.save(toReassign);
-        }
 
-        // Inactivar agente
-        // Preferir active=false si existe; si no, usar status='INACTIVE'
-        const patch: Partial<User> = ('active' in target) ? { ...(target as any), active: false } : { ...(target as any), status: 'INACTIVE' };
-        await userTx.update(target.id, patch);
-        console.log('[inactivateUser][AGENT] agent inactivated=', target.id);
+          if (!branchOfTarget?.administrator?.id || branchOfTarget.administrator.id !== me!.id) {
+            console.error('[inactivateUser] ADMIN no coincide con branch del AGENT ::', {
+              txnId, branchId: branchOfTarget?.id, adminOfBranch: branchOfTarget?.administrator?.id, meId: me?.id,
+            });
+            throw new ForbiddenException('No eres el administrador de la sede de este agente.');
+          }
 
-        return { ok: true, inactivatedUserId: target.id, replacementUserId: replacement!.id, reassignedLoans: toReassign.length };
-      }
+          // Resolver reemplazo: mismo rol (AGENT) y misma branch
+          let replacement: User | null = null;
 
-      // ========= CASO 2: MANAGER inactiva ADMIN =========
-      if (role === 'ADMIN') {
-        if (String(me?.role).toUpperCase() !== 'MANAGER') {
-          throw new ForbiddenException('Solo un MANAGER puede inactivar admins.');
-        }
-
-        // Branches que administra el admin objetivo
-        const targetBranches = await branchTx.find({
-          where: { administrator: { id: target.id } as any },
-          relations: ['administrator'],
-        });
-        console.log('[inactivateUser][ADMIN] targetBranches count=', targetBranches.length);
-
-        // Resolver reemplazo de admin (si administra al menos una branch, replacement es obligatorio)
-        let replacement: User | null = null;
-
-        if (targetBranches.length > 0) {
           if (body?.replacementUserId) {
-            replacement = await userTx.findOne({ where: { id: Number(body.replacementUserId) } });
-            replacement = ensureActiveUser(replacement, 'Admin de reemplazo no existe.');
-            if (String(replacement.role).toUpperCase() !== 'ADMIN') {
-              throw new BadRequestException('El reemplazo debe ser un ADMIN.');
+            try {
+              replacement = await userTx.findOne({
+                where: { id: Number(body.replacementUserId) },
+                relations: ['branch'],
+              });
+              txLog('replacement AGENT loaded', replacement ? { id: replacement.id, role: replacement.role, branchId: replacement.branch?.id } : { replacement: null });
+            } catch (e) {
+              logErrorAndRethrow(e, 'TX findOne(replacement AGENT)', { txnId, replacementUserId: body?.replacementUserId });
             }
-            // Validar que no administre ya otra branch
-            const countAdmin = await branchTx.count({ where: { administrator: { id: replacement.id } as any } });
-            if (countAdmin > 0) {
-              throw new BadRequestException('El admin de reemplazo ya administra otra sede.');
+            replacement = ensureActiveUser(replacement, 'Agente de reemplazo no existe.');
+            if (String(replacement.role).toUpperCase() !== 'AGENT') {
+              console.error('[inactivateUser] Replacement no es AGENT ::', { txnId, replacementId: replacement.id, replacementRole: replacement.role });
+              throw new BadRequestException('El reemplazo debe ser un AGENT.');
+            }
+            if (replacement.branch?.id !== branchOfTarget.id) {
+              console.error('[inactivateUser] Replacement AGENT en otra branch ::', {
+                txnId, replacementId: replacement.id, replacementBranch: replacement.branch?.id, targetBranch: branchOfTarget.id,
+              });
+              throw new BadRequestException('El reemplazo debe pertenecer a la misma sede.');
             }
           } else if (body?.createReplacement) {
             const payload = body.createReplacement || {};
-            const newAdmin = userTx.create({
-              name: payload.name || 'Nuevo Admin',
-              email: payload.email || `admin_${Date.now()}@example.com`,
-              password: payload.password || 'changeme',
-              role: 'ADMIN',
-              // active: true,
-              // status: 'ACTIVE',
-            } as Partial<User>);
-            replacement = await userTx.save(newAdmin);
-            console.log('[inactivateUser][ADMIN] created replacement admin=', { id: replacement.id, email: replacement.email });
+            try {
+              const newAgent = userTx.create({
+                name: payload.name || 'Nuevo Agente',
+                email: payload.email || `agent_${Date.now()}@example.com`,
+                password: payload.password || 'changeme',
+                role: 'AGENT',
+                branch: branchOfTarget,
+              } as Partial<User>);
+              replacement = await userTx.save(newAgent);
+              txLog('replacement AGENT created', { id: replacement.id, email: replacement.email });
+            } catch (e) {
+              logErrorAndRethrow(e, 'TX create/save(replacement AGENT)', { txnId, payload: safeBody(payload) });
+            }
           } else {
-            throw new BadRequestException('Debes elegir o crear un admin de reemplazo para las sedes que administra.');
+            console.error('[inactivateUser] Falta replacement AGENT ::', { txnId, ...logCtx });
+            throw new BadRequestException('Debes elegir o crear un agente de reemplazo.');
           }
+
+          // Reasignar loan requests abiertas del agente saliente
+          let toReassign: LoanRequest[] = [];
+          try {
+            const CLOSED = new Set<any>(['completed', 'rejected', LoanRequestStatus.COMPLETED, LoanRequestStatus.REJECTED].filter(Boolean));
+            toReassign = await loanTx.find({
+              where: {
+                agent: { id: target.id },
+                status: Not(In(Array.from(CLOSED))),
+              },
+              relations: ['agent'],
+            });
+            txLog('loans to reassign', { count: toReassign.length });
+            if (toReassign.length > 0) {
+              for (const lr of toReassign) lr.agent = replacement!;
+              await loanTx.save(toReassign);
+              txLog('loans reassigned', { count: toReassign.length, replacementId: replacement!.id });
+            }
+          } catch (e) {
+            logErrorAndRethrow(e, 'TX reassign loans (AGENT)', { txnId, replacementId: replacement?.id });
+          }
+
+          // Inactivar agente
+          try {
+            const patch: Partial<User> =
+              ('active' in target) ? ({ active: false } as any) : ({ status: 'INACTIVE' } as any);
+            await userTx.update(target.id, patch);
+            txLog('agent inactivated', { targetId: target.id });
+          } catch (e) {
+            logErrorAndRethrow(e, 'TX update(target AGENT inactive)', { txnId, targetId: target.id });
+          }
+
+          return { ok: true, inactivatedUserId: target.id, replacementUserId: (replacement as User).id, reassignedLoans: toReassign.length, txnId };
         }
 
-        // Si hay sedes, asignar administrator al replacement
-        if (targetBranches.length > 0 && replacement) {
-          for (const b of targetBranches) {
-            b.administrator = replacement!;
+        // ========= CASO 2: MANAGER inactiva ADMIN =========
+        if (role === 'ADMIN') {
+          if (String(me?.role).toUpperCase() !== 'MANAGER') {
+            console.error('[inactivateUser] Rol no autorizado para ADMIN ::', { txnId, meRole: me?.role, ...logCtx });
+            throw new ForbiddenException('Solo un MANAGER puede inactivar admins.');
           }
-          await branchTx.save(targetBranches);
-          console.log('[inactivateUser][ADMIN] reassigned branches to replacement=', { replacementId: replacement.id, count: targetBranches.length });
+
+          // Branches que administra el admin objetivo
+          let targetBranches: Branch[] = [];
+          try {
+            targetBranches = await branchTx.find({
+              where: { administrator: { id: target.id } as any },
+              relations: ['administrator'],
+            });
+            txLog('targetBranches loaded', { count: targetBranches.length });
+          } catch (e) {
+            logErrorAndRethrow(e, 'TX find(targetBranches by admin)', { txnId, targetAdminId: target.id });
+          }
+
+          // Resolver replacement de admin si corresponde
+          let replacement: User | null = null;
+
+          if (targetBranches.length > 0) {
+            if (body?.replacementUserId) {
+              try {
+                replacement = await userTx.findOne({ where: { id: Number(body.replacementUserId) } });
+                txLog('replacement ADMIN loaded', replacement ? { id: replacement.id, role: replacement.role } : { replacement: null });
+              } catch (e) {
+                logErrorAndRethrow(e, 'TX findOne(replacement ADMIN)', { txnId, replacementUserId: body?.replacementUserId });
+              }
+              replacement = ensureActiveUser(replacement, 'Admin de reemplazo no existe.');
+              if (String(replacement.role).toUpperCase() !== 'ADMIN') {
+                console.error('[inactivateUser] Replacement no es ADMIN ::', { txnId, replacementId: replacement.id, replacementRole: replacement.role });
+                throw new BadRequestException('El reemplazo debe ser un ADMIN.');
+              }
+              try {
+                const countAdmin = await branchTx.count({ where: { administrator: { id: replacement.id } as any } });
+                if (countAdmin > 0) {
+                  console.error('[inactivateUser] Replacement ADMIN ya administra otra branch ::', { txnId, replacementId: replacement.id, countAdmin });
+                  throw new BadRequestException('El admin de reemplazo ya administra otra sede.');
+                }
+              } catch (e) {
+                logErrorAndRethrow(e, 'TX count(branch by replacement ADMIN)', { txnId, replacementId: replacement.id });
+              }
+            } else if (body?.createReplacement) {
+              const payload = body.createReplacement || {};
+              try {
+                const newAdmin = userTx.create({
+                  name: payload.name || 'Nuevo Admin',
+                  email: payload.email || `admin_${Date.now()}@example.com`,
+                  password: payload.password || 'changeme',
+                  role: 'ADMIN',
+                } as Partial<User>);
+                replacement = await userTx.save(newAdmin);
+                txLog('replacement ADMIN created', { id: replacement.id, email: replacement.email });
+              } catch (e) {
+                logErrorAndRethrow(e, 'TX create/save(replacement ADMIN)', { txnId, payload: safeBody(payload) });
+              }
+            } else {
+              console.error('[inactivateUser] Falta replacement ADMIN para sedes ::', { txnId, countBranches: targetBranches.length, ...logCtx });
+              throw new BadRequestException('Debes elegir o crear un admin de reemplazo para las sedes que administra.');
+            }
+          }
+
+          // Si hay sedes, asignar administrator al replacement
+          if (targetBranches.length > 0 && replacement) {
+            try {
+              for (const b of targetBranches) b.administrator = replacement!;
+              await branchTx.save(targetBranches);
+              txLog('branches reassigned to replacement', { replacementId: replacement.id, count: targetBranches.length });
+            } catch (e) {
+              logErrorAndRethrow(e, 'TX save(reassign branches to replacement ADMIN)', { txnId, replacementId: replacement.id, branchesCount: targetBranches.length });
+            }
+          }
+
+          // Inactivar admin
+          try {
+            const patch: Partial<User> =
+              ('active' in target) ? ({ active: false } as any) : ({ status: 'INACTIVE' } as any);
+            await userTx.update(target.id, patch);
+            txLog('admin inactivated', { targetId: target.id });
+          } catch (e) {
+            logErrorAndRethrow(e, 'TX update(target ADMIN inactive)', { txnId, targetId: target.id });
+          }
+
+          return { ok: true, inactivatedUserId: target.id, replacementUserId: replacement?.id ?? null, reassignedBranches: targetBranches.length, txnId };
         }
 
-        // Inactivar admin
-        const patch: Partial<User> = ('active' in target) ? { ...(target as any), active: false } : { ...(target as any), status: 'INACTIVE' };
-        await userTx.update(target.id, patch);
-        console.log('[inactivateUser][ADMIN] admin inactivated=', target.id);
-
-        return { ok: true, inactivatedUserId: target.id, replacementUserId: replacement?.id ?? null, reassignedBranches: targetBranches.length };
-      }
-
-      // Otros roles: no soportado en este flujo
-      throw new BadRequestException('Solo se permite inactivar usuarios con rol AGENT o ADMIN.');
-    });
+        // Otros roles: no soportado en este flujo
+        console.error('[inactivateUser] Rol no soportado ::', { role: target.role, ...logCtx });
+        throw new BadRequestException('Solo se permite inactivar usuarios con rol AGENT o ADMIN.');
+      });
+    } catch (e) {
+      // Errores dentro de la transacción
+      return logErrorAndRethrow(e, 'TRANSACTION WRAPPER');
+    }
+  } catch (e) {
+    // Errores fuera/previos a la transacción
+    logErrorAndRethrow(e, 'TOP-LEVEL CATCH');
   }
+}
+
 
 }

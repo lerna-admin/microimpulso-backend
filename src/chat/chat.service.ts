@@ -865,6 +865,14 @@ private fmtPct(dec: number, digits = 2): string {
   
   /* ================= FUNCIÓN ACTUALIZADA ================= */
   
+  private parseDbDate(d: unknown): Date | null {
+  if (!d) return null;
+  try {
+    const dt = (d instanceof Date) ? d : new Date(String(d));
+    return isNaN(dt.getTime()) ? null : dt;
+  } catch { return null; }
+}
+
   async sendContractToClient(loanRequestId: number) {
     const cId = uuid();
     
@@ -888,8 +896,8 @@ private fmtPct(dec: number, digits = 2): string {
     
     // 2) Cálculos de negocio
     const today = new Date();                 // fecha de firma
-    const dueDate = this.nextQuincena(today); // próxima quincentodaya (15 o último día)
-    
+    const dueDateFromDb = this.parseDbDate((loan as any).loanEndDateAt);
+    const dueDate = dueDateFromDb ?? this.nextQuincena(today); // fallback por si viene vacío/invalid
     const diasParaPago = this.diffDays(today, dueDate);
     
     // Capital (principal)

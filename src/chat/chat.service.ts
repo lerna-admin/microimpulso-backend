@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DeepPartial, In, Not, Repository } from 'typeorm';
 
 import { Client, ClientStatus } from '../entities/client.entity';
-import { User } from '../entities/user.entity';
+import { User, UserRole } from '../entities/user.entity';
 import { LoanRequest, LoanRequestStatus } from '../entities/loan-request.entity';
 import { Document } from '../entities/document.entity';
 import { ChatMessage } from '../entities/chat-message.entity';
@@ -715,20 +715,73 @@ private async convertDocxToPdf(docxBuffer: Buffer): Promise<Buffer> {
   });
 }
 
+/* ================= Helpers NUEVOS/ACTUALIZADOS ================= */
+
+/** SOLO el número en letras (sin “DE PESOS M/CTE”) para no duplicar en el pagaré. 
+ *  Requiere que ya tengas implementado this.numberToSpanish(n).
+ */
+private amountToWordsNumberOnly(n: number): string {
+  const entero = Math.trunc(Math.max(0, n || 0));
+  return this.numberToSpanish(entero).toUpperCase();
+}
+
+/** Tasa diaria (decimal). Prioriza DEFAULT_INTEREST_DAILY_PCT; si no, deriva de DEFAULT_INTEREST_EA_PCT. 
+ *  Ej: ED 0.063556%  => 0.00063556
+ */
+private getDailyRate(): number {
+  const edPct = Number(this.config.get<string>('DEFAULT_INTEREST_DAILY_PCT') ?? '');
+  if (Number.isFinite(edPct) && edPct > 0) return edPct / 100;
+
+  const eaPct = Number(this.config.get<string>('DEFAULT_INTEREST_EA_PCT') ?? '');
+  if (Number.isFinite(eaPct) && eaPct > 0) {
+    const ea = eaPct / 100;
+    return Math.pow(1 + ea, 1 / 365) - 1; // ED = (1+EA)^(1/365)-1
+  }
+  return 0;
+}
+
+/** Busca el usuario AVAL a usar en el contrato.
+ *  Regla: 1) AVAL de la MISMA SEDE del agente si existe; 2) cualquier AVAL.
+ */
+private async findAvalUserForLoan(agent?: User): Promise<User | null> {
+  // 1) por sede del agente
+  if (agent?.branch?.id) {
+    const avalSameBranch = await this.userRepository.findOne({
+      where: { role: UserRole.AVAL, branch: { id: agent.branch.id } },
+      relations: ['branch'],
+      order: { id: 'ASC' },
+    });
+    if (avalSameBranch) return avalSameBranch;
+  }
+
+  // 2) fallback: cualquier AVAL
+  const anyAval = await this.userRepository.findOne({
+    where: { role: UserRole.AVAL },
+    relations: ['branch'],
+    order: { id: 'ASC' },
+  });
+  return anyAval ?? null;
+}
+
+/* ================= FUNCIÓN ACTUALIZADA ================= */
+
 async sendContractToClient(loanRequestId: number) {
   const cId = uuid();
 
-  // 1) Cargar Loan + Client + Agent
+  // 1) Cargar Loan + Client + Agent (+branch del agente para ubicar aval)
   const loan = await this.loanRequestRepository.findOne({
     where: { id: loanRequestId },
-    relations: ['client', 'agent'],
+    relations: ['client', 'agent', 'agent.branch'], // 👈 importante
   });
   if (!loan || !loan.client?.phone) throw new NotFoundException('Loan or client not found');
 
   const client = loan.client;
   const agent  = loan.agent;
 
-  // Validación: ciudad requerida (la llena el agente en Client.city)
+  // 🔎 Buscar AVAL según regla (misma sede si es posible)
+  const avalUser = await this.findAvalUserForLoan(agent);
+
+  // Validación: ciudad requerida por plantilla
   if (!client.city?.trim()) {
     throw new Error('Falta la ciudad del cliente (client.city). Complétala antes de enviar el contrato.');
   }
@@ -738,23 +791,35 @@ async sendContractToClient(loanRequestId: number) {
   const dueDate = this.nextQuincena(today); // próxima quincena (15 o último día)
   const diasParaPago = this.diffDays(today, dueDate);
 
-  // principal: usa loan.amount; fallback requestedAmount
+  // Capital (principal)
   const principal = typeof loan.amount === 'number'
     ? loan.amount
     : Number((loan as any).amount ?? loan.requestedAmount ?? 0);
 
-  // 20% con aval incluido (aval % configurable por env AVAL_FEE_PCT; cap al 20%)
-  const { ANTICIPO_PCT, anticipoValor, AVAL_PCT, avalValor, servicioValor } =
-    this.calcPaymentBreakdown(principal);
+  // === Política financiera ===
+  // Total a pagar SIEMPRE = principal * 1.20
+  const ANTICIPO_PCT = 0.20;
+  const anticipoTotal = Math.round(principal * ANTICIPO_PCT); // 20% fijo
 
-  // Tasa mensual (para interés remuneratorio) — prorrateada por días al vencimiento
-  const tasaMensualDefault = Number(this.config.get<string>('DEFAULT_INTEREST_MONTHLY_PCT') ?? '0'); // ej. "3"
-  const tasaMensualPct = Number.isFinite(tasaMensualDefault) ? tasaMensualDefault : 0;
-  const interes = Math.round(principal * (tasaMensualPct / 100) * (diasParaPago / 30));
-  const totalAPagar = Math.max(0, Math.round(principal + interes));
+  // Aval: % fijo global sobre el principal (ENV: AVAL_FEE_PCT) y no puede superar el 20%
+  const avalPctRaw = Number(this.config.get<string>('AVAL_FEE_PCT') ?? '0');
+  const AVAL_PCT = Math.max(0, Math.min(avalPctRaw, ANTICIPO_PCT));
+  const avalValor = Math.round(principal * AVAL_PCT);
 
-  // En letras (VALOR TOTAL A PAGAR) para los placeholders del DOCX
-  const deudaEnLetras = this.amountToWordsCOP(totalAPagar);
+  // Interés diario prorrateado y CAPEADO para respetar el 20% total
+  const dailyRate = this.getDailyRate(); // decimal (ej: 0.00063556)
+  const interesCalc = Math.round(principal * dailyRate * diasParaPago);
+  const interesMax = Math.max(0, anticipoTotal - avalValor);
+  const interes = Math.min(interesCalc, interesMax);
+
+  // Servicio: cierre exacto del 20%
+  const servicioValor = Math.max(0, anticipoTotal - avalValor - interes);
+
+  // Total a pagar (política fija)
+  const totalAPagar = Math.max(0, Math.round(principal + anticipoTotal));
+
+  // En letras SOLO el número (para evitar duplicar “DE PESOS M/CTE” en el pagaré)
+  const deudaEnLetrasSoloNumero = this.amountToWordsNumberOnly(totalAPagar);
 
   const { dia, mesTxt, anio } = this.splitDate(today);
 
@@ -767,7 +832,8 @@ async sendContractToClient(loanRequestId: number) {
   const diaEnLetras = dayToWords[dia] ?? this.numberToSpanish(dia);
   const diasParaPagoEnLetras = dayToWords[diasParaPago] ?? this.numberToSpanish(diasParaPago);
 
-  // 3) Tags para la plantilla DOCX (coinciden con tu archivo con espacios en el nombre)
+  // 3) Tags para la plantilla DOCX
+  // Nota: mantenemos las claves AGENTE_* para no tocar la plantilla; metemos ahí los datos del AVAL.
   const dataForDocx: Record<string, any> = {
     // Deudor
     DEUDOR_NOMBRE: client.name || '',
@@ -776,33 +842,35 @@ async sendContractToClient(loanRequestId: number) {
     DEUDOR_CIUDAD: client.city || '',
 
     // === VALOR TOTAL A PAGAR (en letras y en números) ===
-    DEUDA_NUMEROS: deudaEnLetras,          // ej: "CIENTO VEINTE MIL DE PESOS M/CTE"
-    DEUDA_VALOR: this.money(totalAPagar),  // ej: "120.000" (sin símbolo)
+    DEUDA_NUMEROS: deudaEnLetrasSoloNumero,   // SOLO número en letras
+    DEUDA_VALOR: this.money(totalAPagar),     // ej: "120.000"
 
-    // Anticipo 20% con aval incluido (para textos/recibos dentro del DOCX)
+    // Desglose anticipo (20% = aval + interés + servicio)
     PORCENTAJE_ANTICIPO: `${Math.round(ANTICIPO_PCT*100)}%`, // “20%”
-    ANTICIPO_VALOR: this.money(anticipoValor),
+    ANTICIPO_VALOR: this.money(anticipoTotal),
     AVAL_PCT: `${Math.round(AVAL_PCT*100)}%`,
     AVAL_VALOR: this.money(avalValor),
+    INTERES_VALOR: this.money(interes),
     SERVICIO_VALOR: this.money(servicioValor),
 
     // Plazo calculado
-    DIAS_PARA_PAGO: String(diasParaPago),                // ej: "7"
+    DIAS_PARA_PAGO: String(diasParaPago),
     DIAS_PARA_PAGO_TEXTO: `${diasParaPago} (${diasParaPagoEnLetras}) días`,
 
     // Fecha (hoy)
-    FECHA_DIA: String(dia).padStart(2, '0'),            // "08"
-    FECHA_MES: mesTxt,                                   // "noviembre"
-    FECHA_ANIO: String(anio),                            // "2025"
-    FECHA_DIA_LETRA: diaEnLetras,                        // "ocho"
-    FECHA_DIA_LETRAS: diaEnLetras,                       // alias por si quedó en algún párrafo
+    FECHA_DIA: String(dia),        // sin cero a la izquierda
+    FECHA_MES: mesTxt,
+    FECHA_ANIO: String(anio),
+    FECHA_DIA_LETRA: diaEnLetras,
+    FECHA_DIA_LETRAS: diaEnLetras, // alias
 
-    // Agente/Avalista
-    AGENTE_NOMBRE: agent?.name || '',
-    AGENTE_CC: (agent as any)?.document || '',
+    // ⚠️ Datos del AVAL (rellenando los placeholders que la plantilla llama "agente")
+    AGENTE_NOMBRE: avalUser?.name || agent?.name || '',
+    AGENTE_CC: (avalUser as any)?.document || (agent as any)?.document || '',
 
-    // (Opcional en plantilla)
-    TASA_MENSUAL_PCT: tasaMensualPct ? `${tasaMensualPct}%` : '',
+    // (Opcionales si luego los quieres en la plantilla)
+    TASA_DIARIA_PCT: dailyRate ? `${(dailyRate*100).toFixed(6)}%` : '',
+    TASA_EA_PCT: this.config.get<string>('DEFAULT_INTEREST_EA_PCT') || '',
   };
 
   try {
@@ -812,8 +880,11 @@ async sendContractToClient(loanRequestId: number) {
       DEUDOR_CC: dataForDocx.DEUDOR_CC,
       DEUDOR_CIUDAD: dataForDocx.DEUDOR_CIUDAD,
       DEUDA_VALOR: dataForDocx.DEUDA_VALOR,
-      DEUDA_NUMEROS: dataForDocx.DEUDA_NUMEROS,
       DIAS_PARA_PAGO_TEXTO: dataForDocx.DIAS_PARA_PAGO_TEXTO,
+      AVAL_VALOR: dataForDocx.AVAL_VALOR,
+      INTERES_VALOR: dataForDocx.INTERES_VALOR,
+      SERVICIO_VALOR: dataForDocx.SERVICIO_VALOR,
+      AGENTE_NOMBRE: dataForDocx.AGENTE_NOMBRE,
     }});
 
     // 4) Render DOCX (11 páginas) → PDF (1:1)

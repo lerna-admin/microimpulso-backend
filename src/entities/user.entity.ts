@@ -25,6 +25,7 @@ export enum UserRole {
   AGENT = 'AGENT',
   ADMINISTRATOR = 'ADMIN',
   MANAGER = 'MANAGER',
+  AVAL = 'AVAL'
 }
 
 /**

@@ -671,7 +671,83 @@ export class ChatService implements OnModuleInit {
   }
   
   // Número → letras (es-CO) para COP (entero)
-  private numberToSpanish(n: number): string { /* tu implementación previa aquí */ return '...'; }
+  /** Convierte enteros >= 0 a palabras en español (con acentos).
+  *  Soporta hasta miles de millones (>= 0 y < 1e12).
+  *  Ej: 120000 -> "ciento veinte mil"
+  */
+  private numberToSpanish(n: number): string {
+    let value = Math.trunc(Math.max(0, Number.isFinite(n) ? n : 0));
+    if (value === 0) return 'cero';
+    
+    const U = [
+      '', 'uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete', 'ocho', 'nueve',
+      'diez', 'once', 'doce', 'trece', 'catorce', 'quince',
+      'dieciséis', 'diecisiete', 'dieciocho', 'diecinueve',
+      'veinte', 'veintiuno', 'veintidós', 'veintitrés', 'veinticuatro',
+      'veinticinco', 'veintiséis', 'veintisiete', 'veintiocho', 'veintinueve'
+    ];
+    const T = ['', '', '', 'treinta', 'cuarenta', 'cincuenta', 'sesenta', 'setenta', 'ochenta', 'noventa'];
+    const C = ['', 'ciento', 'doscientos', 'trescientos', 'cuatrocientos', 'quinientos', 'seiscientos', 'setecientos', 'ochocientos', 'novecientos'];
+    
+    const seccion999 = (x: number): string => {
+      if (x === 0) return '';
+      if (x === 100) return 'cien';
+      
+      const centenas = Math.floor(x / 100);
+      const decenasUn = x % 100;
+      const decenas = Math.floor(decenasUn / 10);
+      const unidades = decenasUn % 10;
+      
+      const parts: string[] = [];
+      if (centenas > 0) parts.push(C[centenas]);
+      
+      if (decenasUn > 0) {
+        if (decenasUn < 30) {
+          parts.push(U[decenasUn]);
+        } else {
+          const d = T[decenas];
+          if (unidades === 0) {
+            parts.push(d);
+          } else {
+            parts.push(`${d} y ${U[unidades]}`);
+          }
+        }
+      }
+      return parts.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+    };
+    
+    const parts: string[] = [];
+    
+    // miles de millones (1,000,000,000 .. 999,000,000,000)
+    let milesDeMillones = Math.floor(value / 1_000_000_000);
+    if (milesDeMillones > 0) {
+      parts.push(milesDeMillones === 1 ? 'mil millones' : `${seccion999(milesDeMillones)} mil millones`);
+      value %= 1_000_000_000;
+    }
+    
+    // millones
+    const millones = Math.floor(value / 1_000_000);
+    if (millones > 0) {
+      parts.push(millones === 1 ? 'un millón' : `${seccion999(millones)} millones`);
+      value %= 1_000_000;
+    }
+    
+    // miles
+    const miles = Math.floor(value / 1000);
+    if (miles > 0) {
+      parts.push(miles === 1 ? 'mil' : `${seccion999(miles)} mil`);
+      value %= 1000;
+    }
+    
+    // resto (0..999)
+    if (value > 0) {
+      parts.push(seccion999(value));
+    }
+    
+    return parts.filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+  }
+  
+  
   private amountToWordsCOP(n: number): string {
     const entero = Math.trunc(Math.max(0, n || 0));
     return `${this.numberToSpanish(entero).toUpperCase()} DE PESOS M/CTE`;

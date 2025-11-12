@@ -1032,6 +1032,9 @@ async findOne(id: number): Promise<any | null> {
       (loan) => loan.status !== 'completed' && loan.status !== 'rejected',
     );
   }
+
+  console.log("fullClient", fullClient);
+  
   
   const clientResponse = fullClient
   ? {
@@ -1040,6 +1043,7 @@ async findOne(id: number): Promise<any | null> {
     phone: fullClient.phone,
     phone2: (fullClient as any).phone2 ?? null,
     email: fullClient.email,
+    city: fullClient.city,
     document: fullClient.document,
     documentType: fullClient.documentType,
     address: fullClient.address,

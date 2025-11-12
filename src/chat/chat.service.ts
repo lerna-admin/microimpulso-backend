@@ -762,18 +762,18 @@ export class ChatService implements OnModuleInit {
     // 2) Candidatos portables (dist -> src -> relativo al archivo)
     const candidates = [
       // runtime en build
-      join(process.cwd(), 'dist', 'chat', 'assets', 'CONTRATO DE MUTUO.docx'),
+      join(process.cwd(), 'dist', 'chat', 'assets', 'CONTRATO_DE_MUTUO.docx'),
       // desarrollo
-      join(process.cwd(), 'src', 'chat', 'assets', 'CONTRATO DE MUTUO.docx'),
+      join(process.cwd(), 'src', 'chat', 'assets', 'CONTRATO_DE_MUTUO.docx'),
       // fallback relativo a este archivo
-      join(__dirname, 'assets', 'CONTRATO DE MUTUO.docx'),
+      join(__dirname, 'assets', 'CONTRATO_DE_MUTUO.docx'),
     ];
     
     for (const p of candidates) {
       if (existsSync(p)) return p;
     }
     throw new Error(
-      'No se encontró la plantilla DOCX. Asegúrate de tener "src/chat/assets/CONTRATO DE MUTUO.docx" ' +
+      'No se encontró la plantilla DOCX. Asegúrate de tener "src/chat/assets/CONTRATO_DE_MUTUO.docx" ' +
       'y de copiar assets a dist en nest-cli.json, o define CONTRACT_TEMPLATE_PATH en .env.'
     );
   }
@@ -1020,7 +1020,7 @@ private fmtPct(dec: number, digits = 2): string {
       this.debug('PDF.convert.ok', { cId, size: pdfBytes.length });
       
       // 5) Guardar PDF
-      const filename = `ContratoMutuo-${loan.id}.pdf`;
+      const filename = `ContratoMutuo-${loan.client.document}-${loan.id}.pdf`;
       const filePath = join(__dirname, '..', '..', 'public', 'uploads', 'documents', filename);
       this.ensureDir(dirname(filePath));
       writeFileSync(filePath, pdfBytes);

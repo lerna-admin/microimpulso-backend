@@ -149,6 +149,7 @@ export class ClientsService {
     'referencePhone',
     'referenceRelationship',
     'customFields',
+    'city',
     'countryId', // ⬅️ NUEVO
   ];
 

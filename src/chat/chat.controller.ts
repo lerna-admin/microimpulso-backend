@@ -75,7 +75,17 @@ export class ChatController {
   ) {
     return this.chatService.sendContractToClient(loanRequestId);
   }
+
+@Get(':id/contract/download')
+async download(@Param('id', ParseIntPipe) id: number, @Res() res: Response) {
+  const { buffer, filename, mime } = await this.chatService.generateContractForDownload(id);
+  res.setHeader('Content-Type', mime);
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(buffer);
+}
+
   
+
   
 }
 

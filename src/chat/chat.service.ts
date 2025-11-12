@@ -1100,6 +1100,143 @@ private fmtPct(dec: number, digits = 2): string {
       throw err;
     }
   }
+
+
+/**
+ * Genera el contrato (DOCX → PDF) y **RETORNA EL ARCHIVO EN MEMORIA** (Buffer)
+ * para que el controller lo envíe como attachment. 
+ * ❗️No guarda en disco, no crea ChatMessage, no usa WhatsApp.
+ */
+async generateContractForDownload(loanRequestId: number): Promise<{
+  success: true;
+  filename: string;
+  mime: 'application/pdf';
+  buffer: Buffer;
+}> {
+  const cId = uuid();
+
+  // 1) Cargar Loan + Client + Agent (+branch del agente para ubicar aval)
+  const loan = await this.loanRequestRepository.findOne({
+    where: { id: loanRequestId },
+    relations: ['client', 'agent', 'agent.branch'],
+  });
+  if (!loan || !loan.client?.phone) throw new NotFoundException('Loan or client not found');
+
+  const client = loan.client;
+  const agent  = loan.agent;
+
+  // 🔎 Buscar AVAL según regla (misma sede si es posible)
+  const avalUser = await this.findAvalUserForLoan(agent);
+
+  // Validación: ciudad requerida por plantilla
+  if (!client.city?.trim()) {
+    throw new Error('Falta la ciudad del cliente (client.city). Complétala antes de generar el contrato.');
+  }
+
+  // 2) Cálculos de negocio
+  const today = new Date();
+  const dueDateFromDb = this.parseDbDate((loan as any).endDateAt);
+  const dueDate = dueDateFromDb ?? this.nextQuincena(today);
+  const diasParaPago = this.diffDays(today, dueDate);
+
+  // Capital (principal)
+  const principal = typeof loan.amount === 'number'
+    ? loan.amount
+    : Number((loan as any).amount ?? loan.requestedAmount ?? 0);
+
+  // Política financiera
+  const ANTICIPO_PCT = 0.20;
+  const anticipoTotal = Math.round(principal * ANTICIPO_PCT);
+
+  const avalPctRaw = Number(this.config.get<string>('AVAL_FEE_PCT') ?? '0');
+  const AVAL_PCT = Math.max(0, Math.min(avalPctRaw, ANTICIPO_PCT));
+  const avalValor = Math.round(principal * AVAL_PCT);
+
+  const dailyRate = this.getDailyRate();
+  const interesCalc = Math.round(principal * dailyRate * diasParaPago);
+  const interesMax = Math.max(0, anticipoTotal - avalValor);
+  const interes = Math.min(interesCalc, interesMax);
+
+  const servicioValor = Math.max(0, anticipoTotal - avalValor - interes);
+  const totalAPagar = Math.max(0, Math.round(principal + anticipoTotal));
+
+  const deudaEnLetrasSoloNumero = this.amountToWordsNumberOnly(totalAPagar);
+
+  const { dia, mesTxt, anio } = this.splitDate(today);
+  const dayToWords: Record<number,string> = {
+    1:'uno',2:'dos',3:'tres',4:'cuatro',5:'cinco',6:'seis',7:'siete',8:'ocho',9:'nueve',10:'diez',
+    11:'once',12:'doce',13:'trece',14:'catorce',15:'quince',16:'dieciséis',17:'diecisiete',18:'dieciocho',19:'diecinueve',20:'veinte',
+    21:'veintiuno',22:'veintidós',23:'veintitrés',24:'veinticuatro',25:'veinticinco',26:'veintiséis',27:'veintisiete',28:'veintiocho',29:'veintinueve',30:'treinta',31:'treinta y uno'
+  };
+  const diaEnLetras = dayToWords[dia] ?? this.numberToSpanish(dia);
+  const diasParaPagoEnLetras = dayToWords[diasParaPago] ?? this.numberToSpanish(diasParaPago);
+
+  const monthlyRate = this.getMonthlyRate();
+  const tasaMensualPctStr = this.fmtPct(monthlyRate);
+
+  // 3) Tags para la plantilla DOCX
+  const dataForDocx: Record<string, any> = {
+    DEUDOR_NOMBRE: client.name || '',
+    DEUDOR_CC: client.document || '',
+    DEUDOR_DIRECCION: (client.address || client.address2 || '').trim(),
+    DEUDOR_CIUDAD: client.city || '',
+    DEUDOR_CIUDAD_UPPER: (client.city || '').toUpperCase(),
+
+    CAPITAL_VALOR: this.money(principal),
+    CAPITAL_EN_LETRAS: this.amountToWordsNumberOnly(principal),
+
+    DEUDA_NUMEROS: deudaEnLetrasSoloNumero,
+    DEUDA_VALOR: this.money(totalAPagar),
+
+    PORCENTAJE_ANTICIPO: `${Math.round(ANTICIPO_PCT*100)}%`,
+    ANTICIPO_VALOR: this.money(anticipoTotal),
+    AVAL_PCT: `${Math.round(AVAL_PCT*100)}%`,
+    AVAL_VALOR: this.money(avalValor),
+    INTERES_VALOR: this.money(interes),
+    SERVICIO_VALOR: this.money(servicioValor),
+
+    DIAS_PARA_PAGO: String(diasParaPago),
+    DIAS_PARA_PAGO_TEXTO: `${diasParaPago} (${diasParaPagoEnLetras}) días`,
+
+    FECHA_DIA: String(dia),
+    FECHA_MES: mesTxt,
+    FECHA_ANIO: String(anio),
+    FECHA_DIA_LETRA: diaEnLetras,
+    FECHA_DIA_LETRAS: diaEnLetras,
+
+    AGENTE_NOMBRE: avalUser?.name || agent?.name || '',
+    AGENTE_CC: (avalUser as any)?.document || (agent as any)?.document || '',
+
+    TASA_DIARIA_PCT: dailyRate ? `${(dailyRate*100).toFixed(6)}%` : '',
+    TASA_EA_PCT: this.config.get<string>('DEFAULT_INTEREST_EA_PCT') || '',
+    TASA_MENSUAL_PCT: tasaMensualPctStr,
+  };
+
+  try {
+    // 4) Render DOCX → PDF en memoria
+    this.debug('DOCX.render.start', { cId });
+    const docxBuffer = this.renderDocx(dataForDocx);
+    this.debug('DOCX.render.ok', { cId, size: docxBuffer.length });
+
+    this.debug('PDF.convert.start', { cId });
+    const pdfBytes = await this.convertDocxToPdf(docxBuffer);
+    this.debug('PDF.convert.ok', { cId, size: pdfBytes.length });
+
+    // 5) Retornar archivo (sin guardar)
+    const filename = `ContratoMutuo-${client.document}-${loan.id}.pdf`;
+    return {
+      success: true,
+      filename,
+      mime: 'application/pdf',
+      buffer: pdfBytes,
+    };
+  } catch (err: any) {
+    this.error('OUT.contract.generate.error', { cId, msg: err?.message });
+    throw err;
+  }
+}
+
+
   
   
 }

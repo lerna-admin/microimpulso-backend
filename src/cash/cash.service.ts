@@ -989,11 +989,11 @@ export class CashService {
     // --- CORRECCIÓN TRANSFERENCIAS (ignorar 'type') ---
     // Calc sobre todayAll (sin filtros) para ver ambas direcciones
     const transferEntrante = todayAll
-    .filter((m) => m.category === C.TRANSFERENCIA && m.destinoId === userId)
+    .filter((m) => m.category === C.TRANSFERENCIA && m.destinoId == userId)
     .reduce((s, m) => s + Number(m.amount || 0), 0);
     
     const transferSaliente = todayAll
-    .filter((m) => m.category === C.TRANSFERENCIA && m.origenId === userId)
+    .filter((m) => m.category === C.TRANSFERENCIA && m.origenId == userId)
     .reduce((s, m) => s + Number(m.amount || 0), 0);
     
     // Totales corregidos que SÍ afectan resultados finales

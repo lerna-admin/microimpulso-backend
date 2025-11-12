@@ -250,8 +250,30 @@ export class CashService {
       for (const u of users) usersById.set(u.id, u);
     }
     
-    return {
-      data: rows.map((m) => ({
+    // --- Add-on: per-viewer transfer semantics (role-agnostic) ---
+    const viewerId = currentUser?.id ?? null;
+    
+    const shaped = rows.map((m) => {
+      const isTransfer = m.category === CashMovementCategory.TRANSFERENCIA;
+      
+      // Ignore DB `type` for transfers; derive direction by origen/destino only
+      let affectsAs: 'ENTRADA' | 'SALIDA' | null = null;
+      if (isTransfer && viewerId != null) {
+        if (m.origenId === viewerId) {
+          affectsAs = 'SALIDA';   // viewer sent the money
+        } else if (m.destinoId === viewerId) {
+          affectsAs = 'ENTRADA';  // viewer received the money
+        }
+      }
+      
+      // Mark as "expense for the viewer" iff viewer is the origin of a transfer
+      const isExpenseForViewer = isTransfer && viewerId != null && m.origenId === viewerId;
+      const expenseAmountForViewer = isExpenseForViewer ? Number(m.amount || 0) : 0;
+      
+      // Optional: user-facing category tag without touching enums/DB
+      const categoryForUser = isExpenseForViewer ? 'GASTO_TRANSFERENCIA' : String(m.category);
+      
+      return {
         id: m.id,
         category: m.category,
         amount: m.amount,
@@ -259,13 +281,27 @@ export class CashService {
         description: m.reference,
         origen: m.origenId ? usersById.get(m.origenId) ?? { id: m.origenId } : null,
         destino: m.destinoId ? usersById.get(m.destinoId) ?? { id: m.destinoId } : null,
-      })),
+        
+        // Keep original DB type for compatibility
+        type: m.type,
+        
+        // New derived fields (do not break existing consumers)
+        isTransfer,
+        affectsAs,                 // 'ENTRADA' | 'SALIDA' | null (per viewer)
+        isExpenseForViewer,        // true if viewer is origenId of a transfer
+        expenseAmountForViewer,    // amount to sum in "viewer expenses"
+        categoryForUser,           // convenience flag for UI labeling
+      };
+    });
+    
+    // ⬇️ Use the shaped array in the response
+    return {
+      data: shaped,
       total,
       page: Math.max(1, page),
       limit: Math.max(1, limit),
     };
   }
-  
   
   /**
   * Dashboard totals by branch and date.
@@ -949,17 +985,46 @@ export class CashService {
     })
     .reduce((s, t) => s + +((t as any).amount ?? 0), 0);
     
+    // --- ADD-ON CORREGIDO (sin 'data?.kpis') ---
+    // --- CORRECCIÓN TRANSFERENCIAS (ignorar 'type') ---
+    // Calc sobre todayAll (sin filtros) para ver ambas direcciones
+    const transferEntrante = todayAll
+    .filter((m) => m.category === C.TRANSFERENCIA && m.destinoId === userId)
+    .reduce((s, m) => s + Number(m.amount || 0), 0);
+    
+    const transferSaliente = todayAll
+    .filter((m) => m.category === C.TRANSFERENCIA && m.origenId === userId)
+    .reduce((s, m) => s + Number(m.amount || 0), 0);
+    
+    // Totales corregidos que SÍ afectan resultados finales
+    const totalIngresosDia_corr = ingresosNoTransfer + cobros + transferEntrante;
+    const totalEgresosDia_corr  = gastos + totalNuevos + totalRenovados + transferSaliente;
+    const totalFinal_corr       = baseAnterior + totalIngresosDia_corr - totalEgresosDia_corr;
+    
+    // KPIs nuevos informativos
+    const kpisExtendidos = {
+      entradaDeDinero: totalIngresosDia_corr,
+      salidaDeDinero : totalEgresosDia_corr,
+      transferEntrante,
+      transferSaliente,
+      transferNeta: transferEntrante - transferSaliente,
+    };
+    
+    // --- RETURN usando los CORREGIDOS ---
     return {
       fecha: fmtYMD(start),
       usuario: userId,
       branchId,
       baseAnterior,
-      totalIngresosDia,
-      totalEgresosDia,
-      totalFinal,
       
-      ingresos: { ingresosNoTransfer, transferIn, cobros },
-      egresos: { transferOut, prestamosNuevos: totalNuevos, gastos, renovados: totalRenovados },
+      // Usar los corregidos:
+      totalIngresosDia: totalIngresosDia_corr,
+      totalEgresosDia : totalEgresosDia_corr,
+      totalFinal      : totalFinal_corr,
+      
+      // Conserva tus desgloses previos; si quieres, refleja también los corregidos:
+      ingresos: { ingresosNoTransfer, transferIn: transferEntrante, cobros },
+      egresos : { transferOut: transferSaliente, prestamosNuevos: totalNuevos, gastos, renovados: totalRenovados },
       
       movimientos: movimientosDia,
       
@@ -970,10 +1035,12 @@ export class CashService {
         valorCobradoDia,
         clientesNuevos: { cantidad: NUEVO_CLIENTES.size, montoPrestado: totalNuevos },
         clientesRenovados: { cantidad: RENOV_CLIENTES.size, montoPrestado: totalRenovados },
+        ...kpisExtendidos, // nuevos KPIs de transferencias y entradas/salidas
       },
       
       portfolio,
     };
+    
   }
   
   /**

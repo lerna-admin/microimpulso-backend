@@ -136,6 +136,7 @@ export class ClientsService {
     'name',
     'phone',
     'email',
+    'city',
     'document',
     'documentType',
     'address',

@@ -1034,9 +1034,6 @@ async findOne(id: number): Promise<any | null> {
     );
   }
 
-  console.log("fullClient", fullClient);
-  
-  
   const clientResponse = fullClient
   ? {
     id: fullClient.id,

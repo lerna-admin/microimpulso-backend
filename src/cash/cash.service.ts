@@ -617,7 +617,7 @@ export class CashService {
       { label: 'Nuevos', value: totalNuevos, trend: 'decrease', amount: countNuevos },
       
       
-      { label: 'Préstamos', value: totalDesembolsos + totalRenovados, trend: 'decrease', amount : countNuevos + countRenovados },
+      { label: 'Préstamos', value: totalDesembolsos, trend: 'decrease', amount : countNuevos + countRenovados },
       { label: 'Caja real', value: realCash },
       { label: 'Cobro', value: totalCobros, trend: 'increase' },
       
@@ -1660,4 +1660,3 @@ export class CashService {
   }
   
 }
-

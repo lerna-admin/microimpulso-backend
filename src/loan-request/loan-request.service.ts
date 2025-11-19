@@ -237,7 +237,23 @@ export class LoanRequestService {
     if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
       throw new BadRequestException('Invalid amount for renewal.');
     }
-    const renewedEndDate = newDate ? new Date(newDate) : originalLoan.endDateAt;
+    const resolvedOriginalEndDate = originalLoan.endDateAt
+      ? new Date(originalLoan.endDateAt)
+      : undefined;
+    let renewedEndDate: Date | undefined;
+    if (newDate) {
+      renewedEndDate = new Date(newDate);
+    } else if (resolvedOriginalEndDate && originalLoan.createdAt) {
+      const createdAtDate = new Date(originalLoan.createdAt);
+      const durationMs = resolvedOriginalEndDate.getTime() - createdAtDate.getTime();
+      if (Number.isFinite(durationMs) && durationMs > 0) {
+        renewedEndDate = new Date(Date.now() + durationMs);
+      } else {
+        renewedEndDate = resolvedOriginalEndDate;
+      }
+    } else {
+      renewedEndDate = resolvedOriginalEndDate;
+    }
     const newLoan = this.loanRequestRepository.create({
       client: originalLoan.client,
       agent: originalLoan.agent,

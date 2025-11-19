@@ -349,6 +349,8 @@ export class CashService {
     if (isManager) {
       movements = await this.cashRepo
       .createQueryBuilder('m')
+      .leftJoinAndSelect('m.transaction', 'movementTransaction')
+      .leftJoinAndSelect('movementTransaction.loanRequest', 'movementLoanRequest')
       .leftJoin('m.branch', 'b')
       .where('b.countryId = :cid', { cid: managerCountryId! })
       .andWhere('m.createdAt BETWEEN :start AND :end', { start, end })
@@ -366,6 +368,9 @@ export class CashService {
           where: {
             branch: { id: branchId },
             createdAt: Between(start, end),
+          },
+          relations: {
+            transaction: { loanRequest: true },
           },
         }),
         this.cashRepo.find({
@@ -400,72 +405,39 @@ export class CashService {
     const totalDesembolsos = byCategory('PRESTAMO');
     const totalGastos = byCategory('GASTO_PROVEEDOR');
     
-    // ---------- Disbursements / Penalties ----------
-    let disbursements: LoanTransaction[] = [];
-    let penalties: LoanTransaction[] = [];
+    const normalize = (value?: string | null) =>
+      String(value ?? '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+    const statusLower = (value?: string | null) =>
+      String(value ?? '').trim().toLowerCase();
     
-    if (isManager) {
-      // Usamos QB para evitar el typing issue del where anidado
-      disbursements = await this.loanTransactionRepo
-      .createQueryBuilder('tx')
-      .innerJoinAndSelect('tx.loanRequest', 'lr')
-      .innerJoinAndSelect('lr.agent', 'agent')
-      .innerJoinAndSelect('agent.branch', 'branch')
-      .where('LOWER(tx.Transactiontype) = :type', { type: 'disbursement' })
-      .andWhere('tx.date BETWEEN :start AND :end', { start, end })
-      .andWhere('branch.countryId = :cid', { cid: managerCountryId! })
-      .andWhere('(tx.isAdminTransaction IS NULL OR tx.isAdminTransaction = :f)', { f: false })
-      .getMany();
-      
-      penalties = await this.loanTransactionRepo
-      .createQueryBuilder('tx')
-      .innerJoinAndSelect('tx.loanRequest', 'lr')
-      .innerJoinAndSelect('lr.agent', 'agent')
-      .innerJoinAndSelect('agent.branch', 'branch')
-      .where('LOWER(tx.Transactiontype) = :type', { type: 'penalty' })
-      .andWhere('tx.date BETWEEN :start AND :end', { start, end })
-      .andWhere('branch.countryId = :cid', { cid: managerCountryId! })
-      .getMany();
-    } else {
-      disbursements = await this.loanTransactionRepo
-      .createQueryBuilder('tx')
-      .innerJoinAndSelect('tx.loanRequest', 'lr')
-      .innerJoinAndSelect('lr.agent', 'agent')
-      .innerJoinAndSelect('agent.branch', 'branch')
-      .where('LOWER(tx.Transactiontype) = :type', { type: 'disbursement' })
-      .andWhere('tx.date BETWEEN :start AND :end', { start, end })
-      .andWhere('branch.id = :bid', { bid: branchId })
-      .andWhere('(tx.isAdminTransaction IS NULL OR tx.isAdminTransaction = :f)', { f: false })
-      .getMany();
-      
-      penalties = await this.loanTransactionRepo
-      .createQueryBuilder('tx')
-      .innerJoinAndSelect('tx.loanRequest', 'lr')
-      .innerJoinAndSelect('lr.agent', 'agent')
-      .innerJoinAndSelect('agent.branch', 'branch')
-      .where('LOWER(tx.Transactiontype) = :type', { type: 'penalty' })
-      .andWhere('tx.date BETWEEN :start AND :end', { start, end })
-      .andWhere('branch.id = :bid', { bid: branchId })
-      .getMany();
-    }
+    const loanMovements = movements
+    .filter((m) => m.type === 'SALIDA' && m.category === 'PRESTAMO')
+    .map((movement) => {
+      const ref = normalize(movement.reference);
+      const txStatus = statusLower(
+        (movement.transaction as LoanTransaction | undefined)?.loanRequest?.status as any,
+      );
+      const isRenewal = ref.includes('renovacion') || txStatus === 'renewed';
+      return { movement, isRenewal };
+    });
     
-    const renewedByRequest = new Map<number, LoanRequest>();
-    for (const pen of penalties) {
-      const req = pen.loanRequest as LoanRequest;
-      if (!renewedByRequest.has(req.id)) renewedByRequest.set(req.id, req);
-    }
+    const renewalMovements = loanMovements.filter((entry) => entry.isRenewal);
+    const newMovements = loanMovements.filter((entry) => !entry.isRenewal);
     
-    const totalRenovados = [...renewedByRequest.values()].reduce(
-      (sum, req) => sum + +(req.requestedAmount ?? req.amount ?? 0),
+    const totalRenovados = renewalMovements.reduce(
+      (sum, entry) => sum + +entry.movement.amount,
       0,
     );
-    const countRenovados = renewedByRequest.size;
+    const countRenovados = renewalMovements.length;
     
-    const nuevosHoy = movements.filter(
-      (m) => m.type === 'SALIDA' && m.category === 'PRESTAMO',
+    const totalNuevos = newMovements.reduce(
+      (sum, entry) => sum + +entry.movement.amount,
+      0,
     );
-    const totalNuevos = nuevosHoy.reduce((sum, m) => sum + +m.amount, 0);
-    const countNuevos = nuevosHoy.length;
+    const countNuevos = newMovements.length;
     
     console.log('[CashService.getDailyTotals] cajaAnterior=', cajaAnterior, 'cajaReal=', cajaReal);
     
@@ -1688,5 +1660,4 @@ export class CashService {
   }
   
 }
-
 

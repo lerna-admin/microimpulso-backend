@@ -208,7 +208,7 @@ export class LoanRequestService {
     // 1. Buscar el préstamo original
     const originalLoan = await this.loanRequestRepository.findOne({
       where: { id: loanRequestId },
-      relations: ['client', 'agent', 'agent.branch'],
+      relations: ['client', 'agent', 'agent.branch', 'repaymentAccount'],
     });
     if (!originalLoan) throw new Error('Loan request not found');
     const branchId = originalLoan.agent?.branch?.id;
@@ -232,21 +232,24 @@ export class LoanRequestService {
     await this.loanRequestRepository.save(originalLoan);
     
     // 4. Crear el nuevo préstamo renovado
-    const newNotes = [
-      `Renovación desde préstamo ID ${originalLoan.id} el ${new Date().toISOString()}`
-    ];
+    const baseRequestedAmount = amount ?? originalLoan.requestedAmount ?? originalLoan.amount;
+    const normalizedAmount = Number(baseRequestedAmount);
+    if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
+      throw new BadRequestException('Invalid amount for renewal.');
+    }
+    const renewedEndDate = newDate ? new Date(newDate) : originalLoan.endDateAt;
     const newLoan = this.loanRequestRepository.create({
       client: originalLoan.client,
       agent: originalLoan.agent,
-      amount: (amount ?? originalLoan.amount) * 1.2,
-      requestedAmount: amount ?? originalLoan.amount,
+      amount: normalizedAmount * 1.2,
+      requestedAmount: normalizedAmount,
       status: LoanRequestStatus.RENEWED, // o 'renovado' si tienes ese estado
       type: originalLoan.type,
       mode: originalLoan.mode,
       mora: 0,
-      endDateAt: newDate ? new Date(newDate) : undefined,
+      endDateAt: renewedEndDate,
       isRenewed: false,
-      notes: JSON.stringify(newNotes),
+      notes: JSON.stringify([`Renovación desde préstamo ID ${originalLoan.id} el ${new Date().toISOString()}`]),
       paymentDay: originalLoan.paymentDay,
       repaymentAccount: originalLoan.repaymentAccount,
     });

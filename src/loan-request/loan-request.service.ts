@@ -4,11 +4,13 @@ import { UpdateLoanRequestDto } from './dto/update-loan-request.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, In, Not, Repository } from 'typeorm';
 import { LoanRequest, LoanRequestStatus } from 'src/entities/loan-request.entity';
-import { TransactionType, LoanTransaction} from 'src/entities/transaction.entity';
-import { User } from 'src/entities/user.entity'
+import { TransactionType, LoanTransaction } from 'src/entities/transaction.entity';
+import { User } from 'src/entities/user.entity';
 import { Notification } from 'src/notifications/notifications.entity';
 import { BadRequestException } from '@nestjs/common';
 import { Client, ClientStatus } from 'src/entities/client.entity';
+import { CashMovement, CashMovementType } from 'src/entities/cash-movement.entity';
+import { CashMovementCategory } from 'src/entities/cash-movement-category.enum';
 
 
 
@@ -20,6 +22,8 @@ export class LoanRequestService {
     private readonly loanRequestRepository: Repository<LoanRequest>,
     @InjectRepository(LoanTransaction)
     private readonly transactionRepository: Repository<LoanTransaction>,
+    @InjectRepository(CashMovement)
+    private readonly cashMovementRepository: Repository<CashMovement>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     @InjectRepository(Notification)
@@ -204,9 +208,13 @@ export class LoanRequestService {
     // 1. Buscar el préstamo original
     const originalLoan = await this.loanRequestRepository.findOne({
       where: { id: loanRequestId },
-      relations: ['client', 'agent'],
+      relations: ['client', 'agent', 'agent.branch'],
     });
     if (!originalLoan) throw new Error('Loan request not found');
+    const branchId = originalLoan.agent?.branch?.id;
+    if (!branchId) {
+      throw new BadRequestException('Loan renewal requires agent with branch assigned.');
+    }
     
     // 2. Marcar el préstamo original como completado y renovado
     originalLoan.status = LoanRequestStatus.COMPLETED;
@@ -252,7 +260,22 @@ export class LoanRequestService {
       amount: savedNewLoan.requestedAmount,
       date: new Date(), // si tu entidad usa 'date' en vez de 'createdAt'
     });
-    await this.transactionRepository.save(disbursement);
+    const savedDisbursement = await this.transactionRepository.save(disbursement);
+    
+    // Registrar la salida de caja para mantener coherencia con CashService
+    const cashAmount = Number(savedNewLoan.requestedAmount ?? savedNewLoan.amount ?? 0);
+    if (!Number.isFinite(cashAmount) || cashAmount <= 0) {
+      throw new BadRequestException('Invalid amount for renewal cash movement.');
+    }
+    
+    await this.cashMovementRepository.save({
+      branchId,
+      type: CashMovementType.SALIDA,
+      category: CashMovementCategory.PRESTAMO,
+      amount: cashAmount,
+      reference: `Renovación préstamo ${originalLoan.id}`,
+      transaction: { id: savedDisbursement.id } as any,
+    });
     
     return savedNewLoan;
   }

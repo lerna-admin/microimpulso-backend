@@ -10,12 +10,13 @@ import { User } from '../entities/user.entity';
 import { Notification } from 'src/notifications/notifications.entity';
 import { Client } from 'src/entities/client.entity';
 import { ClientsModule } from 'src/clients/clients.module';
+import { CashMovement } from 'src/entities/cash-movement.entity';
 
 
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([LoanRequest,LoanTransaction, User, Notification, Client]),
+    TypeOrmModule.forFeature([LoanRequest, LoanTransaction, CashMovement, User, Notification, Client]),
     ChatModule,
     UsersModule,
     ClientsModule

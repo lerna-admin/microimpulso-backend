@@ -748,29 +748,30 @@ export class CashService {
     
     const toStatus = (lr?: LoanRequest) => String(lr?.status ?? '').trim().toLowerCase();
     
-    // Key: only count agent-made disbursements (exclude admin-made)
-    const disbursalsToday = await this.loanTransactionRepo.find({
-      where: {
-        Transactiontype: Raw((alias) => `LOWER(${alias}) = 'disbursement'`),
-        date: Raw((alias) => `${alias} BETWEEN :start AND :end`, { start: startStr, end: endStr }),
-        loanRequest: { agent: { id: userId } },
-        isAdminTransaction: false as any,
-      },
-      relations: { loanRequest: { client: true } },
-    });
-    
+    // Key: only count agent-made disbursements (exclude admin-made).
+    // Using today's cash movements keeps us aligned with the local day even if the
+    // LoanTransaction timestamp lands past midnight in UTC.
+    const disbursalsToday = today.filter(
+      (m) =>
+        m.type === T.SALIDA &&
+        m.category === C.PRESTAMO &&
+        ownerIdForNonTransfer(m) === userId,
+    );
+  
     let totalNuevos = 0;
     let totalRenovados = 0;
     const NUEVO_CLIENTES = new Set<number>();
     const RENOV_CLIENTES = new Set<number>();
     
-    for (const tx of disbursalsToday) {
-      const lr = tx.loanRequest as LoanRequest;
-      const amt = Number((tx as any).amount ?? 0);
+    for (const mov of disbursalsToday) {
+      const lr = (mov as any)?.transaction?.loanRequest as LoanRequest | undefined;
+      if (!lr) continue;
+      const amt = Number(mov.amount ?? 0);
       const st = toStatus(lr);
       const clientId = (lr as any)?.client?.id;
+      const isRenewal = st === 'renewed' || Boolean((lr as any)?.isRenewed);
       
-      if (st === 'renewed') {
+      if (isRenewal) {
         totalRenovados += amt;
         if (clientId) RENOV_CLIENTES.add(clientId);
       } else {

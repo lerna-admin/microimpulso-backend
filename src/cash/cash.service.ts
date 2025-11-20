@@ -775,19 +775,21 @@ export class CashService {
     const toStatus = (lr?: LoanRequest) => String(lr?.status ?? '').trim().toLowerCase();
     
     // Key: only count agent-made disbursements (exclude admin-made).
-    const disbursalCandidates = await this.loanTransactionRepo.find({
+    const disbursalCandidates = await this.cashRepo.find({
       where: {
-        Transactiontype: Raw((alias) => `LOWER(${alias}) = 'disbursement'`),
-        date: Raw((alias) => `${alias} BETWEEN :start AND :end`, {
-          start: bufferStartStr,
-          end: bufferEndStr,
+        type: T.SALIDA,
+        category: C.PRESTAMO,
+        ...(branchId ? { branchId } : {}),
+        createdAt: Raw((alias) => `${alias} BETWEEN :start AND :end`, {
+          start: startStr,
+          end: endStr,
         }),
-        loanRequest: { agent: { id: userId } },
-        isAdminTransaction: false as any,
       },
-      relations: { loanRequest: { client: true } },
+      relations: { transaction: { loanRequest: { agent: true, client: true } } },
     });
-    const disbursalsToday = disbursalCandidates.filter((tx) => isTargetDay(tx.date as any));
+    const disbursalsToday = disbursalCandidates.filter(
+      (m) => ownerIdForNonTransfer(m) === userId && m.transaction?.loanRequest,
+    );
   
     let totalNuevos = 0;
     let totalRenovados = 0;
@@ -813,23 +815,21 @@ export class CashService {
     
     if (totalRenovados === 0) {
       console.log('[CashService.getDailyTraceByUser] renewals fallback triggered', { userId, rawDate });
-      const renewedFallback = await this.cashRepo.find({
+      const renewedFallback = await this.loanRequestRepo.find({
         where: {
-          type: T.SALIDA,
-          category: C.PRESTAMO,
+          agent: { id: userId },
+          status: Raw((alias) => `LOWER(${alias}) = 'renewed'`),
           createdAt: Raw((alias) => `${alias} BETWEEN :start AND :end`, {
             start: startStr,
             end: endStr,
           }),
         },
-        relations: { transaction: { loanRequest: { client: true, agent: true } } },
+        relations: { client: true },
+        select: ['id', 'amount', 'client'],
       });
-      for (const mov of renewedFallback) {
-        const lr = (mov as any)?.transaction?.loanRequest as LoanRequest | undefined;
-        if (!lr) continue;
-        if (toStatus(lr) !== 'renewed') continue;
-        if (ownerIdForNonTransfer(mov) !== userId) continue;
-        totalRenovados += Number(mov.amount ?? 0);
+      for (const lr of renewedFallback) {
+        const amt = Number((lr as any).amount ?? 0);
+        totalRenovados += amt;
         const cid = (lr as any)?.client?.id;
         if (cid) RENOV_CLIENTES.add(cid);
       }

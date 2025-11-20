@@ -815,21 +815,23 @@ export class CashService {
     
     if (totalRenovados === 0) {
       console.log('[CashService.getDailyTraceByUser] renewals fallback triggered', { userId, rawDate });
-      const renewedFallback = await this.loanRequestRepo.find({
+      const renewedFallback = await this.cashRepo.find({
         where: {
-          agent: { id: userId },
-          status: Raw((alias) => `LOWER(${alias}) = 'renewed'`),
+          type: T.SALIDA,
+          category: C.PRESTAMO,
           createdAt: Raw((alias) => `${alias} BETWEEN :start AND :end`, {
             start: startStr,
             end: endStr,
           }),
         },
-        relations: { client: true },
-        select: ['id', 'amount', 'client'],
+        relations: { transaction: { loanRequest: { agent: true, client: true } } },
       });
-      for (const lr of renewedFallback) {
-        const amt = Number((lr as any).amount ?? 0);
-        totalRenovados += amt;
+      for (const mov of renewedFallback) {
+        const lr = (mov as any)?.transaction?.loanRequest as LoanRequest | undefined;
+        if (!lr) continue;
+        if (toStatus(lr) !== 'renewed') continue;
+        if (ownerIdForNonTransfer(mov) !== userId) continue;
+        totalRenovados += Number(mov.amount ?? 0);
         const cid = (lr as any)?.client?.id;
         if (cid) RENOV_CLIENTES.add(cid);
       }

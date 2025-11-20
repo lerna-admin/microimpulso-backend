@@ -654,6 +654,8 @@ export class CashService {
     const C = CashMovementCategory;
     const T = CashMovementType;
     
+    console.log('[CashService.getDailyTraceByUser] start', { userId, rawDate });
+    
     const fmtYMDHMS = (d: Date) => {
       const y = d.getFullYear();
       const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -803,6 +805,7 @@ export class CashService {
     }
     
     if (totalRenovados === 0) {
+      console.log('[CashService.getDailyTraceByUser] renewals fallback triggered', { userId, rawDate });
       const renewedFallback = await this.cashRepo.find({
         where: {
           type: T.SALIDA,
@@ -828,6 +831,18 @@ export class CashService {
     const totalIngresosDia = ingresosNoTransfer + transferIn + cobros;
     const totalEgresosDia = transferOut + gastos + totalNuevos + totalRenovados;
     const totalFinal = baseAnterior + totalIngresosDia - totalEgresosDia;
+    
+    console.log('[CashService.getDailyTraceByUser] totals', {
+      userId,
+      rawDate,
+      baseAnterior,
+      totalIngresosDia,
+      totalEgresosDia,
+      totalFinal,
+      nuevos: { cantidad: NUEVO_CLIENTES.size, monto: totalNuevos },
+      renovados: { cantidad: RENOV_CLIENTES.size, monto: totalRenovados },
+      cobros,
+    });
     
     const todayAgentTxAll = todayAll.filter(
       (m) => (m as any)?.transaction?.loanRequest?.agent?.id === userId,

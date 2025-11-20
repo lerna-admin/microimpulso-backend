@@ -64,6 +64,18 @@ function getLocalDayRange(rawDate: string | Date): { start: Date; end: Date } {
   return { start, end };
 }
 
+function parseDateLike(value: Date | string): Date {
+  if (value instanceof Date) return value;
+  if (typeof value !== 'string') return new Date(value);
+  const normalized = value.trim().replace('T', ' ').replace('Z', '');
+  const [datePart, timePart = '00:00:00'] = normalized.split(' ');
+  const [y, m, d] = datePart.split('-').map(Number);
+  const [hh = '0', mm = '0', rawSeconds = '0'] = timePart.split(':');
+  const [ss = '0', frac = '0'] = rawSeconds.split('.');
+  const ms = Number((frac + '000').slice(0, 3));
+  return new Date(y, m - 1, d, Number(hh), Number(mm), Number(ss), ms);
+}
+
 @Injectable()
 export class CashService {
   constructor(
@@ -678,6 +690,14 @@ export class CashService {
     const branchId = user?.branch?.id ?? null;
     
     const { start, end, startStr, endStr } = localDayRange(rawDate);
+    const bufferStart = new Date(start);
+    bufferStart.setHours(bufferStart.getHours() - 6);
+    const bufferEnd = new Date(end);
+    bufferEnd.setHours(bufferEnd.getHours() + 6);
+    const bufferStartStr = fmtYMDHMS(bufferStart);
+    const bufferEndStr = fmtYMDHMS(bufferEnd);
+    const targetDayStr = fmtYMD(start);
+    const isTargetDay = (date: Date | string) => fmtYMD(parseDateLike(date)) === targetDayStr;
     
     // Attribution helpers
     const ownerIdForNonTransfer = (m: CashMovement): number | null => {
@@ -743,7 +763,7 @@ export class CashService {
       m.category === C.GASTO_PROVEEDOR &&
       ownerIdForNonTransfer(m) === userId,
     );
-    const cobros = sumWhere(
+    let cobros = sumWhere(
       (m) =>
         m.type === T.ENTRADA &&
       m.category === C.COBRO_CLIENTE &&
@@ -753,14 +773,19 @@ export class CashService {
     const toStatus = (lr?: LoanRequest) => String(lr?.status ?? '').trim().toLowerCase();
     
     // Key: only count agent-made disbursements (exclude admin-made).
-    // Using today's cash movements keeps us aligned with the local day even if the
-    // LoanTransaction timestamp lands past midnight in UTC.
-    const disbursalsToday = today.filter(
-      (m) =>
-        m.type === T.SALIDA &&
-        m.category === C.PRESTAMO &&
-        ownerIdForNonTransfer(m) === userId,
-    );
+    const disbursalCandidates = await this.loanTransactionRepo.find({
+      where: {
+        Transactiontype: Raw((alias) => `LOWER(${alias}) = 'disbursement'`),
+        date: Raw((alias) => `${alias} BETWEEN :start AND :end`, {
+          start: bufferStartStr,
+          end: bufferEndStr,
+        }),
+        loanRequest: { agent: { id: userId } },
+        isAdminTransaction: false as any,
+      },
+      relations: { loanRequest: { client: true } },
+    });
+    const disbursalsToday = disbursalCandidates.filter((tx) => isTargetDay(tx.date as any));
   
     let totalNuevos = 0;
     let totalRenovados = 0;
@@ -781,6 +806,27 @@ export class CashService {
       } else {
         totalNuevos += amt;
         if (clientId) NUEVO_CLIENTES.add(clientId);
+      }
+    }
+    
+    if (totalRenovados === 0) {
+      const renewedFallback = await this.loanRequestRepo.find({
+        where: {
+          agent: { id: userId },
+          status: Raw((alias) => `LOWER(${alias}) = 'renewed'`),
+          createdAt: Raw((alias) => `${alias} BETWEEN :start AND :end`, {
+            start: bufferStartStr,
+            end: bufferEndStr,
+          }),
+        },
+        relations: { client: true },
+      });
+      for (const lr of renewedFallback) {
+        if (!isTargetDay((lr as any).createdAt)) continue;
+        const amt = Number((lr as any).amount ?? 0);
+        totalRenovados += amt;
+        const cid = (lr as any)?.client?.id;
+        if (cid) RENOV_CLIENTES.add(cid);
       }
     }
     
@@ -944,23 +990,25 @@ export class CashService {
     };
     
     // If you also want to exclude admin-made payments from "valorCobradoDia", keep filter below.
-    const paymentsToday = await this.loanTransactionRepo.find({
+    const paymentsCandidates = await this.loanTransactionRepo.find({
       where: {
         date: Raw((alias) => `${alias} BETWEEN :start AND :end`, {
-          start: startStr,
-          end: endStr,
+          start: bufferStartStr,
+          end: bufferEndStr,
         }),
         loanRequest: { agent: { id: userId } },
         isAdminTransaction: false as any, // exclude admin-made payments from agent KPI
       },
       relations: { loanRequest: true },
     });
+    const paymentsToday = paymentsCandidates.filter((tx) => isTargetDay(tx.date as any));
     const valorCobradoDia = paymentsToday
     .filter((t) => {
       const s = String(t.Transactiontype).toLowerCase();
       return s === 'repayment' || s === 'payment';
     })
     .reduce((s, t) => s + +((t as any).amount ?? 0), 0);
+    if (valorCobradoDia > 0) cobros = valorCobradoDia;
     
     // --- ADD-ON CORREGIDO (sin 'data?.kpis') ---
     // --- CORRECCIÓN TRANSFERENCIAS (ignorar 'type') ---

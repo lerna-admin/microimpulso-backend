@@ -775,12 +775,19 @@ export class CashService {
     const toStatus = (lr?: LoanRequest) => String(lr?.status ?? '').trim().toLowerCase();
     
     // Key: only count agent-made disbursements (exclude admin-made).
-    const disbursalsToday = today.filter(
-      (m) =>
-        m.type === T.SALIDA &&
-        m.category === C.PRESTAMO &&
-        ownerIdForNonTransfer(m) === userId,
-    );
+    const disbursalCandidates = await this.loanTransactionRepo.find({
+      where: {
+        Transactiontype: Raw((alias) => `LOWER(${alias}) = 'disbursement'`),
+        date: Raw((alias) => `${alias} BETWEEN :start AND :end`, {
+          start: bufferStartStr,
+          end: bufferEndStr,
+        }),
+        loanRequest: { agent: { id: userId } },
+        isAdminTransaction: false as any,
+      },
+      relations: { loanRequest: { client: true } },
+    });
+    const disbursalsToday = disbursalCandidates.filter((tx) => isTargetDay(tx.date as any));
   
     let totalNuevos = 0;
     let totalRenovados = 0;

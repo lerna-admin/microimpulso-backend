@@ -2,6 +2,7 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { CashMovement, CashMovementType } from 'src/entities/cash-movement.entity';
 import { CashMovementCategory } from 'src/entities/cash-movement-category.enum';
+import { CashFlow, CashFlowType } from 'src/entities/cash-flow.entity';
 import {
   Between,
   In,
@@ -68,6 +69,8 @@ export class CashService {
   constructor(
     @InjectRepository(CashMovement)
     private readonly cashRepo: Repository<CashMovement>,
+    @InjectRepository(CashFlow)
+    private readonly cashFlowRepo: Repository<CashFlow>,
     @InjectRepository(AgentClosing)
     private readonly closingRepo: Repository<AgentClosing>,
     @InjectRepository(LoanTransaction)
@@ -693,29 +696,29 @@ export class CashService {
       return ownerIdForNonTransfer(m) === userId;
     };
     
-    const [historyAll, todayAll] = await Promise.all([
-      this.cashRepo.find({
-        where: { createdAt: Raw((alias) => `${alias} < :start`, { start: startStr }) },
-        relations: { transaction: { loanRequest: { agent: true, client: true } } },
-      }),
-      this.cashRepo.find({
-        where: {
-          createdAt: Raw((alias) => `${alias} BETWEEN :start AND :end`, {
-            start: startStr,
-            end: endStr,
-          }),
-        },
-        relations: { transaction: { loanRequest: { agent: true, client: true } } },
-      }),
-    ]);
+    const todayAll = await this.cashRepo.find({
+      where: {
+        createdAt: Raw((alias) => `${alias} BETWEEN :start AND :end`, {
+          start: startStr,
+          end: endStr,
+        }),
+      },
+      relations: { transaction: { loanRequest: { agent: true, client: true } } },
+    });
     
-    const history = historyAll.filter(affectsUserForBalance);
     const today = todayAll.filter(affectsUserForBalance);
-    
-    const baseAnterior = history.reduce(
-      (tot, m) => (m.type === T.ENTRADA ? tot + +m.amount : tot - +m.amount),
-      0,
-    );
+  
+    const rawBase = await this.cashFlowRepo
+      .createQueryBuilder('cf')
+      .select(
+        `COALESCE(SUM(CASE WHEN cf.type = :income THEN cf.amount ELSE -cf.amount END), 0)`,
+        'saldo',
+      )
+      .where('cf.userId = :userId', { userId })
+      .andWhere('cf.createdAt < :start', { start })
+      .setParameters({ income: CashFlowType.INCOME })
+      .getRawOne<{ saldo?: string }>();
+    const baseAnterior = Number(rawBase?.saldo ?? 0);
     
     const sumWhere = (pred: (m: CashMovement) => boolean) =>
       today.filter(pred).reduce((s, m) => s + +m.amount, 0);

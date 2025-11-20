@@ -654,7 +654,8 @@ export class CashService {
     const C = CashMovementCategory;
     const T = CashMovementType;
     
-    console.log('[CashService.getDailyTraceByUser] start', { userId, rawDate });
+    const userIdNum = typeof userId === 'string' ? parseInt(userId, 10) : userId;
+    console.log('[CashService.getDailyTraceByUser] start', { userId: userIdNum, rawDate });
     
     const fmtYMDHMS = (d: Date) => {
       const y = d.getFullYear();
@@ -686,7 +687,7 @@ export class CashService {
     };
     
     const user = await this.userRepository.findOne({
-      where: { id: userId },
+      where: { id: userIdNum },
       relations: { branch: true },
     });
     const branchId = user?.branch?.id ?? null;
@@ -713,9 +714,9 @@ export class CashService {
     
     const affectsUserForBalance = (m: CashMovement): boolean => {
       // Transfers: belongs to 'origenId'
-      if (m.category === C.TRANSFERENCIA) return m.origenId === userId;
+      if (m.category === C.TRANSFERENCIA) return m.origenId === userIdNum;
       // Non-transfers: attribute only if the "owner" matches the agent
-      return ownerIdForNonTransfer(m) === userId;
+      return ownerIdForNonTransfer(m) === userIdNum;
     };
     
     const todayAll = await this.cashRepo.find({
@@ -788,7 +789,7 @@ export class CashService {
       relations: { transaction: { loanRequest: { agent: true, client: true } } },
     });
     const disbursalsToday = disbursalCandidates.filter(
-      (m) => ownerIdForNonTransfer(m) === userId && m.transaction?.loanRequest,
+      (m) => ownerIdForNonTransfer(m) === userIdNum && m.transaction?.loanRequest,
     );
   
     let totalNuevos = 0;
@@ -814,7 +815,7 @@ export class CashService {
     }
     
     if (totalRenovados === 0) {
-      console.log('[CashService.getDailyTraceByUser] renewals fallback triggered', { userId, rawDate });
+      console.log('[CashService.getDailyTraceByUser] renewals fallback triggered', { userId: userIdNum, rawDate });
       const renewedFallback = await this.cashRepo.find({
         where: {
           type: T.SALIDA,
@@ -830,7 +831,7 @@ export class CashService {
         const lr = (mov as any)?.transaction?.loanRequest as LoanRequest | undefined;
         if (!lr) continue;
         if (toStatus(lr) !== 'renewed') continue;
-        if (ownerIdForNonTransfer(mov) !== userId) continue;
+        if (ownerIdForNonTransfer(mov) !== userIdNum) continue;
         totalRenovados += Number(mov.amount ?? 0);
         const cid = (lr as any)?.client?.id;
         if (cid) RENOV_CLIENTES.add(cid);
@@ -842,7 +843,7 @@ export class CashService {
     const totalFinal = baseAnterior + totalIngresosDia - totalEgresosDia;
     
     console.log('[CashService.getDailyTraceByUser] totals', {
-      userId,
+      userId: userIdNum,
       rawDate,
       baseAnterior,
       totalIngresosDia,

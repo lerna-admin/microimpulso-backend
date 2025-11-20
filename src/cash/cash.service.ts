@@ -731,6 +731,7 @@ export class CashService {
       (m) =>
         m.type === T.ENTRADA &&
       m.category !== C.TRANSFERENCIA &&
+      m.category !== C.COBRO_CLIENTE &&
       ownerIdForNonTransfer(m) === userId,
     );
     const gastos = sumWhere(

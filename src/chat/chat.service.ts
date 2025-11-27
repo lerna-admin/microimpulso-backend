@@ -790,6 +790,14 @@ export class ChatService implements OnModuleInit {
       libre.convert(docxBuffer, '.pdf', undefined, (err: any, out: Buffer) => err ? reject(err) : resolve(out));
     });
   }
+
+  private buildDocusealFieldTag(fieldName: string, attributes: Record<string, string | undefined>): string {
+    const segments = [fieldName];
+    for (const [key, value] of Object.entries(attributes)) {
+      if (value) segments.push(`${key}=${value}`);
+    }
+    return `{{${segments.join(';')}}}`;
+  }
   
   /* ================= Helpers NUEVOS/ACTUALIZADOS ================= */
   
@@ -993,6 +1001,18 @@ private fmtPct(dec: number, digits = 2): string {
       TASA_DIARIA_PCT: dailyRate ? `${(dailyRate*100).toFixed(6)}%` : '',
       TASA_EA_PCT: this.config.get<string>('DEFAULT_INTEREST_EA_PCT') || '',
       TASA_MENSUAL_PCT: tasaMensualPctStr,   
+      DOCUSEAL_DEUDOR_SIGNATURE_TAG: this.buildDocusealFieldTag('FIRMA_DEUDOR', {
+        type: 'signature',
+        role: 'EL_DEUDOR',
+        required: 'true',
+        format: 'drawn_or_typed',
+      }),
+      DOCUSEAL_AVALISTA_SIGNATURE_TAG: this.buildDocusealFieldTag('FIRMA_AVALISTA', {
+        type: 'signature',
+        role: 'EL_AVALISTA',
+        required: 'true',
+        format: 'drawn_or_typed',
+      }),
     };
     
     
@@ -1175,9 +1195,9 @@ async generateContractForDownload(loanRequestId: number): Promise<{
   const tasaMensualPctStr = this.fmtPct(monthlyRate);
 
   // 3) Tags para la plantilla DOCX
-  const dataForDocx: Record<string, any> = {
-    DEUDOR_NOMBRE: client.name || '',
-    DEUDOR_CC: client.document || '',
+    const dataForDocx: Record<string, any> = {
+      DEUDOR_NOMBRE: client.name || '',
+      DEUDOR_CC: client.document || '',
     DEUDOR_DIRECCION: (client.address || client.address2 || '').trim(),
     DEUDOR_CIUDAD: client.city || '',
     DEUDOR_CIUDAD_UPPER: (client.city || '').toUpperCase(),
@@ -1209,8 +1229,20 @@ async generateContractForDownload(loanRequestId: number): Promise<{
 
     TASA_DIARIA_PCT: dailyRate ? `${(dailyRate*100).toFixed(6)}%` : '',
     TASA_EA_PCT: this.config.get<string>('DEFAULT_INTEREST_EA_PCT') || '',
-    TASA_MENSUAL_PCT: tasaMensualPctStr,
-  };
+      TASA_MENSUAL_PCT: tasaMensualPctStr,
+      DOCUSEAL_DEUDOR_SIGNATURE_TAG: this.buildDocusealFieldTag('FIRMA_DEUDOR', {
+        type: 'signature',
+        role: 'EL_DEUDOR',
+        required: 'true',
+        format: 'drawn_or_typed',
+      }),
+      DOCUSEAL_AVALISTA_SIGNATURE_TAG: this.buildDocusealFieldTag('FIRMA_AVALISTA', {
+        type: 'signature',
+        role: 'EL_AVALISTA',
+        required: 'true',
+        format: 'drawn_or_typed',
+      }),
+    };
 
   try {
     // 4) Render DOCX → PDF en memoria

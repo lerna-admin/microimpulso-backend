@@ -16,6 +16,12 @@ import { CashMovementCategory } from 'src/entities/cash-movement-category.enum';
 
 @Injectable()
 export class LoanRequestService {
+  private parseDateString(value?: string): Date | null {
+    if (!value) return null;
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
   
   constructor(
     @InjectRepository(LoanRequest)
@@ -242,7 +248,11 @@ export class LoanRequestService {
       : undefined;
     let renewedEndDate: Date | undefined;
     if (newDate) {
-      renewedEndDate = new Date(newDate);
+      const parsed = this.parseDateString(newDate);
+      if (!parsed) {
+        throw new BadRequestException('La fecha de renovación no es válida.');
+      }
+      renewedEndDate = parsed;
     } else if (resolvedOriginalEndDate && originalLoan.createdAt) {
       const createdAtDate = new Date(originalLoan.createdAt);
       const durationMs = resolvedOriginalEndDate.getTime() - createdAtDate.getTime();

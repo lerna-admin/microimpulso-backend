@@ -151,7 +151,23 @@ export class LoanRequestController {
     @Body('amount') amount: number,
     @Body('newDate') newDate: string
   ) {
-    return this.loanRequestService.renewLoanRequest(id, amount, newDate);
+    if (!newDate) {
+      throw new BadRequestException('La fecha de renovación es obligatoria.');
+    }
+    const parsedDate = this.parseIsoDate(newDate);
+    if (!parsedDate || Number.isNaN(parsedDate.getTime())) {
+      throw new BadRequestException('Fecha de renovación inválida.');
+    }
+    if (parsedDate < new Date()) {
+      throw new BadRequestException('La fecha de renovación debe ser en el futuro.');
+    }
+    return this.loanRequestService.renewLoanRequest(id, amount, parsedDate.toISOString());
+  }
+
+  private parseIsoDate(value: string): Date | null {
+    if (!value) return null;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
   }
 
   @Get('agent/:agentId/closing-summary')

@@ -74,10 +74,13 @@ export class LoanRequest {
   @Column({ type: 'text' })
   status: LoanRequestStatus;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'datetime', default: () => "DATETIME('now','localtime')" })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({
+    type: 'datetime',
+    default: () => "DATETIME('now','localtime')",
+  })
   updatedAt: Date;
 
   /* ─────────── Optional info ───────── */

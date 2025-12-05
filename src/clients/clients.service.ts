@@ -295,11 +295,6 @@ async findAllORI(
   const currentYear  = now.getFullYear();
   const prevMonth    = currentMonth === 0 ? 11 : currentMonth - 1;
   const prevYear     = currentMonth === 0 ? currentYear - 1 : currentYear;
-  // Mes actual y mes anterior (para NP)
-  const currentMonth = now.getMonth();       // 0-11
-  const currentYear  = now.getFullYear();
-  const prevMonth    = currentMonth === 0 ? 11 : currentMonth - 1;
-  const prevYear     = currentMonth === 0 ? currentYear - 1 : currentYear;
 
   // ───────────────────────────────────────────────────────────────
   // 3) Agregadores
@@ -856,7 +851,12 @@ async findAll(
         const y = end.getFullYear();
         const m = end.getMonth();
         // NP: préstamos activos con endDateAt en el mes anterior
-        return y === prevYear && m === prevMonth;
+        const nowLocal = new Date();
+        const cm = nowLocal.getMonth();
+        const cy = nowLocal.getFullYear();
+        const pm = cm === 0 ? 11 : cm - 1;
+        const py = cm === 0 ? cy - 1 : cy;
+        return y === py && m === pm;
       }
 
       if (!Number.isFinite(dl) || dl <= 0) return false;

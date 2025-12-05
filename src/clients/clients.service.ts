@@ -823,7 +823,6 @@ async findAll(
 
   for (const [, maxLate] of clientMaxDaysLate.entries()) {
     if (maxLate > 0) {
-      delinquentClients++;
       if (maxLate >= 30) noPayment30++;
       else if (maxLate > 20) critical20++;
       else if (maxLate > 15) mora15++;

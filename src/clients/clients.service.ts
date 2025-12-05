@@ -290,6 +290,11 @@ async findAllORI(
     const d = end ? new Date(end) : null;
     return d && now > d ? Math.floor((now.getTime() - d.getTime()) / 86_400_000) : 0;
   };
+  // Mes actual y mes anterior (para NP)
+  const currentMonth = now.getMonth();       // 0-11
+  const currentYear  = now.getFullYear();
+  const prevMonth    = currentMonth === 0 ? 11 : currentMonth - 1;
+  const prevYear     = currentMonth === 0 ? currentYear - 1 : currentYear;
 
   // ───────────────────────────────────────────────────────────────
   // 3) Agregadores
@@ -303,6 +308,8 @@ async findAllORI(
   let delinquentClients = 0;
   // Máxima mora por cliente (solo loans activos)
   const clientMaxDaysLate = new Map<number, number>();
+  // Clientes cuyo endDateAt está en el mes anterior (NP)
+  const npClientIds = new Set<number>();
 
   const items: any[] = [];
   const seenClientIds = new Set<number>();
@@ -354,6 +361,7 @@ async findAllORI(
       .reduce((s, t) => s + Number(t?.amount ?? 0), 0);
     const remainingAmount = Math.max(0, amountBorrowed - totalRepayment);
     const daysLate        = daysLateOf(loan.endDateAt);
+    const endDate         = loan.endDateAt ? new Date(loan.endDateAt as any) : null;
 
     if (derivedStatus === 'active') {
       totalActiveAmountBorrowed += amountBorrowed;
@@ -364,6 +372,15 @@ async findAllORI(
         const prev = clientMaxDaysLate.get(client.id) ?? 0;
         if (daysLate > prev) {
           clientMaxDaysLate.set(client.id, daysLate);
+        }
+      }
+
+      // NP: préstamos activos con endDateAt en el mes anterior
+      if (endDate && client.id) {
+        const y = endDate.getFullYear();
+        const m = endDate.getMonth(); // 0-11
+        if (y === prevYear && m === prevMonth) {
+          npClientIds.add(client.id);
         }
       }
     }
@@ -467,12 +484,13 @@ async findAllORI(
 
   for (const [, maxLate] of clientMaxDaysLate.entries()) {
     if (maxLate > 0) {
-      delinquentClients++;
       if (maxLate >= 30) noPayment30++;
       else if (maxLate > 20) critical20++;
       else if (maxLate > 15) mora15++;
     }
   }
+  // NP ahora es número de clientes con endDateAt en el mes anterior
+  delinquentClients = npClientIds.size;
 
   // Normalizar daysLate por fila al máximo del cliente,
   // para que los filtros de NP/M15/CR del frontend coincidan
@@ -925,6 +943,8 @@ async findAll(
     let delinquentClients = 0;
     // Máxima mora por cliente (solo loans activos)
     const clientMaxDaysLate = new Map<number, number>();
+    // Clientes NP (endDateAt en el mes anterior)
+    const npClientIds = new Set<number>();
     
     for (const [, clientLoans] of clientMap) {
       const client = clientLoans[0].client;
@@ -979,14 +999,30 @@ async findAll(
       const now = new Date();
       const endDate = loan.endDateAt ? new Date(loan.endDateAt) : null;
       const daysLate =
-      endDate && now > endDate
-      ? Math.floor((now.getTime() - endDate.getTime()) / 86_400_000)
-      : 0;
+        endDate && now > endDate
+          ? Math.floor((now.getTime() - endDate.getTime()) / 86_400_000)
+          : 0;
       
-      if (status === 'active' && daysLate > 0 && client?.id) {
-        const prev = clientMaxDaysLate.get(client.id) ?? 0;
-        if (daysLate > prev) {
-          clientMaxDaysLate.set(client.id, daysLate);
+      if (status === 'active' && client?.id) {
+        if (daysLate > 0) {
+          const prev = clientMaxDaysLate.get(client.id) ?? 0;
+          if (daysLate > prev) {
+            clientMaxDaysLate.set(client.id, daysLate);
+          }
+        }
+
+        // NP: préstamos activos con endDateAt en el mes anterior
+        if (endDate) {
+          const currentMonth = now.getMonth();
+          const currentYear  = now.getFullYear();
+          const prevMonth    = currentMonth === 0 ? 11 : currentMonth - 1;
+          const prevYear     = currentMonth === 0 ? currentYear - 1 : currentYear;
+
+          const y = endDate.getFullYear();
+          const m = endDate.getMonth();
+          if (y === prevYear && m === prevMonth) {
+            npClientIds.add(client.id);
+          }
         }
       }
       
@@ -1033,12 +1069,14 @@ async findAll(
 
   for (const [, maxLate] of clientMaxDaysLate.entries()) {
     if (maxLate > 0) {
-      delinquentClients++;
       if (maxLate >= 30) noPayment30++;
       else if (maxLate > 20) critical20++;
       else if (maxLate > 15) mora15++;
     }
   }
+
+  // NP: clientes con endDateAt en el mes anterior
+  delinquentClients = npClientIds.size;
 
   // Normalizar daysLate por fila al máximo del cliente
   for (const it of allResults) {

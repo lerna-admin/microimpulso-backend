@@ -101,6 +101,33 @@ export class ChatService implements OnModuleInit {
       return Buffer.byteLength(JSON.stringify(data || {}), 'utf8');
     } catch { return 0; }
   }
+  /** Normaliza contenido potencialmente HTML a texto plano para WhatsApp y DB. */
+  private normalizeContent(raw: string): string {
+    if (!raw) return '';
+    let text = String(raw);
+
+    // Reemplazar saltos de línea HTML por '\n'
+    text = text.replace(/<br\s*\/?>/gi, '\n');
+    text = text.replace(/<\/div>/gi, '\n');
+    text = text.replace(/<div[^>]*>/gi, '');
+
+    // Entidades comunes
+    text = text.replace(/&nbsp;/gi, ' ');
+    text = text.replace(/&amp;/gi, '&');
+    text = text.replace(/&lt;/gi, '<');
+    text = text.replace(/&gt;/gi, '>');
+
+    // Quitar cualquier otra etiqueta HTML residual
+    text = text.replace(/<\/?[^>]+>/g, '');
+
+    // Normalizar espacios y trims
+    // - Colapsar espacios múltiples
+    text = text.replace(/[ \t]+/g, ' ');
+    // - Normalizar saltos de línea múltiples
+    text = text.replace(/\n{3,}/g, '\n\n');
+
+    return text.trim();
+  }
   private debug(label: string, obj?: Dict) {
     if (this.DEBUG_WA) console.debug(`[DEBUG_WA] ${label}:`, obj ?? {});
     this.logger.debug(JSON.stringify({ label, ...(obj || {}) }, null, 2));
@@ -473,7 +500,14 @@ export class ChatService implements OnModuleInit {
     const accessToken = this.getAccessToken();
     const phoneNumberId = this.getPhoneNumberId();
     
-    const payload = { messaging_product: 'whatsapp', to, type: 'text', text: { body: message } };
+    const normalized = this.normalizeContent(message);
+
+    const payload = {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'text',
+      text: { body: normalized },
+    };
     
     try {
       const t0 = Date.now();
@@ -502,7 +536,7 @@ export class ChatService implements OnModuleInit {
       }
       
       const msgData: DeepPartial<ChatMessage> = {
-        content: message,
+        content: normalized,
         direction: 'OUTGOING',
         client,
         ...(agent && { agent }),

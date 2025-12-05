@@ -528,6 +528,11 @@ async findAllORI(
   const startIndex = (page - 1) * limit;
   const data = listForPaging.slice(startIndex, startIndex + limit);
 
+  // Si se está aplicando filtro de mora=NP, alinear el contador
+  if ((filters as any).mora && String((filters as any).mora).toUpperCase() === 'NP') {
+    delinquentClients = totalItems;
+  }
+
   // ───────────────────────────────────────────────────────────────
   // 7) Totales (solo loans activos)
   // ───────────────────────────────────────────────────────────────
@@ -1134,6 +1139,11 @@ async findAll(
   const totalItems = allResults.length;
   const startIndex = (page - 1) * limit;
   const paginated = allResults.slice(startIndex, startIndex + limit);
+
+  // Si se aplica filtro mora=NP, usar el total filtrado como NP
+  if (filters?.mora && String(filters.mora).toUpperCase() === 'NP') {
+    delinquentClients = totalItems;
+  }
   
   const totalSaldoClientes = totalActiveAmountBorrowed - totalActiveRepayment;
   

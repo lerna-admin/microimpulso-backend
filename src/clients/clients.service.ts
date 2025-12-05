@@ -899,6 +899,11 @@ async findAll(
   const startIndex = (page - 1) * limit;
   const data = listForPaging.slice(startIndex, startIndex + limit);
 
+  // Si se está aplicando filtro de mora=NP, alinear el contador NP con lo listado
+  if (filters.mora && String(filters.mora).toUpperCase() === 'NP') {
+    delinquentClients = totalItems;
+  }
+
   // ───────────────────────────────────────────────────────────────
   // 7) Totales (solo loans activos)
   // ───────────────────────────────────────────────────────────────

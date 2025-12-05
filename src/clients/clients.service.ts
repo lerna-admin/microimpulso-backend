@@ -290,6 +290,11 @@ async findAllORI(
     const d = end ? new Date(end) : null;
     return d && now > d ? Math.floor((now.getTime() - d.getTime()) / 86_400_000) : 0;
   };
+  // Mes actual y mes anterior (para NP por mes)
+  const currentMonth = now.getMonth();       // 0-11
+  const currentYear  = now.getFullYear();
+  const prevMonth    = currentMonth === 0 ? 11 : currentMonth - 1;
+  const prevYear     = currentMonth === 0 ? currentYear - 1 : currentYear;
   // Mes actual y mes anterior (para NP)
   const currentMonth = now.getMonth();       // 0-11
   const currentYear  = now.getFullYear();
@@ -841,8 +846,20 @@ async findAll(
     items = items.filter((it) => {
       const dlRaw = (it as any)?.daysLate;
       const dl = Number(dlRaw ?? 0);
+
+      const end = (it as any)?.loanRequest?.endDateAt
+        ? new Date((it as any).loanRequest.endDateAt)
+        : null;
+
+      if (code === 'NP') {
+        if (!end) return false;
+        const y = end.getFullYear();
+        const m = end.getMonth();
+        // NP: préstamos activos con endDateAt en el mes anterior
+        return y === prevYear && m === prevMonth;
+      }
+
       if (!Number.isFinite(dl) || dl <= 0) return false;
-      if (code === 'NP') return dl > 0;
       if (code === 'M15') return dl > 15;
       if (code === 'CR') return dl >= 30;
       return true;
@@ -1091,8 +1108,23 @@ async findAll(
     allResults = allResults.filter((it) => {
       const dlRaw = (it as any)?.daysLate;
       const dl = Number(dlRaw ?? 0);
+      const end = (it as any)?.loanRequest?.endDateAt
+        ? new Date((it as any).loanRequest.endDateAt)
+        : null;
+
+      if (code === 'NP') {
+        if (!end) return false;
+        const now = new Date();
+        const currentMonth = now.getMonth();
+        const currentYear  = now.getFullYear();
+        const prevMonth    = currentMonth === 0 ? 11 : currentMonth - 1;
+        const prevYear     = currentMonth === 0 ? currentYear - 1 : currentYear;
+        const y = end.getFullYear();
+        const m = end.getMonth();
+        return y === prevYear && m === prevMonth;
+      }
+
       if (!Number.isFinite(dl) || dl <= 0) return false;
-      if (code === 'NP') return dl > 0;
       if (code === 'M15') return dl > 15;
       if (code === 'CR') return dl >= 30;
       return true;

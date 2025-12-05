@@ -67,8 +67,18 @@ export class DocumentController {
     // console.log(doc);
     if (!doc) throw new NotFoundException('Document not found');
 
-    const filePath = join(process.cwd(), 'public', doc.url);
-    if (!existsSync(filePath)) {
+    // Normalizar url relativa (eliminar '/' inicial si existe)
+    const rawUrl = doc.url || '';
+    const relPath = rawUrl.startsWith('/') ? rawUrl.slice(1) : rawUrl;
+
+    // Buscar primero en public/, luego en dist/public/
+    const candidates = [
+      join(process.cwd(), 'public', relPath),
+      join(process.cwd(), 'dist', 'public', relPath),
+    ];
+
+    const filePath = candidates.find((p) => existsSync(p));
+    if (!filePath) {
       throw new NotFoundException('File not found on disk');
     }
 

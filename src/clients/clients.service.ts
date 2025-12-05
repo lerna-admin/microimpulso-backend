@@ -301,7 +301,8 @@ async findAllORI(
   let critical20 = 0;
   let noPayment30 = 0;
   let delinquentClients = 0;
-  const delinquentClientIds = new Set<number>();
+  // Máxima mora por cliente (solo loans activos)
+  const clientMaxDaysLate = new Map<number, number>();
 
   const items: any[] = [];
   const seenClientIds = new Set<number>();
@@ -359,14 +360,11 @@ async findAllORI(
       totalActiveRepayment     += totalRepayment;
       if (client.id) activeClientIds.add(client.id);
 
-      if (daysLate > 0) {
-        if (client.id && !delinquentClientIds.has(client.id)) {
-          delinquentClientIds.add(client.id);
-          delinquentClients++;
+      if (daysLate > 0 && client.id) {
+        const prev = clientMaxDaysLate.get(client.id) ?? 0;
+        if (daysLate > prev) {
+          clientMaxDaysLate.set(client.id, daysLate);
         }
-        if (daysLate >= 30)     noPayment30++;
-        else if (daysLate > 20) critical20++;
-        else if (daysLate > 15) mora15++;
       }
     }
 
@@ -460,7 +458,32 @@ async findAllORI(
   }
 
   // ───────────────────────────────────────────────────────────────
-  // 5) Orden + distinct + paginación (igual que tenías)
+  // 5) Recalcular métricas de mora por CLIENTE (NP, M>15, CR)
+  // ───────────────────────────────────────────────────────────────
+  mora15 = 0;
+  critical20 = 0;
+  noPayment30 = 0;
+  delinquentClients = 0;
+
+  for (const [, maxLate] of clientMaxDaysLate.entries()) {
+    if (maxLate > 0) {
+      delinquentClients++;
+      if (maxLate >= 30) noPayment30++;
+      else if (maxLate > 20) critical20++;
+      else if (maxLate > 15) mora15++;
+    }
+  }
+
+  // Normalizar daysLate por fila al máximo del cliente,
+  // para que los filtros de NP/M15/CR del frontend coincidan
+  for (const it of items) {
+    const cid = Number(it?.client?.id);
+    const maxLate = cid ? clientMaxDaysLate.get(cid) ?? 0 : 0;
+    it.daysLate = maxLate;
+  }
+
+  // ───────────────────────────────────────────────────────────────
+  // 6) Orden + distinct + paginación (igual que tenías)
   // ───────────────────────────────────────────────────────────────
   items.sort((a, b) => {
     const aDate = a.loanRequest?.createdAt ?? a.client?.createdAt ?? new Date(0);
@@ -488,7 +511,7 @@ async findAllORI(
   const data = listForPaging.slice(startIndex, startIndex + limit);
 
   // ───────────────────────────────────────────────────────────────
-  // 6) Totales (solo loans activos)
+  // 7) Totales (solo loans activos)
   // ───────────────────────────────────────────────────────────────
   const remainingTotal = items
     .filter((it) => it.loanRequest && isActiveLoan(it.loanRequest.status))
@@ -615,7 +638,8 @@ async findAll(
   let critical20 = 0;
   let noPayment30 = 0;
   let delinquentClients = 0;
-  const delinquentClientIds = new Set<number>();
+  // Máxima mora por cliente (solo loans activos)
+  const clientMaxDaysLate = new Map<number, number>();
 
   const items: any[] = [];
   const seenClientIds = new Set<number>();
@@ -675,14 +699,11 @@ async findAll(
       totalActiveRepayment     += totalRepayment;
       if (client.id) activeClientIds.add(client.id);
 
-      if (daysLate > 0) {
-        if (client.id && !delinquentClientIds.has(client.id)) {
-          delinquentClientIds.add(client.id);
-          delinquentClients++;
+      if (daysLate > 0 && client.id) {
+        const prev = clientMaxDaysLate.get(client.id) ?? 0;
+        if (daysLate > prev) {
+          clientMaxDaysLate.set(client.id, daysLate);
         }
-        if (daysLate >= 30)     noPayment30++;
-        else if (daysLate > 20) critical20++;
-        else if (daysLate > 15) mora15++;
       }
     }
 
@@ -769,7 +790,32 @@ async findAll(
   }
 
   // ───────────────────────────────────────────────────────────────
-  // 5) Orden + distinct + paginación (igual que tenías)
+  // 5) Recalcular métricas de mora por CLIENTE (NP, M>15, CR)
+  // ───────────────────────────────────────────────────────────────
+  mora15 = 0;
+  critical20 = 0;
+  noPayment30 = 0;
+  delinquentClients = 0;
+
+  for (const [, maxLate] of clientMaxDaysLate.entries()) {
+    if (maxLate > 0) {
+      delinquentClients++;
+      if (maxLate >= 30) noPayment30++;
+      else if (maxLate > 20) critical20++;
+      else if (maxLate > 15) mora15++;
+    }
+  }
+
+  // Normalizar daysLate por fila al máximo del cliente,
+  // para que los filtros de NP/M15/CR del frontend coincidan
+  for (const it of items) {
+    const cid = Number(it?.client?.id);
+    const maxLate = cid ? clientMaxDaysLate.get(cid) ?? 0 : 0;
+    it.daysLate = maxLate;
+  }
+
+  // ───────────────────────────────────────────────────────────────
+  // 6) Orden + distinct + paginación (igual que tenías)
   // ───────────────────────────────────────────────────────────────
   items.sort((a, b) => {
     const aDate = a.loanRequest?.createdAt ?? a.client?.createdAt ?? new Date(0);
@@ -797,7 +843,7 @@ async findAll(
   const data = listForPaging.slice(startIndex, startIndex + limit);
 
   // ───────────────────────────────────────────────────────────────
-  // 6) Totales (solo loans activos)
+  // 7) Totales (solo loans activos)
   // ───────────────────────────────────────────────────────────────
   const remainingTotal = items
     .filter((it) => it.loanRequest && isActiveLoan(it.loanRequest.status))
@@ -859,7 +905,8 @@ async findAll(
     let critical20 = 0;
     let noPayment30 = 0;
     let delinquentClients = 0;
-    const delinquentClientIds = new Set<number>();
+    // Máxima mora por cliente (solo loans activos)
+    const clientMaxDaysLate = new Map<number, number>();
     
     for (const [, clientLoans] of clientMap) {
       const client = clientLoans[0].client;
@@ -918,14 +965,11 @@ async findAll(
       ? Math.floor((now.getTime() - endDate.getTime()) / 86_400_000)
       : 0;
       
-      if (status === 'active' && daysLate > 0) {
-        if (client?.id && !delinquentClientIds.has(client.id)) {
-          delinquentClientIds.add(client.id);
-          delinquentClients++;
+      if (status === 'active' && daysLate > 0 && client?.id) {
+        const prev = clientMaxDaysLate.get(client.id) ?? 0;
+        if (daysLate > prev) {
+          clientMaxDaysLate.set(client.id, daysLate);
         }
-        if (daysLate >= 30) noPayment30++;
-        else if (daysLate > 20) critical20++;
-        else if (daysLate > 15) mora15++;
       }
       
       allResults.push({
@@ -961,6 +1005,28 @@ async findAll(
       totalActiveRepayment += clientTotalRepayment;
       activeClientsCount++;
     }
+  }
+
+  // Recalcular métricas de mora por CLIENTE (NP, M>15, CR)
+  mora15 = 0;
+  critical20 = 0;
+  noPayment30 = 0;
+  delinquentClients = 0;
+
+  for (const [, maxLate] of clientMaxDaysLate.entries()) {
+    if (maxLate > 0) {
+      delinquentClients++;
+      if (maxLate >= 30) noPayment30++;
+      else if (maxLate > 20) critical20++;
+      else if (maxLate > 15) mora15++;
+    }
+  }
+
+  // Normalizar daysLate por fila al máximo del cliente
+  for (const it of allResults) {
+    const cid = Number(it?.client?.id);
+    const maxLate = cid ? clientMaxDaysLate.get(cid) ?? 0 : 0;
+    it.daysLate = maxLate;
   }
   
   const totalItems = allResults.length;

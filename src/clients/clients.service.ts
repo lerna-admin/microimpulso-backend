@@ -539,6 +539,7 @@ async findAll(
   page: number = 1,
   filters: {
     status?: 'active' | 'inactive' | 'rejected';
+    mora?: string;
     document?: string;
     name?: string;
     mode?: string;
@@ -641,7 +642,7 @@ async findAll(
   // Máxima mora por cliente (solo loans activos)
   const clientMaxDaysLate = new Map<number, number>();
 
-  const items: any[] = [];
+  let items: any[] = [];
   const seenClientIds = new Set<number>();
 
   // ───────────────────────────────────────────────────────────────
@@ -815,6 +816,22 @@ async findAll(
   }
 
   // ───────────────────────────────────────────────────────────────
+  // 5.b) Filtro de mora (NP, M15, CR) solo para la tabla
+  // ───────────────────────────────────────────────────────────────
+  if (filters.mora) {
+    const code = String(filters.mora).toUpperCase();
+    items = items.filter((it) => {
+      const dlRaw = (it as any)?.daysLate;
+      const dl = Number(dlRaw ?? 0);
+      if (!Number.isFinite(dl) || dl <= 0) return false;
+      if (code === 'NP') return dl > 0;
+      if (code === 'M15') return dl > 15;
+      if (code === 'CR') return dl >= 30;
+      return true;
+    });
+  }
+
+  // ───────────────────────────────────────────────────────────────
   // 6) Orden + distinct + paginación (igual que tenías)
   // ───────────────────────────────────────────────────────────────
   items.sort((a, b) => {
@@ -877,6 +894,7 @@ async findAll(
     page: number = 1,
     filters?: {
       status?: 'active' | 'inactive' | 'rejected';
+      mora?: string;
       document?: string;
       name?: string;
       mode?: string;
@@ -897,7 +915,7 @@ async findAll(
       clientMap.get(cid)!.push(loan);
     }
     
-    const allResults: any[] = [];
+    let allResults: any[] = [];
     let totalActiveAmountBorrowed = 0;
     let totalActiveRepayment = 0;
     let activeClientsCount = 0;
@@ -1027,6 +1045,20 @@ async findAll(
     const cid = Number(it?.client?.id);
     const maxLate = cid ? clientMaxDaysLate.get(cid) ?? 0 : 0;
     it.daysLate = maxLate;
+  }
+
+  // Filtro de mora para la tabla en findAllByAgent
+  if (filters?.mora) {
+    const code = String(filters.mora).toUpperCase();
+    allResults = allResults.filter((it) => {
+      const dlRaw = (it as any)?.daysLate;
+      const dl = Number(dlRaw ?? 0);
+      if (!Number.isFinite(dl) || dl <= 0) return false;
+      if (code === 'NP') return dl > 0;
+      if (code === 'M15') return dl > 15;
+      if (code === 'CR') return dl >= 30;
+      return true;
+    });
   }
   
   const totalItems = allResults.length;

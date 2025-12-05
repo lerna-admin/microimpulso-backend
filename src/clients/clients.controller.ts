@@ -15,6 +15,7 @@ async findAll(
   @Query('limit') limit = '10',
   @Query('page') page = '1',
   @Query('status') status?: string,
+  @Query('mora') mora?: string,
   @Query('document') document?: string,
   @Query('name') name?: string,
   @Query('type') type?: string,
@@ -43,6 +44,7 @@ async findAll(
   // ⬇️ construir filters correctamente
   const filters: {
     status?: 'active' | 'inactive' | 'rejected';
+    mora?: string;
     document?: string;
     name?: string;
     mode?: string;
@@ -74,6 +76,9 @@ async findAll(
     if (s === 'active' || s === 'inactive' || s === 'rejected') {
       filters.status = s as 'active' | 'inactive' | 'rejected';
     }
+  }
+  if (typeof mora === 'string' && mora.trim() !== '') {
+    filters.mora = mora.trim().toUpperCase();
   }
 
   const nAgent     = n(agent);
@@ -108,6 +113,7 @@ async findAll(
     @Query('limit') limit = 10,
     @Query('page') page = 1,
     @Query('status') status?: string,
+    @Query('mora') mora?: string,
     @Query('document') document?: string,
     @Query('name') name?: string,
        @Query('type') type?: string,
@@ -121,6 +127,7 @@ async findAll(
       Number(page),
       {
         status: status?.toLowerCase() as 'active' | 'inactive' | 'rejected',
+        mora: mora?.toUpperCase(),
         document,
         name,
         type,

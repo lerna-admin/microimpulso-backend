@@ -300,6 +300,8 @@ async findAllORI(
   let mora15 = 0;
   let critical20 = 0;
   let noPayment30 = 0;
+  let delinquentClients = 0;
+  const delinquentClientIds = new Set<number>();
 
   const items: any[] = [];
   const seenClientIds = new Set<number>();
@@ -358,6 +360,10 @@ async findAllORI(
       if (client.id) activeClientIds.add(client.id);
 
       if (daysLate > 0) {
+        if (client.id && !delinquentClientIds.has(client.id)) {
+          delinquentClientIds.add(client.id);
+          delinquentClients++;
+        }
         if (daysLate >= 30)     noPayment30++;
         else if (daysLate > 20) critical20++;
         else if (daysLate > 15) mora15++;
@@ -499,6 +505,7 @@ async findAllORI(
     mora15,
     critical20,
     noPayment30,
+    delinquentClients,
     remainingTotal,
     data,
   };
@@ -607,6 +614,8 @@ async findAll(
   let mora15 = 0;
   let critical20 = 0;
   let noPayment30 = 0;
+  let delinquentClients = 0;
+  const delinquentClientIds = new Set<number>();
 
   const items: any[] = [];
   const seenClientIds = new Set<number>();
@@ -667,6 +676,10 @@ async findAll(
       if (client.id) activeClientIds.add(client.id);
 
       if (daysLate > 0) {
+        if (client.id && !delinquentClientIds.has(client.id)) {
+          delinquentClientIds.add(client.id);
+          delinquentClients++;
+        }
         if (daysLate >= 30)     noPayment30++;
         else if (daysLate > 20) critical20++;
         else if (daysLate > 15) mora15++;
@@ -801,6 +814,7 @@ async findAll(
     mora15,
     critical20,
     noPayment30,
+    delinquentClients,
     remainingTotal,
     data,
   };
@@ -844,6 +858,8 @@ async findAll(
     let mora15 = 0;
     let critical20 = 0;
     let noPayment30 = 0;
+    let delinquentClients = 0;
+    const delinquentClientIds = new Set<number>();
     
     for (const [, clientLoans] of clientMap) {
       const client = clientLoans[0].client;
@@ -903,6 +919,10 @@ async findAll(
       : 0;
       
       if (status === 'active' && daysLate > 0) {
+        if (client?.id && !delinquentClientIds.has(client.id)) {
+          delinquentClientIds.add(client.id);
+          delinquentClients++;
+        }
         if (daysLate >= 30) noPayment30++;
         else if (daysLate > 20) critical20++;
         else if (daysLate > 15) mora15++;
@@ -961,6 +981,7 @@ async findAll(
     mora15,
     critical20,
     noPayment30,
+    delinquentClients,
     data: paginated,
   };
 }

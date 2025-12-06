@@ -555,8 +555,28 @@ export class ChatService implements OnModuleInit {
   
   /* ================= Conversaciones por agente ================= */
   async getAgentConversations(agentId: number) {
+    // Clientes que todavía tienen al menos un LoanRequest activo (no todos rejected/completed)
+    const rawActiveClients = await this.loanRequestRepository
+      .createQueryBuilder('loan')
+      .select('loan.clientId', 'clientId')
+      .where('loan.agentId = :agentId', { agentId })
+      .groupBy('loan.clientId')
+      .having(
+        `SUM(CASE WHEN loan.status NOT IN (:...inactiveStatuses) THEN 1 ELSE 0 END) > 0`,
+        { inactiveStatuses: [LoanRequestStatus.REJECTED, LoanRequestStatus.COMPLETED] },
+      )
+      .getRawMany();
+
+    const activeClientIds = rawActiveClients.map((row) => row.clientId);
+    if (!activeClientIds.length) {
+      return [];
+    }
+
     const messages = await this.chatMessageRepository.find({
-      where: { agent: { id: agentId } },
+      where: {
+        agent: { id: agentId },
+        client: { id: In(activeClientIds) },
+      },
       relations: ['client'],
       order: { createdAt: 'DESC' },
     });

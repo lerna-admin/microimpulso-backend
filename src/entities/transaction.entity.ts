@@ -25,17 +25,18 @@ export class LoanTransaction {
   loanRequest: LoanRequest;
 
 
-  @Column({ type: 'text', enum: TransactionType })
+  @Column({ type: 'simple-enum', enum: TransactionType })
   Transactiontype: TransactionType;
 
   @Column('decimal', { precision: 12, scale: 2 })
   amount: number;
 
- @CreateDateColumn({
-  type: 'datetime',
-  default: () => "DATETIME('now','localtime')",
-})
-date: Date;
+  @CreateDateColumn({
+    type: 'timestamp',
+    precision: 6,
+    default: () => 'CURRENT_TIMESTAMP(6)',
+  })
+  date: Date;
 
   @Column({ nullable: true })
   reference?: string;

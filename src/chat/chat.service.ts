@@ -72,11 +72,28 @@ export class ChatService implements OnModuleInit {
     }
     return id;
   }
+  private isWithinAttentionHours(date: Date = new Date()): boolean {
+    const bogotaNow = new Date(date.toLocaleString('en-US', { timeZone: 'America/Bogota' }));
+    const day = bogotaNow.getDay(); // 0: domingo, 6: sábado
+    if (day === 0) return false; // domingo cerrado
+    const hour = bogotaNow.getHours();
+    return hour >= 9 && hour < 17; // 9am a 5pm
+  }
+  private getOffHoursMessage() {
+    return 'Hola! Te saludamos de microimpulso Gracias por contactarnos.\n' +
+      'nuestro horario de atención es de lunes a sábado de 9am a 5pm \n' +
+      'En este horario estaremos respondiendo tu solicitud.';
+  }
   private get DEBUG_WA(): boolean {
     return (this.config.get<string>('DEBUG_WA') || '').toLowerCase() === 'true';
   }
   private ensureDir(path: string) {
     if (!existsSync(path)) mkdirSync(path, { recursive: true });
+  }
+  private getDocumentStorageDir(): string {
+    const base = process.env.DOCUMENTS_STORAGE_DIR || '/home/bitnami/microimpulso-documents';
+    this.ensureDir(base);
+    return base;
   }
   private toE164(phone: string): string {
     const t = (phone || '').trim();
@@ -285,9 +302,9 @@ export class ChatService implements OnModuleInit {
       }
       
       const filename = `${uuid()}.${extension}`;
-      const fullPath = join(__dirname, '..', '..', 'public', 'uploads', 'documents', filename);
+      const documentsDir = this.getDocumentStorageDir();
+      const fullPath = join(documentsDir, filename);
       const relativePath = `/uploads/documents/${filename}`;
-      this.ensureDir(dirname(fullPath));
       writeFileSync(fullPath, file.data);
       
       this.info('WA.media.stored', { cId, relativePath, mimeType, size: (file.data as Buffer).length });
@@ -353,6 +370,12 @@ export class ChatService implements OnModuleInit {
       client.loanRequests?.find(
         (lr) => lr.status !== LoanRequestStatus.COMPLETED && lr.status !== LoanRequestStatus.REJECTED,
       ) || null;
+
+      const hasHistoricalLoans = (client.loanRequests?.length ?? 0) > 0;
+      const allLoansCompleted = hasHistoricalLoans && client.loanRequests!.every(
+        (lr) => lr.status === LoanRequestStatus.COMPLETED,
+      );
+      const hasRejectedLoan = client.loanRequests?.some((lr) => lr.status === LoanRequestStatus.REJECTED) ?? false;
       
       // Buscar el agente menos cargado entre TODAS las sedes del país
       const { agent: countryAgent, branchId: chosenBranchId } =
@@ -364,38 +387,50 @@ export class ChatService implements OnModuleInit {
       }
       
       if (!loanRequest) {
-        const lrData: DeepPartial<LoanRequest> = {
-          client,
-          status: LoanRequestStatus.NEW,
-          amount: 0,
-          ...(assignedAgent ? { agent: assignedAgent } : {}),
-        };
-        loanRequest = this.loanRequestRepository.create(lrData);
-        await this.loanRequestRepository.save(loanRequest);
-        
-        if (assignedAgent) {
-          await this.notificationRepository.save(
-            this.notificationRepository.create({
-              recipientId: assignedAgent.id,
-              category: 'loan',
-              type: 'loan.assigned',
-              payload: { loanRequestId: loanRequest.id, clientId: client.id },
-              description: `Se te ha asignado una nueva solicitud. Cliente: ${client.name} (${client.phone})`,
-            }),
-          );
+        if (hasRejectedLoan || (hasHistoricalLoans && !allLoansCompleted)) {
+          this.warn('INCOMING.loan.notCreated.invalidStatuses', {
+            cId,
+            clientId: client.id,
+            hasRejectedLoan,
+            allLoansCompleted,
+            statuses: client.loanRequests?.map((lr) => lr.status) ?? [],
+          });
+          assignedAgent = null; // asegurar que no se intente notificar
+          loanRequest = null;
         } else {
-          this.warn('INCOMING.noAgentInAnyBranchForCountry', {
-            cId, callingCode, branches: inboundBranches.map(b => b.id)
+          const lrData: DeepPartial<LoanRequest> = {
+            client,
+            status: LoanRequestStatus.NEW,
+            amount: 0,
+            ...(assignedAgent ? { agent: assignedAgent } : {}),
+          };
+          loanRequest = this.loanRequestRepository.create(lrData);
+          await this.loanRequestRepository.save(loanRequest);
+        
+          if (assignedAgent) {
+            await this.notificationRepository.save(
+              this.notificationRepository.create({
+                recipientId: assignedAgent.id,
+                category: 'loan',
+                type: 'loan.assigned',
+                payload: { loanRequestId: loanRequest.id, clientId: client.id },
+                description: `Se te ha asignado una nueva solicitud. Cliente: ${client.name} (${client.phone})`,
+              }),
+            );
+          } else {
+            this.warn('INCOMING.noAgentInAnyBranchForCountry', {
+              cId, callingCode, branches: inboundBranches.map(b => b.id)
+            });
+          }
+        
+          this.debug('INCOMING.loan.created', {
+            cId,
+            loanRequestId: loanRequest.id,
+            agentId: assignedAgent?.id ?? null,
+            countryCallingCode: callingCode,
+            chosenBranchId: chosenBranchId ?? inboundBranches[0]?.id ?? null,
           });
         }
-        
-        this.debug('INCOMING.loan.created', {
-          cId,
-          loanRequestId: loanRequest.id,
-          agentId: assignedAgent?.id ?? null,
-          countryCallingCode: callingCode,
-          chosenBranchId: chosenBranchId ?? inboundBranches[0]?.id ?? null,
-        });
       } else if (!loanRequest.agent && assignedAgent) {
         await this.loanRequestRepository.update(loanRequest.id, { agent: assignedAgent });
         loanRequest = await this.loanRequestRepository.findOne({
@@ -477,6 +512,20 @@ export class ChatService implements OnModuleInit {
         withAgent: !!assignedAgent,
         withLoan: !!loanRequest,
       });
+
+      if (!this.isWithinAttentionHours()) {
+        const autoMessage = this.getOffHoursMessage();
+        try {
+          await this.sendMessageToClient(client.id, autoMessage);
+          this.info('INCOMING.offHours.autoReply', {
+            cId,
+            clientId: client.id,
+            message: autoMessage,
+          });
+        } catch (autoErr: any) {
+          this.error('INCOMING.offHours.autoReply.error', { cId, msg: autoErr?.message });
+        }
+      }
     } catch (error: any) {
       this.error('INCOMING.error', { cId, msg: error?.message });
     }
@@ -590,6 +639,18 @@ export class ChatService implements OnModuleInit {
     }
     return Array.from(grouped.values());
   }
+
+  async markClientMessagesAsRead(clientId: number) {
+    const result = await this.chatMessageRepository
+      .createQueryBuilder()
+      .update(ChatMessage)
+      .set({ isRead: true })
+      .where('clientId = :clientId', { clientId })
+      .andWhere('direction = :direction', { direction: 'INCOMING' })
+      .andWhere('isRead = false')
+      .execute();
+    return { affected: result.affected ?? 0 };
+  }
   
   /* ================= Enviar simulación (media) ================= */
   async sendSimulationToClient(clientId: number, file: Express.Multer.File) {
@@ -686,6 +747,78 @@ export class ChatService implements OnModuleInit {
       return { success: true, cId, to, file: file.originalname, waId: sendRes.data?.messages?.[0]?.id };
     } catch (err: any) {
       this.error('OUT.media.error', { cId, msg: err?.message });
+      throw err;
+    }
+  }
+
+  async sendAttachmentToClient(clientId: number, file: Express.Multer.File) {
+    const cId = uuid();
+    const client = await this.clientRepository.findOne({ where: { id: clientId } });
+    if (!client || !client.phone) throw new NotFoundException('Client not found or missing phone number.');
+    const to = this.toE164(client.phone);
+
+    const loanRequest = await this.loanRequestRepository.findOne({
+      where: { client: { id: client.id } },
+      relations: ['agent'],
+      order: { createdAt: 'DESC' },
+    });
+    const agent = loanRequest?.agent;
+
+    const accessToken = this.getAccessToken();
+    const phoneNumberId = this.getPhoneNumberId();
+
+    const bufferStream = new Readable();
+    bufferStream.push(file.buffer);
+    bufferStream.push(null);
+
+    try {
+      const formData = new (FormData as any)();
+      formData.append('file', bufferStream, { filename: file.originalname, contentType: file.mimetype });
+      formData.append('messaging_product', 'whatsapp');
+      formData.append('type', file.mimetype);
+
+      const mediaUpload = await this.http.post(`/${phoneNumberId}/media`, formData, {
+        headers: { Authorization: `Bearer ${accessToken}`, ...(formData as any).getHeaders?.() },
+      });
+      if (mediaUpload.status >= 400 || !mediaUpload.data?.id) {
+        this.error('OUT.media.upload.failed', { cId, status: mediaUpload.status, data: mediaUpload.data });
+        throw new Error(`Failed to upload media. Status: ${mediaUpload.status}`);
+      }
+
+      const mediaId = mediaUpload.data.id;
+      const isImage = file.mimetype.startsWith('image/');
+      const type = isImage ? 'image' : 'document';
+      const mediaPayload: any = {
+        messaging_product: 'whatsapp',
+        to,
+        type,
+        [type]: isImage ? { id: mediaId } : { id: mediaId, filename: file.originalname },
+      };
+
+      const sendRes = await this.http.post(`/${phoneNumberId}/messages`, mediaPayload, {
+        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      });
+      const errorInfo = this.extractMetaError(sendRes);
+      if (sendRes.status >= 400 || errorInfo) {
+        this.error('OUT.media.send.failed', { cId, status: sendRes.status, errorInfo });
+        throw new Error(`WhatsApp send media error: ${sendRes.status} ${errorInfo ? JSON.stringify(errorInfo) : ''}`);
+      }
+
+      const content = isImage
+        ? `📷 Imagen enviada: ${file.originalname}`
+        : `📎 Documento enviado: ${file.originalname}`;
+      const chatMessage = this.chatMessageRepository.create({
+        content,
+        direction: 'OUTGOING',
+        client,
+        ...(agent && { agent }),
+        ...(loanRequest && { loanRequest }),
+      });
+      await this.chatMessageRepository.save(chatMessage);
+
+      return { success: true, cId, to: this.maskPhone(to), file: file.originalname, waId: sendRes.data?.messages?.[0]?.id };
+    } catch (err: any) {
+      this.error('OUT.attachment.error', { cId, msg: err?.message });
       throw err;
     }
   }
@@ -836,7 +969,7 @@ export class ChatService implements OnModuleInit {
     const content = readFileSync(this.getTemplatePath());
     const zip = new PizZip(content);
     const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
-    doc.setData(data); doc.render();
+    doc.render(data);
     return doc.getZip().generate({ type: 'nodebuffer' });
   }
   private async convertDocxToPdf(docxBuffer: Buffer): Promise<Buffer> {
@@ -1094,9 +1227,9 @@ private fmtPct(dec: number, digits = 2): string {
       this.debug('PDF.convert.ok', { cId, size: pdfBytes.length });
       
       // 5) Guardar PDF
-      const filename = `ContratoMutuo-${loan.client.document}-${loan.id}.pdf`;
-      const filePath = join(__dirname, '..', '..', 'public', 'uploads', 'documents', filename);
-      this.ensureDir(dirname(filePath));
+    const filename = `ContratoMutuo-${loan.client.document}-${loan.id}.pdf`;
+    const documentsDir = this.getDocumentStorageDir();
+    const filePath = join(documentsDir, filename);
       writeFileSync(filePath, pdfBytes);
       
       // 6) Subir a WhatsApp y enviar

@@ -731,17 +731,40 @@ export class CashService {
     
     const today = todayAll.filter(affectsUserForBalance);
   
-    const rawBase = await this.cashFlowRepo
-      .createQueryBuilder('cf')
-      .select(
-        `COALESCE(SUM(CASE WHEN cf.type = :income THEN cf.amount ELSE -cf.amount END), 0)`,
-        'saldo',
-      )
-      .where('cf.userId = :userId', { userId })
-      .andWhere('cf.createdAt < :start', { start })
-      .setParameters({ income: CashFlowType.INCOME })
-      .getRawOne<{ saldo?: string }>();
-    const baseAnterior = Number(rawBase?.saldo ?? 0);
+    const historicalMovementsAll = await this.cashRepo.find({
+      where: {
+        createdAt: Raw((alias) => `${alias} < :start`, { start: startStr }),
+      },
+      relations: { transaction: { loanRequest: { agent: true, client: true } } },
+    });
+    const historicalMovements = historicalMovementsAll.filter((movement) => {
+      if (movement.category === CashMovementCategory.TRANSFERENCIA) {
+        return movement.destinoId === userIdNum || movement.origenId === userIdNum;
+      }
+      return ownerIdForNonTransfer(movement) === userIdNum;
+    });
+    const baseAnterior = historicalMovements.reduce((balance, movement) => {
+      const amount = Number(movement.amount ?? 0);
+      if (!amount) return balance;
+      if (movement.category === CashMovementCategory.TRANSFERENCIA) {
+        if (movement.destinoId === userIdNum) {
+          return balance + amount;
+        }
+        if (movement.origenId === userIdNum) {
+          return balance - amount;
+        }
+        return balance;
+      }
+      const ownerId = ownerIdForNonTransfer(movement);
+      if (ownerId !== userIdNum) return balance;
+      if (movement.type === CashMovementType.ENTRADA) {
+        return balance + amount;
+      }
+      if (movement.type === CashMovementType.SALIDA) {
+        return balance - amount;
+      }
+      return balance;
+    }, 0);
     
     const sumWhere = (pred: (m: CashMovement) => boolean) =>
       today.filter(pred).reduce((s, m) => s + +m.amount, 0);

@@ -165,11 +165,14 @@ export class LoanRequestService {
     const base = amountNum ? (amountNum < 1000 ? amountNum : amountNum / 1000) : 100;
     data.mode = String(base).concat('X1');
 
-    // Normaliza fecha
-    const endDate = data?.endDateAt ? new Date(data.endDateAt) : null;
-    if (endDate && Number.isNaN(endDate.getTime())) {
-      console.log('[create] WARNING: endDateAt inválida, se dejará null');
-      data.endDateAt = null as any;
+    // Normaliza fecha de finalización
+    if (data?.endDateAt) {
+      const parsedEndDate = this.parseDateString(String(data.endDateAt));
+      if (!parsedEndDate) {
+        console.log('[create] ERROR: endDateAt inválida');
+        throw new BadRequestException('Fecha de finalización inválida. Usa un formato YYYY-MM-DD.');
+      }
+      data.endDateAt = parsedEndDate;
     }
 
     const payload: Partial<LoanRequest> = {
@@ -598,20 +601,45 @@ export class LoanRequestService {
       if (loanRequest.status === LoanRequestStatus.REJECTED){
         await this.clientRepository.update(loanRequest.client.id, {status: ClientStatus.INACTIVE});
       }
-      const updated = Object.assign(loanRequest, updateLoanRequestDto);
-      if(updated.status == LoanRequestStatus.APPROVED){
-        await this.notificationRepository.save(
-          this.notificationRepository.create({
-            recipientId:  updated.agent.branch.administrator.id,
-            category:     'loan',
-            type:         'loan.approved',
-            payload:      { author :  { id: updated.agent.id, name: updated.agent.name },  loanRequestId: loanRequest.id},
-            description : `El agente ${updated.agent.name} ha aprobado una nueva solicitud, revisa las solicitudes pendientes de desembolso.`
-          }),
-          
-          
-        );
-        
+      const sanitizedPayload: any = { ...updateLoanRequestDto };
+      if (sanitizedPayload.endDateAt) {
+        const parsedDate = this.parseDateString(String(sanitizedPayload.endDateAt));
+        if (!parsedDate) {
+          throw new BadRequestException('Fecha de finalización inválida. Usa un formato YYYY-MM-DD.');
+        }
+        sanitizedPayload.endDateAt = parsedDate;
+      }
+      const updated = Object.assign(loanRequest, sanitizedPayload);
+      const nextStatus = updated.status;
+      const requiresPositiveRequestedAmount =
+        nextStatus === LoanRequestStatus.APPROVED ||
+        nextStatus === LoanRequestStatus.FUNDED;
+      if (requiresPositiveRequestedAmount) {
+        const requestedAmount = Number(updated.requestedAmount ?? 0);
+        if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) {
+          throw new BadRequestException(
+            'Debes registrar un monto solicitado mayor a 0 antes de aprobar o desembolsar la solicitud.',
+          );
+        }
+      }
+      if (updated.status === LoanRequestStatus.APPROVED) {
+        const adminId = updated.agent?.branch?.administrator?.id;
+        if (adminId) {
+          await this.notificationRepository.save(
+            this.notificationRepository.create({
+              recipientId: adminId,
+              category: 'loan',
+              type: 'loan.approved',
+              payload: { author: { id: updated.agent.id, name: updated.agent.name }, loanRequestId: loanRequest.id },
+              description: `El agente ${updated.agent.name} ha aprobado una nueva solicitud, revisa las solicitudes pendientes de desembolso.`,
+            }),
+          );
+        } else {
+          console.warn(
+            '[loan-request.update] Branch sin administrador, se omite notificación para solicitud aprobada',
+            { loanRequestId: loanRequest.id, agentId: updated.agent?.id, branchId: updated.agent?.branch?.id },
+          );
+        }
       }
       return await this.loanRequestRepository.save(updated);
     }

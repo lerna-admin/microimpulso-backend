@@ -7,9 +7,12 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Client } from '../entities/client.entity';
-import { LoanRequest } from 'src/entities/loan-request.entity';
+import { LoanRequest, LoanRequestStatus } from 'src/entities/loan-request.entity';
+import { ChatMessage } from 'src/entities/chat-message.entity';
 import { User } from 'src/entities/user.entity';
 import { Country } from 'src/entities/country.entity';
+
+type ClientListStatus = 'active' | 'inactive' | 'approved' | 'rejected';
 
 @Injectable()
 export class ClientsService {
@@ -20,6 +23,9 @@ export class ClientsService {
     @InjectRepository(LoanRequest)
     private readonly loanRequestRepository: Repository<LoanRequest>,
 
+    @InjectRepository(ChatMessage)
+    private readonly chatMessageRepository: Repository<ChatMessage>,
+
     // ⬇️ NUEVO: para scoping por rol/branch.country
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
@@ -28,6 +34,76 @@ export class ClientsService {
     @InjectRepository(Country)
     private readonly countryRepository: Repository<Country>,
   ) {}
+
+  private readonly ACTIVE_LOAN_STATUSES = new Set<string>([
+    LoanRequestStatus.FUNDED,
+    LoanRequestStatus.RENEWED,
+  ]);
+
+  private normalizeStatus(value?: string): string {
+    return String(value ?? '').trim().toLowerCase();
+  }
+
+  private loanHasServiceAmount(loan?: LoanRequest | null): boolean {
+    return Number(loan?.requestedAmount ?? 0) > 1;
+  }
+
+  private getLoanListingStatus(loan?: LoanRequest | null): ClientListStatus {
+    if (!loan) return 'inactive';
+    const normalized = this.normalizeStatus(loan.status);
+    if (normalized === LoanRequestStatus.REJECTED) {
+      return 'rejected';
+    }
+    if (normalized === LoanRequestStatus.APPROVED) {
+      return 'approved';
+    }
+    if (this.ACTIVE_LOAN_STATUSES.has(normalized) && this.loanHasServiceAmount(loan)) {
+      return 'active';
+    }
+    if (normalized === LoanRequestStatus.COMPLETED) {
+      return 'inactive';
+    }
+    return 'inactive';
+  }
+
+  private getClientListingStatus(loans?: LoanRequest[]): 'ACTIVE' | 'INACTIVE' | 'REJECTED' | 'PROSPECT' {
+    if (!loans || loans.length === 0) return 'PROSPECT';
+    let hasActive = false;
+    let hasRejected = false;
+    for (const loan of loans) {
+      const status = this.getLoanListingStatus(loan);
+      if (status === 'active') {
+        hasActive = true;
+      } else if (status === 'rejected') {
+        hasRejected = true;
+      }
+    }
+    if (hasActive) return 'ACTIVE';
+    if (hasRejected) return 'REJECTED';
+    return 'INACTIVE';
+  }
+
+  private async buildChatStatsMap(): Promise<Map<number, { total: number; outgoing: number }>> {
+    const rawChatStats = await this.chatMessageRepository
+      .createQueryBuilder('msg')
+      .select('msg.clientId', 'clientId')
+      .addSelect(`SUM(CASE WHEN msg.direction = 'OUTGOING' THEN 1 ELSE 0 END)`, 'outgoingCount')
+      .addSelect('COUNT(*)', 'totalCount')
+      .where('msg.clientId IS NOT NULL')
+      .groupBy('msg.clientId')
+      .getRawMany();
+
+    const chatStatsMap = new Map<number, { total: number; outgoing: number }>();
+    for (const row of rawChatStats) {
+      const clientId = Number(row.clientId);
+      if (!clientId) continue;
+      chatStatsMap.set(clientId, {
+        total: Number(row.totalCount ?? row.total ?? row.count ?? 0),
+        outgoing: Number(row.outgoingCount ?? 0),
+      });
+    }
+    return chatStatsMap;
+  }
   
   // ============================================================
   // ===============  HELPERS CUSTOM FIELDS  ====================
@@ -208,7 +284,7 @@ async findAllORI(
   limit: number = 10,
   page: number = 1,
   filters: {
-    status?: 'active' | 'inactive' | 'rejected';
+    status?: ClientListStatus;
     document?: string;
     name?: string;
     mode?: string;
@@ -282,7 +358,7 @@ async findAllORI(
   // 2) Helpers de estado
   // ───────────────────────────────────────────────────────────────
   const lower = (s?: string) => String(s ?? '').toLowerCase();
-  const isActiveLoan = (s?: string) => ['funded', 'renewed'].includes(lower(s));
+  const isActiveLoan = (loan: LoanRequest) => this.getLoanListingStatus(loan) === 'active';
   const txTypeOf = (t: any) =>
     lower((t?.type ?? t?.transactionType ?? t?.Transactiontype) as string);
   const now = new Date();
@@ -339,16 +415,9 @@ async findAllORI(
     if (filters.document && !normIncludes(client.document, filters.document)) continue;
     if (filters.name && !normIncludes(client.name, filters.name)) continue;
 
-    const derivedStatus: 'active' | 'inactive' =
-      isActiveLoan(loan.status) ? 'active' : 'inactive';
+    const derivedStatus: ClientListStatus = this.getLoanListingStatus(loan);
 
-    if (filters.status) {
-      if (filters.status === 'rejected') {
-        if (lower(loan.status) !== 'rejected') continue;
-      } else {
-        if (filters.status !== derivedStatus) continue;
-      }
-    }
+    if (filters.status && filters.status !== derivedStatus) continue;
 
     if (filters.mode && String(loan.mode) !== filters.mode) continue;
     if (filters.type && loan.type !== filters.type) continue;
@@ -460,6 +529,8 @@ async findAllORI(
 
     for (const client of clientsNoLoan) {
       const agent = client.agent ?? null;
+      const fallbackStatus: ClientListStatus = 'inactive';
+      if (filters.status && filters.status !== fallbackStatus) continue;
       items.push({
         client,
         agent: agent ? { id: agent.id, name: agent.name } : null,
@@ -468,7 +539,7 @@ async findAllORI(
         amountBorrowed: 0,
         remainingAmount: 0,
         daysLate: 0,
-        status: 'inactive' as const,
+        status: fallbackStatus,
       });
       if (client.id) seenClientIds.add(client.id);
     }
@@ -537,7 +608,7 @@ async findAllORI(
   // 7) Totales (solo loans activos)
   // ───────────────────────────────────────────────────────────────
   const remainingTotal = items
-    .filter((it) => it.loanRequest && isActiveLoan(it.loanRequest.status))
+    .filter((it) => it.loanRequest && isActiveLoan(it.loanRequest))
     .reduce((sum, it) => sum + Number(it.remainingAmount ?? 0), 0);
 
   return {
@@ -561,7 +632,7 @@ async findAll(
   limit: number = 10,
   page: number = 1,
   filters: {
-    status?: 'active' | 'inactive' | 'rejected';
+    status?: ClientListStatus;
     mora?: string;
     document?: string;
     name?: string;
@@ -624,7 +695,6 @@ async findAll(
     return n ? h.includes(n) : true;
   };
 
-  // ───────────────────────────────────────────────────────────────
   // 1) Traer LOANS (con country) — con where SOLO para MANAGER
   // ───────────────────────────────────────────────────────────────
   const findOptions: any = {
@@ -643,7 +713,7 @@ async findAll(
   // 2) Helpers de estado
   // ───────────────────────────────────────────────────────────────
   const lower = (s?: string) => String(s ?? '').toLowerCase();
-  const isActiveLoan = (s?: string) => ['funded', 'renewed'].includes(lower(s));
+  const isActiveLoan = (loan: LoanRequest) => this.getLoanListingStatus(loan) === 'active';
   const txTypeOf = (t: any) =>
     lower((t?.type ?? t?.transactionType ?? t?.Transactiontype) as string);
   const now = new Date();
@@ -695,16 +765,9 @@ async findAll(
     if (filters.document && !normIncludes(client.document, filters.document)) continue;
     if (filters.name && !normIncludes(client.name, filters.name)) continue;
 
-    const derivedStatus: 'active' | 'inactive' =
-      isActiveLoan(loan.status) ? 'active' : 'inactive';
+    const derivedStatus = this.getLoanListingStatus(loan);
 
-    if (filters.status) {
-      if (filters.status === 'rejected') {
-        if (lower(loan.status) !== 'rejected') continue;
-      } else {
-        if (filters.status !== derivedStatus) continue;
-      }
-    }
+    if (filters.status && filters.status !== derivedStatus) continue;
 
     if (filters.mode && String(loan.mode) !== filters.mode) continue;
     if (filters.type && loan.type !== filters.type) continue;
@@ -907,7 +970,7 @@ async findAll(
   // 7) Totales (solo loans activos)
   // ───────────────────────────────────────────────────────────────
   const remainingTotal = items
-    .filter((it) => it.loanRequest && isActiveLoan(it.loanRequest.status))
+    .filter((it) => it.loanRequest && isActiveLoan(it.loanRequest))
     .reduce((sum, it) => sum + Number(it.remainingAmount ?? 0), 0);
 
   return {
@@ -936,8 +999,8 @@ async findAll(
     agentId: number,
     limit: number = 10,
     page: number = 1,
-    filters?: {
-      status?: 'active' | 'inactive' | 'rejected';
+  filters?: {
+      status?: ClientListStatus;
       mora?: string;
       document?: string;
       name?: string;
@@ -975,17 +1038,14 @@ async findAll(
     for (const [, clientLoans] of clientMap) {
       const client = clientLoans[0].client;
       
-      const hasFunded = clientLoans.some((l) => l.status === 'funded');
-      const allCompleted = clientLoans.every((l) => l.status === 'completed');
-      const hasRejected = clientLoans.some((l) => l.status === 'rejected');
+      const loanStatuses = clientLoans.map((loan) => this.getLoanListingStatus(loan));
+      let status: 'active' | 'inactive' | 'approved' | 'rejected' | 'unknown' = 'unknown';
+      if (loanStatuses.includes('active')) status = 'active';
+      else if (loanStatuses.includes('approved')) status = 'approved';
+      else if (loanStatuses.includes('rejected')) status = 'rejected';
+      else status = 'inactive';
       
-      let status: 'active' | 'inactive' | 'rejected' | 'unknown' = 'unknown';
-      if (hasFunded) status = 'active';
-      else if (allCompleted) status = 'inactive';
-      else if (hasRejected) status = 'rejected';
-      if (status === 'unknown') continue;
-      
-      if (filters?.status && filters.status.toLowerCase() !== status) continue;
+      if (filters?.status && filters.status !== status) continue;
       if (filters?.document && !client.document?.includes(filters.document))
         continue;
       if (
@@ -996,15 +1056,7 @@ async findAll(
       )
       continue;
       
-      const relevantLoans = clientLoans.filter((l) =>
-        status === 'active'
-      ? l.status === 'funded'
-      : status === 'inactive'
-      ? l.status === 'completed'
-      : status === 'rejected'
-      ? l.status === 'rejected'
-      : false,
-    );
+      const relevantLoans = clientLoans.filter((loan) => this.getLoanListingStatus(loan) === status);
     
     let clientTotalRepayment = 0;
     let clientAmountBorrowed = 0;
@@ -1080,11 +1132,11 @@ async findAll(
       clientAmountBorrowed += amountBorrowed;
     }
     
-    if (status === 'active') {
-      totalActiveAmountBorrowed += clientAmountBorrowed;
-      totalActiveRepayment += clientTotalRepayment;
-      activeClientsCount++;
-    }
+      if (status === 'active') {
+        totalActiveAmountBorrowed += clientAmountBorrowed;
+        totalActiveRepayment += clientTotalRepayment;
+        activeClientsCount++;
+      }
   }
 
   // Recalcular métricas de mora por CLIENTE (NP, M>15, CR)
@@ -1188,23 +1240,23 @@ async findOne(id: number): Promise<any | null> {
   .addSelect(
     `
       CASE 
-        WHEN loan."endDateAt" IS NOT NULL AND julianday('now') > julianday(loan."endDateAt")
-        THEN CAST(julianday('now') - julianday(loan."endDateAt") AS INTEGER)
+        WHEN loan.endDateAt IS NOT NULL AND loan.endDateAt < CURRENT_DATE()
+        THEN DATEDIFF(CURRENT_DATE(), loan.endDateAt)
         ELSE 0
       END
       `,
     'diasMora',
   )
   .addSelect(
-    `SUM(CASE WHEN txn."Transactiontype" = 'disbursement' THEN txn.amount ELSE 0 END)`,
+    `SUM(CASE WHEN txn.Transactiontype = 'disbursement' THEN txn.amount ELSE 0 END)`,
     'montoPrestado',
   )
   .addSelect(
-    `SUM(CASE WHEN txn."Transactiontype" = 'repayment' THEN txn.amount ELSE 0 END)`,
+    `SUM(CASE WHEN txn.Transactiontype = 'repayment' THEN txn.amount ELSE 0 END)`,
     'totalPagado',
   )
   .addSelect(
-    `loan.amount - SUM(CASE WHEN txn."Transactiontype" = 'repayment' THEN txn.amount ELSE 0 END)`,
+    `loan.amount - SUM(CASE WHEN txn.Transactiontype = 'repayment' THEN txn.amount ELSE 0 END)`,
     'pendientePorPagar',
   )
   .groupBy('client.id')
@@ -1218,20 +1270,13 @@ async findOne(id: number): Promise<any | null> {
   });
   
   // --- Derivar estado del cliente (sin tocar el de BD si no quieres) ---
-  let derivedClientStatus: 'ACTIVE' | 'INACTIVE' | 'PROSPECT' | undefined;
+  let derivedClientStatus: 'ACTIVE' | 'INACTIVE' | 'REJECTED' | 'PROSPECT' | undefined;
   
   if (fullClient) {
     const allLoans = fullClient.loanRequests ?? [];
-    const hasAnyLoan = allLoans.length > 0;
-    const hasActiveLoan = allLoans.some(
-      (lr) => lr.status === 'funded' || lr.status === 'renewed',
-    );
+    derivedClientStatus = this.getClientListingStatus(allLoans);
     
-    if (hasActiveLoan) derivedClientStatus = 'ACTIVE';
-    else if (hasAnyLoan) derivedClientStatus = 'INACTIVE';
-    else derivedClientStatus = 'PROSPECT';
-    
-    // Si sigues queriendo ocultar en la respuesta los completados/rechazados:
+    // Mantén visibilidad sólo de loans no completados/rechazados si se requiere
     fullClient.loanRequests = allLoans.filter(
       (loan) => loan.status !== 'completed' && loan.status !== 'rejected',
     );

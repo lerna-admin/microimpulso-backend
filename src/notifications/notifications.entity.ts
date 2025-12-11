@@ -22,7 +22,7 @@ export class Notification {
   @Column({ name: 'is_read', default: false })
   isRead: boolean;
 
-  @CreateDateColumn({ name: 'created_at', type: 'date' })
+  @CreateDateColumn({ name: 'created_at', type: 'timestamp' })
   createdAt: Date;
 
   @Column({ length: 500, nullable: true })

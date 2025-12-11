@@ -14,6 +14,8 @@ export enum DocumentType {
   WORK_LETTER = 'WORK_LETTER', // Carta laboral
   UTILITY_BILL = 'UTILITY_BILL', // Recibo
   PAYMENT_DETAIL = 'PAYMENT_DETAIL', // Desprendible de pago
+  CONTRACT_SIGNED = 'CONTRACT_SIGNED', // Contrato firmado
+  SELFIE = 'SELFIE', // Selfie de validación
   OTHER = 'OTHER', // Otro documento
 }
 
@@ -43,7 +45,7 @@ export class Document {
   createdAt: Date;
 
   @Column({
-    type: 'varchar',
+    type: 'simple-enum',
     enum: DocumentType,
     nullable: true, // para permitir que inicialmente esté sin clasificar
   })

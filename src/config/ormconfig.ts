@@ -7,9 +7,14 @@ import { ChatMessage } from '../entities/chat-message.entity';
 import { CashFlow } from '../entities/cash-flow.entity';
 
 export const AppDataSource = new DataSource({
-  type: 'sqlite',
-  database: 'database.sqlite',
-  synchronize: true,
+  type: 'mysql',
+  host: process.env.DB_HOST || '127.0.0.1',
+  port: Number(process.env.DB_PORT) || 3306,
+  username: process.env.DB_USER || 'microimpulso_user',
+  password: process.env.DB_PASS || 'MiAppDb#2025',
+  database: process.env.DB_NAME || 'microimpulso_app',
+  synchronize: false,
   logging: true,
+  charset: 'utf8mb4_unicode_ci',
   entities: [User, Client, LoanRequest, Document, ChatMessage, CashFlow],
 });

@@ -62,11 +62,11 @@ export class Client {
   @Column({ nullable: true })
   documentType: string;
 
-  @Column({ nullable: true })
+  @Column({ type: 'text', nullable: true })
   address: string;
 
   // 👇 NUEVO: dirección alterna
-  @Column({ nullable: true })
+  @Column({ type: 'text', nullable: true })
   address2?: string;
 
   // 👇 NUEVO: datos de referencia personal

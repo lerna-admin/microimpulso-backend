@@ -21,20 +21,33 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { ReportsModule } from './reports/reports.module';
 import { CountriesModule } from './country/coumtry.module';
 
+const typeOrmConfig = {
+  type: 'mysql' as const,
+  host: process.env.DB_HOST || '127.0.0.1',
+  port: Number(process.env.DB_PORT) || 3306,
+  username: process.env.DB_USER || 'microimpulso_user',
+  password: process.env.DB_PASS || 'MiAppDb#2025',
+  database: process.env.DB_NAME || 'microimpulso_app',
+  entities: [__dirname + '/**/*.entity{.ts,.js}'],
+  synchronize: false,
+  charset: 'utf8mb4_unicode_ci',
+};
+console.log('[TypeORM] Config', {
+  host: typeOrmConfig.host,
+  port: typeOrmConfig.port,
+  username: typeOrmConfig.username,
+  database: typeOrmConfig.database,
+  passwordLength: typeOrmConfig.password ? typeOrmConfig.password.length : 0,
+});
+
 @Module({
   imports: [
-    // ⬇️ Carga .env y expone ConfigService globalmente
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: ['.env'], // ajusta si tu .env está en otra ruta
+      envFilePath: ['.env'],
     }),
 
-    TypeOrmModule.forRoot({
-      type: 'sqlite',
-      database: 'database.sqlite',
-      entities: [__dirname + '/**/*.entity{.ts,.js}'],
-      synchronize: true,
-    }),
+    TypeOrmModule.forRoot(typeOrmConfig),
 
     ClientsModule,
     AuthModule,

@@ -60,6 +60,11 @@ export class ChatController {
   async getAgentConversations(@Param('agentId') agentId: number) {
     return this.chatService.getAgentConversations(agentId);
   }
+
+  @Post('client/:clientId/read')
+  async markClientMessagesAsRead(@Param('clientId', ParseIntPipe) clientId: number) {
+    return this.chatService.markClientMessagesAsRead(clientId);
+  }
   @UseInterceptors(FileInterceptor('file'))
   @Post('send-simulation')
   async sendSimulation(
@@ -67,6 +72,15 @@ export class ChatController {
     @Body('clientId') clientId: number,
   ) {
     return this.chatService.sendSimulationToClient(+clientId, file);
+  }
+
+  @UseInterceptors(FileInterceptor('file'))
+  @Post('send-attachment/:clientId')
+  async sendAttachment(
+    @Param('clientId', ParseIntPipe) clientId: number,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.chatService.sendAttachmentToClient(clientId, file);
   }
 
   @Post('/send-contract/:loanRequestId')
@@ -88,4 +102,3 @@ async download(@Param('id', ParseIntPipe) id: number, @Res() res: Response) {
 
   
 }
-

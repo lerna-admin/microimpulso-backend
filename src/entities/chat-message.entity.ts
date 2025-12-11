@@ -15,11 +15,14 @@ export class ChatMessage {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column()
+  @Column({ type: 'text' })
   content: string;
 
   @Column()
   direction: 'INCOMING' | 'OUTGOING';
+
+  @Column({ type: 'boolean', default: false })
+  isRead: boolean;
 
   @ManyToOne(() => Client, (client) => client.chatMessages)
   @JoinColumn({ name: 'clientId' })

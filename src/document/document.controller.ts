@@ -15,6 +15,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { join } from 'path';
 import { existsSync, createReadStream } from 'fs';
+import { basename } from 'path';
 import { Response } from 'express';
 
 import { DocumentService } from './document.service';
@@ -72,7 +73,9 @@ export class DocumentController {
     const relPath = rawUrl.startsWith('/') ? rawUrl.slice(1) : rawUrl;
 
     // Buscar primero en public/, luego en dist/public/
+    const fileName = basename(relPath);
     const candidates = [
+      ...(fileName ? [join(EXTERNAL_DOCS_DIR, fileName)] : []),
       join(process.cwd(), 'public', relPath),
       join(process.cwd(), 'dist', 'public', relPath),
     ];
@@ -128,3 +131,4 @@ async uploadDocument(
 }
 
 }
+const EXTERNAL_DOCS_DIR = process.env.DOCUMENTS_STORAGE_DIR || '/home/bitnami/microimpulso-documents';

@@ -43,7 +43,7 @@ async findAll(
 
   // ⬇️ construir filters correctamente
   const filters: {
-    status?: 'active' | 'inactive' | 'approved' | 'rejected';
+    status?: 'active' | 'inactive' | 'approved' | 'rejected' | 'under_review' | 'lead';
     mora?: string;
     document?: string;
     name?: string;
@@ -73,8 +73,15 @@ async findAll(
   }
   if (typeof status === 'string' && status.trim() !== '') {
     const s = status.trim().toLowerCase();
-    if (s === 'active' || s === 'inactive' || s === 'approved' || s === 'rejected') {
-      filters.status = s as 'active' | 'inactive' | 'approved' | 'rejected';
+    if (
+      s === 'active' ||
+      s === 'inactive' ||
+      s === 'approved' ||
+      s === 'rejected' ||
+      s === 'under_review' ||
+      s === 'lead'
+    ) {
+      filters.status = s as 'active' | 'inactive' | 'approved' | 'rejected' | 'under_review' | 'lead';
     }
   }
   if (typeof mora === 'string' && mora.trim() !== '') {
@@ -126,7 +133,7 @@ async findAll(
       Number(limit),
       Number(page),
       {
-        status: status?.toLowerCase() as 'active' | 'inactive' | 'approved' | 'rejected',
+        status: status?.toLowerCase() as 'active' | 'inactive' | 'approved' | 'rejected' | 'under_review' | 'lead',
         mora: mora?.toUpperCase(),
         document,
         name,

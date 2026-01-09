@@ -40,6 +40,23 @@ export class AnalyticsController {
   getClientDelinquencyStats() {
     return this.analyticsService.getClientDelinquencyStats();
   }
+
+  /**
+   * GET /stats/superadmin/overview
+   * Global resumen para SUPERADMIN (todos los países).
+   * Query:
+   *   - userId    (obligatorio, SUPERADMIN)
+   *   - startDate (YYYY-MM-DD, opcional; por defecto inicio de mes actual)
+   *   - endDate   (YYYY-MM-DD, opcional; por defecto hoy)
+   */
+  @Get('superadmin/overview')
+  getSuperAdminOverview(
+    @Query('userId') userId: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    return this.analyticsService.getSuperAdminGlobalSummary(+userId, startDate, endDate);
+  }
   
   /**
   * GET /stats/manager-summary

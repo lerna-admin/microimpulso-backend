@@ -93,13 +93,13 @@ export class LoanRequest {
   @Column({ type: 'int', nullable: true })
   mora: number;
 
-  @Column({ type: 'date', nullable: true })
+  @Column({ type: 'datetime', nullable: true })
   endDateAt: Date;
 
   @Column({ default: false })
   isRenewed: boolean;
 
-  @Column({ type: 'date', nullable: true })
+  @Column({ type: 'datetime', nullable: true })
   renewedAt?: Date;
 
   @Column({ type: 'text', nullable: true })

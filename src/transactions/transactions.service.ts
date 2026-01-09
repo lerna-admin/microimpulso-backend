@@ -125,8 +125,8 @@ async create(data: any): Promise<LoanTransaction> {
     const actor = await this.userRepository.findOne({ where: { id: Number(userId) } });
     createdByUserId = actor?.id ?? null;
     const role = (actor?.role ?? '').toUpperCase();
-    // Treat ADMIN and MANAGER as "admin-made" for business rules
-    isAdminTransaction = role === 'ADMIN' || role === 'MANAGER';
+    // Treat ADMIN, MANAGER and SUPERADMIN as "admin-made" for business rules
+    isAdminTransaction = role === 'ADMIN' || role === 'MANAGER' || role === 'SUPERADMIN';
     adminIdForMovement = isAdminTransaction ? createdByUserId : null;
   }
 

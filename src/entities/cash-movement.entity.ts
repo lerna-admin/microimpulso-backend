@@ -71,4 +71,7 @@ export class CashMovement {
 
   @Column({ nullable: true })
   destinoId?: number;
+
+  @Column({ type: 'boolean', default: false })
+  isTransferMirror?: boolean;
 }

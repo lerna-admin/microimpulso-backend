@@ -489,6 +489,7 @@ export class ChatService implements OnModuleInit {
           client,
           ...(loanRequest ? { loanRequest } : {}),
           ...(assignedAgent ? { agent: assignedAgent } : {}),
+          rawPayload: messageData ? JSON.stringify(messageData) : null,
         };
         const chatMessage = this.chatMessageRepository.create(chatData);
         await this.chatMessageRepository.save(chatMessage);
@@ -516,7 +517,7 @@ export class ChatService implements OnModuleInit {
       if (!this.isWithinAttentionHours()) {
         const autoMessage = this.getOffHoursMessage();
         try {
-          await this.sendMessageToClient(client.id, autoMessage);
+          await this.sendMessageToClient(client.id, autoMessage, { markAsRead: false });
           this.info('INCOMING.offHours.autoReply', {
             cId,
             clientId: client.id,
@@ -532,7 +533,8 @@ export class ChatService implements OnModuleInit {
   }
   
   /* ================= Enviar texto ================= */
-  async sendMessageToClient(clientId: number, message: string) {
+  async sendMessageToClient(clientId: number, message: string, opts: { markAsRead?: boolean } = {}) {
+    const { markAsRead = true } = opts;
     const cId = uuid();
     
     const client = await this.clientRepository.findOne({ where: { id: clientId } });
@@ -590,6 +592,7 @@ export class ChatService implements OnModuleInit {
         client,
         ...(agent && { agent }),
         ...(loanRequest && { loanRequest }),
+        isRead: markAsRead,
       };
       const chatMessage = this.chatMessageRepository.create(msgData);
       await this.chatMessageRepository.save(chatMessage);

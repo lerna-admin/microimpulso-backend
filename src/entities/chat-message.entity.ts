@@ -18,6 +18,9 @@ export class ChatMessage {
   @Column({ type: 'text' })
   content: string;
 
+  @Column({ type: 'text', nullable: true })
+  rawPayload?: string | null;
+
   @Column()
   direction: 'INCOMING' | 'OUTGOING';
 

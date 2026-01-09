@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, Repository } from 'typeorm';
 import { LoanRequest, LoanRequestStatus } from 'src/entities/loan-request.entity';
@@ -6,6 +6,8 @@ import { Branch } from 'src/entities/branch.entity';
 import { AnalyticsReport, AnalyticsMonthlyReport, AnalyticsYearlyReport } from './analytics.model';
 import { LoanTransaction, TransactionType } from 'src/entities/transaction.entity';
 import { User } from 'src/entities/user.entity';
+import { Country } from 'src/entities/country.entity';
+import { SuperAdminGlobalSummary } from './analytics-superadmin.dto';
 export interface FundedByBranchComparison {
 branchId: number;
 branchName: string;
@@ -31,6 +33,8 @@ export class AnalyticsService {
         private readonly userRepository: Repository<User>,  
         @InjectRepository(LoanTransaction)
         private readonly loanTransactionRepository: Repository<LoanTransaction>,
+        @InjectRepository(Country)
+        private readonly countryRepository: Repository<Country>,
 
         ) {
             
@@ -41,6 +45,183 @@ export class AnalyticsService {
         const start = new Date(year, month, 1);
         const end = new Date(year, month + 1, 0, 23, 59, 59, 999);
         return { start, end };
+    }
+    /**
+     * Global summary for SUPERADMIN
+     * Aggregates key KPIs by country (all branches, all agents).
+     */
+    async getSuperAdminGlobalSummary(
+      userId: number,
+      startDate?: string,
+      endDate?: string,
+    ): Promise<SuperAdminGlobalSummary> {
+      const caller = await this.userRepository.findOne({ where: { id: userId }, relations: { branch: { country: true }, managerCountry: true } as any });
+      if (!caller) throw new NotFoundException('User not found');
+      const role = String(caller.role ?? '').toUpperCase();
+      if (role !== 'SUPERADMIN') {
+        throw new ForbiddenException('Only SUPERADMIN may access this overview');
+      }
+
+      const end = endDate ? new Date(endDate + 'T23:59:59.999Z') : new Date();
+      const start = startDate ? new Date(startDate + 'T00:00:00.000Z') : new Date(end.getFullYear(), end.getMonth(), 1);
+
+      // Active loans: funded or renewed
+      const ACTIVE_STATUSES: LoanRequestStatus[] = [
+        LoanRequestStatus.FUNDED,
+        LoanRequestStatus.RENEWED,
+      ];
+
+      const loans = await this.loanRequestRepo.find({
+        where: {
+          createdAt: Between(start, end),
+        },
+        relations: ['agent', 'agent.branch', 'agent.branch.country', 'client', 'transactions'],
+      });
+
+      // Helper: determine country for a loan (via agent.branch.country or client.countryId).
+      const countryCache = new Map<number, Country>();
+      const getCountryForLoan = async (loan: LoanRequest): Promise<Country | null> => {
+        const branchCountry = (loan as any)?.agent?.branch?.country as Country | undefined;
+        if (branchCountry) return branchCountry;
+        const clientCountryId = (loan as any)?.client?.countryId as number | undefined;
+        if (!clientCountryId) return null;
+        if (countryCache.has(clientCountryId)) return countryCache.get(clientCountryId)!;
+        const c = await this.countryRepository.findOne({ where: { id: clientCountryId } });
+        if (c) countryCache.set(clientCountryId, c);
+        return c;
+      };
+
+      const now = new Date();
+
+      type Acc = {
+        activeLoanAmount: number;
+        activeLoansCount: number;
+        activeClients: Set<number>;
+        disbursedAmount: number;
+        disbursementCount: number;
+        repaidAmount: number;
+        repaymentCount: number;
+        delinquentAmount: number;
+      };
+
+      const byCountry = new Map<number | null, Acc>();
+
+      const ensureAcc = (countryKey: number | null): Acc => {
+        if (!byCountry.has(countryKey)) {
+          byCountry.set(countryKey, {
+            activeLoanAmount: 0,
+            activeLoansCount: 0,
+            activeClients: new Set<number>(),
+            disbursedAmount: 0,
+            disbursementCount: 0,
+            repaidAmount: 0,
+            repaymentCount: 0,
+            delinquentAmount: 0,
+          });
+        }
+        return byCountry.get(countryKey)!;
+      };
+
+      for (const loan of loans) {
+        const country = await getCountryForLoan(loan);
+        const countryKey = country?.id ?? null;
+        const acc = ensureAcc(countryKey);
+
+        const status = loan.status as LoanRequestStatus;
+        const txs = (loan.transactions ?? []) as LoanTransaction[];
+
+        const disbursements = txs.filter(t => t.Transactiontype === TransactionType.DISBURSEMENT);
+        const repayments = txs.filter(t => t.Transactiontype === TransactionType.REPAYMENT);
+
+        const disbursedSum = disbursements.reduce((s, t) => s + Number(t.amount ?? 0), 0);
+        const repaidSum = repayments.reduce((s, t) => s + Number(t.amount ?? 0), 0);
+
+        acc.disbursedAmount += disbursedSum;
+        acc.disbursementCount += disbursements.length;
+        acc.repaidAmount += repaidSum;
+        acc.repaymentCount += repayments.length;
+
+        const loanAmount = Number(loan.amount ?? 0);
+        const outstanding = Math.max(loanAmount - repaidSum, 0);
+
+        if (ACTIVE_STATUSES.includes(status)) {
+          acc.activeLoanAmount += outstanding;
+          acc.activeLoansCount += 1;
+          const clientId = (loan as any)?.client?.id as number | undefined;
+          if (clientId) acc.activeClients.add(clientId);
+
+          // crude delinquency: overdue if endDateAt < now and outstanding > 0
+          if (loan.endDateAt && outstanding > 0 && loan.endDateAt.getTime() < now.getTime()) {
+            acc.delinquentAmount += outstanding;
+          }
+        }
+      }
+
+      let totalActiveLoanAmount = 0;
+      let totalActiveLoansCount = 0;
+      let totalActiveClients = 0;
+      let totalDisbursedAmount = 0;
+      let totalDisbursementCount = 0;
+      let totalRepaidAmount = 0;
+      let totalRepaymentCount = 0;
+      let totalDelinquentAmount = 0;
+
+      const entries: SuperAdminGlobalSummary['byCountry'] = [];
+
+      for (const [countryKey, acc] of byCountry.entries()) {
+        const country =
+          countryKey != null ? await this.countryRepository.findOne({ where: { id: countryKey } }) : null;
+
+        const activeClientsCount = acc.activeClients.size;
+        const delinquencyRate =
+          acc.activeLoanAmount > 0 ? acc.delinquentAmount / acc.activeLoanAmount : 0;
+
+        entries.push({
+          countryId: countryKey,
+          countryName: country?.name ?? null,
+          currencyCode: (country as any)?.currencyCode ?? null,
+          activeLoanAmount: acc.activeLoanAmount,
+          delinquentAmount: acc.delinquentAmount,
+          activeLoansCount: acc.activeLoansCount,
+          activeClientsCount,
+          disbursedAmount: acc.disbursedAmount,
+          disbursementCount: acc.disbursementCount,
+          repaidAmount: acc.repaidAmount,
+          repaymentCount: acc.repaymentCount,
+          delinquencyRate,
+        });
+
+        totalActiveLoanAmount += acc.activeLoanAmount;
+        totalActiveLoansCount += acc.activeLoansCount;
+        totalActiveClients += activeClientsCount;
+        totalDisbursedAmount += acc.disbursedAmount;
+        totalDisbursementCount += acc.disbursementCount;
+        totalRepaidAmount += acc.repaidAmount;
+        totalRepaymentCount += acc.repaymentCount;
+        totalDelinquentAmount += acc.delinquentAmount;
+      }
+
+      const globalDelinquencyRate =
+        totalActiveLoanAmount > 0 ? totalDelinquentAmount / totalActiveLoanAmount : 0;
+
+      return {
+        meta: {
+          startDate: start.toISOString().slice(0, 10),
+          endDate: end.toISOString().slice(0, 10),
+          generatedAt: new Date().toISOString(),
+        },
+        totals: {
+          activeLoanAmount: totalActiveLoanAmount,
+          activeLoansCount: totalActiveLoansCount,
+          activeClientsCount: totalActiveClients,
+          disbursedAmount: totalDisbursedAmount,
+          disbursementCount: totalDisbursementCount,
+          repaidAmount: totalRepaidAmount,
+          repaymentCount: totalRepaymentCount,
+          delinquencyRate: globalDelinquencyRate,
+        },
+        byCountry: entries.sort((a, b) => (a.countryName ?? '').localeCompare(b.countryName ?? '')),
+      };
     }
 
     // Aggregates loan statistics between two dates, grouped by branch

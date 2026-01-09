@@ -7,6 +7,7 @@ import { LoanRequest } from 'src/entities/loan-request.entity';
 import { LoanTransaction } from 'src/entities/transaction.entity';
 import { User } from 'src/entities/user.entity';
 import { Branch } from 'src/entities/branch.entity';
+import { Country } from 'src/entities/country.entity';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { Branch } from 'src/entities/branch.entity';
       LoanTransaction,
       User,
       Branch,
+      Country,
     ]),
   ],
   controllers: [AnalyticsController],

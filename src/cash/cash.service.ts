@@ -166,12 +166,28 @@ export class CashService {
         branchId,
         origenId,
         destinoId,
-        adminId: performerId ?? undefined, // who executed this manual movement
+        adminId: performerId ?? undefined,
         transaction: transactionId ? ({ id: transactionId } as any) : undefined,
       };
       
-      const salidaMov = await this.cashRepo.save(this.cashRepo.create(salida));
-      return [salidaMov];
+      const entrada: Partial<CashMovement> = {
+        type: 'ENTRADA' as CashMovementType,
+        amount,
+        category: 'TRANSFERENCIA' as CashMovementCategory,
+        reference,
+        branchId,
+        origenId: destinoId,
+        destinoId: origenId,
+        adminId: performerId ?? undefined,
+        transaction: transactionId ? ({ id: transactionId } as any) : undefined,
+        isTransferMirror: true,
+      };
+      
+      const movements = await this.cashRepo.save([
+        this.cashRepo.create(salida),
+        this.cashRepo.create(entrada),
+      ]);
+      return movements;
     }
     
     // Regular movement (ENTRADA / SALIDA)
@@ -483,7 +499,7 @@ export class CashService {
     
     const branchId = user.branch.id;
     const role = (user.role ?? '').toUpperCase();
-    const isAdminOrManager = role === 'ADMIN' || role === 'MANAGER';
+    const isAdminOrManager = role === 'ADMIN' || role === 'MANAGER' || role === 'SUPERADMIN';
     
     const start =
     typeof rawDate === 'string'
@@ -704,6 +720,7 @@ export class CashService {
     
     // Attribution helpers
     const ownerIdForNonTransfer = (m: CashMovement): number | null => {
+      if (isTransferMirrorMovement(m)) return null;
       const tx = (m as any)?.transaction as (LoanTransaction | undefined);
       // If the linked loan transaction was performed by admin, do not attribute to agent
       if (tx && (tx as any).isAdminTransaction === true) return null;
@@ -713,13 +730,17 @@ export class CashService {
     };
     
     const affectsUserForBalance = (m: CashMovement): boolean => {
+      if (isTransferMirrorMovement(m)) return false;
       // Transfers: belongs to 'origenId'
       if (m.category === C.TRANSFERENCIA) return m.origenId === userIdNum;
       // Non-transfers: attribute only if the "owner" matches the agent
       return ownerIdForNonTransfer(m) === userIdNum;
     };
     
-    const todayAll = await this.cashRepo.find({
+    const isTransferMirrorMovement = (movement: CashMovement) =>
+      Boolean((movement as any)?.isTransferMirror);
+    
+    const todayRaw = await this.cashRepo.find({
       where: {
         createdAt: Raw((alias) => `${alias} BETWEEN :start AND :end`, {
           start: startStr,
@@ -728,15 +749,18 @@ export class CashService {
       },
       relations: { transaction: { loanRequest: { agent: true, client: true } } },
     });
-    
+    const todayAll = todayRaw.filter((m) => !isTransferMirrorMovement(m));
     const today = todayAll.filter(affectsUserForBalance);
   
-    const historicalMovementsAll = await this.cashRepo.find({
+    const historicalMovementsRaw = await this.cashRepo.find({
       where: {
         createdAt: Raw((alias) => `${alias} < :start`, { start: startStr }),
       },
       relations: { transaction: { loanRequest: { agent: true, client: true } } },
     });
+    const historicalMovementsAll = historicalMovementsRaw.filter(
+      (m) => !isTransferMirrorMovement(m),
+    );
     const historicalMovements = historicalMovementsAll.filter((movement) => {
       if (movement.category === CashMovementCategory.TRANSFERENCIA) {
         return movement.destinoId === userIdNum || movement.origenId === userIdNum;
@@ -1197,6 +1221,54 @@ export class CashService {
     });
   }
   
+  /**
+   * Update the amount of a cash movement (and its LoanTransaction, if any).
+   * Used by admins to corregir montos mal digitados.
+   */
+  async updateMovementAmount(
+    id: number,
+    amount: number,
+  ): Promise<{ updatedMovementId: number; updatedTransactionId?: number }> {
+    const newAmount = Number(amount);
+    if (!isFinite(newAmount) || newAmount <= 0) {
+      throw new BadRequestException('amount must be a number greater than 0');
+    }
+    
+    return this.dataSource.transaction(async (manager) => {
+      const movementRepo = manager.getRepository(CashMovement);
+      const txRepo = manager.getRepository(LoanTransaction);
+      
+      const mov = await movementRepo.findOne({
+        where: { id },
+        relations: { transaction: true },
+      });
+      if (!mov) throw new BadRequestException('Cash movement not found');
+      
+      // No permitimos editar el espejo de una transferencia
+      if ((mov as any).isTransferMirror) {
+        throw new BadRequestException('No se puede editar el monto de un movimiento espejo de transferencia.');
+      }
+      
+      mov.amount = newAmount;
+      await movementRepo.save(mov);
+      
+      let updatedTxId: number | undefined;
+      if (mov.transaction?.id) {
+        const tx = await txRepo.findOne({ where: { id: mov.transaction.id } });
+        if (tx) {
+          tx.amount = newAmount;
+          await txRepo.save(tx);
+          updatedTxId = tx.id;
+        }
+      }
+      
+      return {
+        updatedMovementId: mov.id,
+        updatedTransactionId: updatedTxId,
+      };
+    });
+  }
+  
   // ----------------- EXPORTS -----------------
   
   async exportDailyTraceToExcel(userId: number, date: string): Promise<Buffer> {
@@ -1478,7 +1550,7 @@ export class CashService {
     
     const branchId = user.branch.id;
     const role = String(user.role ?? '').toUpperCase();
-    const isAdminOrManager = role === 'ADMIN' || role === 'MANAGER';
+    const isAdminOrManager = role === 'ADMIN' || role === 'MANAGER' || role === 'SUPERADMIN';
     
     // ----------------- Rango del día -----------------
     const start =

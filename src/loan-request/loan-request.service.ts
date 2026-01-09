@@ -18,8 +18,18 @@ import { CashMovementCategory } from 'src/entities/cash-movement-category.enum';
 export class LoanRequestService {
   private parseDateString(value?: string): Date | null {
     if (!value) return null;
+    const trimmed = value.trim();
+    const looksLikeDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(trimmed);
+    if (looksLikeDateOnly) {
+      const [y, m, d] = trimmed.split('-').map(Number);
+      return new Date(Date.UTC(y, m - 1, d, 12, 0, 0, 0));
+    }
     const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
+    if (Number.isNaN(parsed.getTime())) return null;
+    if (parsed.getHours() === 0 && parsed.getMinutes() === 0 && parsed.getSeconds() === 0) {
+      parsed.setHours(12, 0, 0, 0);
+    }
+    return parsed;
   }
 
   
@@ -609,18 +619,29 @@ export class LoanRequestService {
         }
         sanitizedPayload.endDateAt = parsedDate;
       }
+      const previousStatus = loanRequest.status;
       const updated = Object.assign(loanRequest, sanitizedPayload);
-      const nextStatus = updated.status;
+      let nextStatus = updated.status;
+
+      const requestedAmountValue = Number(updated.requestedAmount ?? 0);
+      const hasPositiveRequestedAmount =
+        Number.isFinite(requestedAmountValue) && requestedAmountValue > 0;
+      const isReactivatingRejected =
+        previousStatus === LoanRequestStatus.REJECTED &&
+        nextStatus === LoanRequestStatus.APPROVED;
+
+      if (isReactivatingRejected && !hasPositiveRequestedAmount) {
+        updated.status = LoanRequestStatus.UNDER_REVIEW;
+        nextStatus = updated.status;
+      }
+
       const requiresPositiveRequestedAmount =
         nextStatus === LoanRequestStatus.APPROVED ||
         nextStatus === LoanRequestStatus.FUNDED;
-      if (requiresPositiveRequestedAmount) {
-        const requestedAmount = Number(updated.requestedAmount ?? 0);
-        if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) {
-          throw new BadRequestException(
-            'Debes registrar un monto solicitado mayor a 0 antes de aprobar o desembolsar la solicitud.',
-          );
-        }
+      if (requiresPositiveRequestedAmount && !hasPositiveRequestedAmount) {
+        throw new BadRequestException(
+          'Debes registrar un monto solicitado mayor a 0 antes de aprobar o desembolsar la solicitud.',
+        );
       }
       if (updated.status === LoanRequestStatus.APPROVED) {
         const adminId = updated.agent?.branch?.administrator?.id;

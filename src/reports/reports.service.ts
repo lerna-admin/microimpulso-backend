@@ -38,6 +38,11 @@ export class ReportsService {
         if (!caller) throw new NotFoundException('User not found');
         
         const businessDate = date ?? dayjs().format('YYYY-MM-DD');
+
+        const role = (caller.role ?? '').toUpperCase();
+        const isAdmin = role === 'ADMIN';
+        const isManager = role === 'MANAGER';
+        const isSuperAdmin = role === 'SUPERADMIN';
         
         /* 2 · Base query: loan_transaction → loan_request → agent(user) → branch */
         const qb = this.txRepo
@@ -49,7 +54,7 @@ export class ReportsService {
         
         /* 3 · Role-specific grouping -------------------------------------------- */
         let roleView: 'ADMIN' | 'MANAGER';
-        if (caller.role === 'ADMIN') {
+        if (isAdmin) {
             roleView = 'ADMIN';
             qb.andWhere('branch.id = :ownBranch', { ownBranch: caller.branchId })
             .select([
@@ -58,9 +63,9 @@ export class ReportsService {
                 't.Transactiontype AS type',
                 'COUNT(*)          AS count',
                 'SUM(t.amount)     AS amount',
-            ])
-            .groupBy('agent.id, t.Transactiontype');
-        } else if (caller.role === 'MANAGER') {
+            ]);
+            qb.groupBy('agent.id, t.Transactiontype');
+        } else if (isManager || isSuperAdmin) {
             roleView = 'MANAGER';
             qb.select([
                 'branch.id         AS groupId',
@@ -68,10 +73,10 @@ export class ReportsService {
                 't.Transactiontype AS type',
                 'COUNT(*)          AS count',
                 'SUM(t.amount)     AS amount',
-            ])
-            .groupBy('branch.id, t.Transactiontype');
+            ]);
+            qb.groupBy('branch.id, t.Transactiontype');
         } else {
-            throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+            throw new ForbiddenException('Only ADMIN, MANAGER or SUPERADMIN may call this');
         }
         
         const rows = await qb.getRawMany<{
@@ -186,9 +191,14 @@ export class ReportsService {
         /* ───────────────────────── 1. CALLER  */
         const caller = await this.userRepo.findOne({ where: { id: +userId } });
         if (!caller) throw new NotFoundException('User not found');
+
+        const role = (caller.role ?? '').toUpperCase();
+        const isAdmin = role === 'ADMIN';
+        const isManager = role === 'MANAGER';
+        const isSuperAdmin = role === 'SUPERADMIN';
         
-        if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
-            throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+        if (!isAdmin && !isManager && !isSuperAdmin) {
+            throw new ForbiddenException('Only ADMIN, MANAGER or SUPERADMIN may call this');
         }
         
         /* ───────────────────────── 2. DYNAMIC FILTERS */
@@ -199,7 +209,7 @@ export class ReportsService {
         const paramsMov: any[] = [businessDate];
         
         // Branch restrictions
-        if (caller.role === 'ADMIN') {
+        if (isAdmin) {
             whereCartera.push('branch.id = ?');
             whereMov.push('branch.id = ?');
             paramsCartera.push(caller.branchId);
@@ -365,8 +375,13 @@ export class ReportsService {
         const caller = await this.userRepo.findOne({ where: { id: +userId } });
         if (!caller) throw new NotFoundException('User not found');
         
-        if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
-            throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+        const role = (caller.role ?? '').toUpperCase();
+        const isAdmin = role === 'ADMIN';
+        const isManager = role === 'MANAGER';
+        const isSuperAdmin = role === 'SUPERADMIN';
+        
+        if (!isAdmin && !isManager && !isSuperAdmin) {
+            throw new ForbiddenException('Only ADMIN, MANAGER or SUPERADMIN may call this');
         }
         
         /* 2 · Build raw SQL: count and outstanding per status ---------------- */
@@ -377,7 +392,7 @@ export class ReportsService {
             "'funded'",
         ].join(',');
         
-        let sql = caller.role === 'ADMIN'
+        let sql = isAdmin
         ? `
       SELECT
         lr.status                                AS status,
@@ -477,8 +492,13 @@ export class ReportsService {
         const caller = await this.userRepo.findOne({ where: { id: +userId } });
         if (!caller) throw new NotFoundException('User not found');
         
-        if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
-            throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+        const role = (caller.role ?? '').toUpperCase();
+        const isAdmin = role === 'ADMIN';
+        const isManager = role === 'MANAGER';
+        const isSuperAdmin = role === 'SUPERADMIN';
+        
+        if (!isAdmin && !isManager && !isSuperAdmin) {
+            throw new ForbiddenException('Only ADMIN, MANAGER or SUPERADMIN may call this');
         }
         
         /* 2 · Date window: today .. +7 days --------------------------------- */
@@ -545,7 +565,7 @@ export class ReportsService {
             AND DATE(lr.endDateAt) BETWEEN DATE(?) AND DATE(?)
         `;
         
-        const params = caller.role === 'ADMIN'
+        const params = isAdmin
         ? [startDate.format('YYYY-MM-DD'), endDate.format('YYYY-MM-DD'), caller.branchId]
         : [startDate.format('YYYY-MM-DD'), endDate.format('YYYY-MM-DD')];
         
@@ -685,12 +705,15 @@ return {
 * ------------------------------------------------------------------------ */
 async getOverdueLoans(userId: string) {
     /* 1 · Caller --------------------------------------------------------- */
-    const caller = await this.userRepo.findOne({ where: { id: +userId } });
-    if (!caller) throw new NotFoundException('User not found');
-    
-    if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
-        throw new ForbiddenException('Only ADMIN or MANAGER may call this');
-    }
+        const caller = await this.userRepo.findOne({ where: { id: +userId } });
+        if (!caller) throw new NotFoundException('User not found');
+        const role = (caller.role ?? '').toUpperCase();
+        const isAdmin = role === 'ADMIN';
+        const isManager = role === 'MANAGER';
+        const isSuperAdmin = role === 'SUPERADMIN';
+        if (!isAdmin && !isManager && !isSuperAdmin) {
+            throw new ForbiddenException('Only ADMIN, MANAGER or SUPERADMIN may call this');
+        }
     
     /* 2 · Reference date: today ----------------------------------------- */
     const today = dayjs().startOf('day');
@@ -891,8 +914,12 @@ async getDailyRenewals(userId: string, date?: string) {
     const caller = await this.userRepo.findOne({ where: { id: +userId } });
     if (!caller) throw new NotFoundException('User not found');
     
-    if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
-        throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+    const role = (caller.role ?? '').toUpperCase();
+    const isAdmin = role === 'ADMIN';
+    const isManager = role === 'MANAGER';
+    const isSuperAdmin = role === 'SUPERADMIN';
+    if (!isAdmin && !isManager && !isSuperAdmin) {
+        throw new ForbiddenException('Only ADMIN, MANAGER or SUPERADMIN may call this');
     }
     
     /* 2 · Fecha del reporte --------------------------------------------- */
@@ -1017,8 +1044,12 @@ async getDailyRenewals(userId: string, date?: string) {
         /* 1 · Usuario que llama ---------------------------------------------- */
         const caller = await this.userRepo.findOne({ where: { id: +userId } });
         if (!caller) throw new NotFoundException('User not found');
-        if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
-            throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+        const role = (caller.role ?? '').toUpperCase();
+        const isAdmin = role === 'ADMIN';
+        const isManager = role === 'MANAGER';
+        const isSuperAdmin = role === 'SUPERADMIN';
+        if (!isAdmin && !isManager && !isSuperAdmin) {
+            throw new ForbiddenException('Only ADMIN, MANAGER or SUPERADMIN may call this');
         }
         
         /* 2 · Información básica del cliente --------------------------------- */
@@ -1123,8 +1154,12 @@ async getDailyRenewals(userId: string, date?: string) {
         /* 1 · Caller --------------------------------------------------------- */
         const caller = await this.userRepo.findOne({ where: { id: +userId } });
         if (!caller) throw new NotFoundException('User not found');
-        if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
-            throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+        const role = (caller.role ?? '').toUpperCase();
+        const isAdmin = role === 'ADMIN';
+        const isManager = role === 'MANAGER';
+        const isSuperAdmin = role === 'SUPERADMIN';
+        if (!isAdmin && !isManager && !isSuperAdmin) {
+            throw new ForbiddenException('Only ADMIN, MANAGER or SUPERADMIN may call this');
         }
         
         /* 2 · Date window ---------------------------------------------------- */
@@ -1259,14 +1294,18 @@ async getDailyRenewals(userId: string, date?: string) {
             select: ['id', 'role', 'branchId'],
         });
         if (!caller) throw new NotFoundException('User not found');
-        if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER')
-            throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+        const role = (caller.role ?? '').toUpperCase();
+        const isAdmin = role === 'ADMIN';
+        const isManager = role === 'MANAGER';
+        const isSuperAdmin = role === 'SUPERADMIN';
+        if (!isAdmin && !isManager && !isSuperAdmin)
+            throw new ForbiddenException('Only ADMIN, MANAGER or SUPERADMIN may call this');
         
         /* 2 ▸ Qué branch se aplica por defecto ------------------------------- */
         //   ADMIN → su propia sede si no se envía branchId
         //   MANAGER → sin restricción a menos que la pida
         const effBranchId =
-        caller.role === 'ADMIN' ? branchId ?? caller.branchId : branchId;
+        isAdmin ? branchId ?? caller.branchId : branchId;
         
         /* 3 ▸ Consulta base (loan_request → agent → branch) ------------------ */
         const baseWhere: string[] = [];
@@ -1410,8 +1449,12 @@ async getDailyRenewals(userId: string, date?: string) {
         /* 1 ▸ caller + fechas ------------------------------------------------ */
         const caller = await this.userRepo.findOne({ where: { id: +userId } });
         if (!caller) throw new NotFoundException('User not found');
-        if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
-            throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+        const role = (caller.role ?? '').toUpperCase();
+        const isAdmin = role === 'ADMIN';
+        const isManager = role === 'MANAGER';
+        const isSuperAdmin = role === 'SUPERADMIN';
+        if (!isAdmin && !isManager && !isSuperAdmin) {
+            throw new ForbiddenException('Only ADMIN, MANAGER or SUPERADMIN may call this');
         }
         
         const end   = endDate
@@ -1521,8 +1564,11 @@ async getDailyRenewals(userId: string, date?: string) {
         /* 1 · Validar usuario y rol ------------------------------------------- */
         const caller = await this.userRepo.findOne({ where: { id: +userId } });
         if (!caller) throw new NotFoundException('User not found');
-        if (caller.role !== 'MANAGER') {
-            throw new ForbiddenException('Only MANAGER may call this');
+        const role = (caller.role ?? '').toUpperCase();
+        const isManager = role === 'MANAGER';
+        const isSuperAdmin = role === 'SUPERADMIN';
+        if (!isManager && !isSuperAdmin) {
+            throw new ForbiddenException('Only MANAGER or SUPERADMIN may call this');
         }
         
         /* 2 · Determinar rango de fechas -------------------------------------- */
@@ -1637,8 +1683,11 @@ async getDailyRenewals(userId: string, date?: string) {
         /* 1 · Validar usuario y rol ------------------------------------------- */
         const caller = await this.userRepo.findOne({ where: { id: +userId } });
         if (!caller) throw new NotFoundException('User not found');
-        if (caller.role !== 'MANAGER') {
-            throw new ForbiddenException('Only GERENTE may call this');
+        const role = (caller.role ?? '').toUpperCase();
+        const isManager = role === 'MANAGER';
+        const isSuperAdmin = role === 'SUPERADMIN';
+        if (!isManager && !isSuperAdmin) {
+            throw new ForbiddenException('Only GERENTE or SUPERADMIN may call this');
         }
         
         /* 2 · Determinar rango de fechas -------------------------------------- */
@@ -1779,8 +1828,12 @@ async getDailyRenewals(userId: string, date?: string) {
         // 1 · Validar usuario y rol
         const caller = await this.userRepo.findOne({ where: { id: +userId } });
         if (!caller) throw new NotFoundException('User not found');
-        if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
-            throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+        const role = (caller.role ?? '').toUpperCase();
+        const isAdmin = role === 'ADMIN';
+        const isManager = role === 'MANAGER';
+        const isSuperAdmin = role === 'SUPERADMIN';
+        if (!isAdmin && !isManager && !isSuperAdmin) {
+            throw new ForbiddenException('Only ADMIN, MANAGER or SUPERADMIN may call this');
         }
         
         // 2 · Fechas
@@ -1921,8 +1974,12 @@ async getAgentActivity(
 ) {
   const caller = await this.userRepo.findOne({ where: { id: +userId } });
   if (!caller) throw new NotFoundException('User not found');
-  if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
-    throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+  const role = (caller.role ?? '').toUpperCase();
+  const isAdmin = role === 'ADMIN';
+  const isManager = role === 'MANAGER';
+  const isSuperAdmin = role === 'SUPERADMIN';
+  if (!isAdmin && !isManager && !isSuperAdmin) {
+    throw new ForbiddenException('Only ADMIN, MANAGER or SUPERADMIN may call this');
   }
 
   const end = endDate ? dayjs(endDate).endOf('day') : dayjs().endOf('day');
@@ -2113,11 +2170,13 @@ async getAgentActivity(
         const caller = await this.userRepo.findOne({ where: { id: userId } });
         if (!caller) throw new NotFoundException('User not found');
         
-        const isManager = caller.role === 'MANAGER';
-        const isAdmin   = caller.role === 'ADMIN';
+        const role = (caller.role ?? '').toUpperCase();
+        const isManager = role === 'MANAGER';
+        const isAdmin   = role === 'ADMIN';
+        const isSuperAdmin = role === 'SUPERADMIN';
         
-        if (!isManager && !isAdmin) {
-            throw new ForbiddenException('Only MANAGER or ADMIN may access this report');
+        if (!isManager && !isAdmin && !isSuperAdmin) {
+            throw new ForbiddenException('Only MANAGER, ADMIN or SUPERADMIN may access this report');
         }
         
         const start = startDate ? dayjs(startDate).startOf('day') : dayjs().subtract(30, 'day').startOf('day');
@@ -2312,8 +2371,12 @@ async getAgentActivity(
     ) {
         const caller = await this.userRepo.findOne({ where: { id: userId } });
         if (!caller) throw new NotFoundException('User not found');
-        if (caller.role !== 'ADMIN' && caller.role !== 'MANAGER') {
-            throw new ForbiddenException('Only ADMIN or MANAGER may call this');
+        const role = (caller.role ?? '').toUpperCase();
+        const isAdmin = role === 'ADMIN';
+        const isManager = role === 'MANAGER';
+        const isSuperAdmin = role === 'SUPERADMIN';
+        if (!isAdmin && !isManager && !isSuperAdmin) {
+            throw new ForbiddenException('Only ADMIN, MANAGER or SUPERADMIN may call this');
         }
         
         const start = startDate ? dayjs(startDate).startOf('day') : null;
@@ -2535,14 +2598,48 @@ async getAgentActivity(
             branches: branches.sort((a, b) => a.branchId - b.branchId),
         };
     }
-    
-    
-    
-    
+
+    /* ---------------------------------------------------------------------------
+    * MARKETING · CHAT SUMMARY (stub inicial)
+    *   - Por ahora solo valida usuario/fechas y devuelve estructura vacía,
+    *     para permitir compilar y dejar listo el contrato del endpoint.
+    *   - Más adelante se implementará el cálculo real (volumen chats, 24h, etc.).
+    * ------------------------------------------------------------------------ */
+    async getMarketingChatSummary(
+        userId: number,
+        startDate?: string,
+        endDate?: string,
+    ) {
+        const caller = await this.userRepo.findOne({ where: { id: userId } });
+        if (!caller) throw new NotFoundException('User not found');
+
+        const allowedRoles = ['MANAGER', 'ADMIN', 'SUPERADMIN', 'MARKETING'];
+        if (!allowedRoles.includes(caller.role)) {
+            throw new ForbiddenException('Only MANAGER, ADMIN, SUPERADMIN or MARKETING may access this report');
+        }
+
+        const end = endDate
+            ? dayjs(endDate).endOf('day')
+            : dayjs().endOf('day');
+        const start = startDate
+            ? dayjs(startDate).startOf('day')
+            : end.clone().subtract(7, 'day').startOf('day');
+
+        return {
+            meta: {
+                view: caller.role,
+                startDate: start.format('YYYY-MM-DD'),
+                endDate: end.format('YYYY-MM-DD'),
+                generatedAt: new Date().toISOString(),
+            },
+            totals: {
+                totalDistinctClients: 0,
+                clientsManagedWithin24h: 0,
+                clientsUnmanaged: 0,
+                clientsRespondedAfter24h: 0,
+            },
+            perDay: [],
+        };
+    }
+
 }
-
-
-
-
-
-

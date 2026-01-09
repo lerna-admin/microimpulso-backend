@@ -12,7 +12,7 @@ import { ChatMessage } from 'src/entities/chat-message.entity';
 import { User } from 'src/entities/user.entity';
 import { Country } from 'src/entities/country.entity';
 
-type ClientListStatus = 'active' | 'inactive' | 'approved' | 'rejected';
+type ClientListStatus = 'active' | 'inactive' | 'approved' | 'rejected' | 'under_review' | 'lead';
 
 @Injectable()
 export class ClientsService {
@@ -45,7 +45,8 @@ export class ClientsService {
   }
 
   private loanHasServiceAmount(loan?: LoanRequest | null): boolean {
-    return Number(loan?.requestedAmount ?? 0) > 1;
+    const amount = Number(loan?.requestedAmount ?? loan?.amount ?? 0);
+    return Number.isFinite(amount) && amount > 1;
   }
 
   private getLoanListingStatus(loan?: LoanRequest | null): ClientListStatus {
@@ -57,10 +58,19 @@ export class ClientsService {
     if (normalized === LoanRequestStatus.APPROVED) {
       return 'approved';
     }
+    if (normalized === LoanRequestStatus.UNDER_REVIEW) {
+      return 'under_review';
+    }
+    if (normalized === LoanRequestStatus.NEW || normalized === 'prospect') {
+      return 'lead';
+    }
     if (this.ACTIVE_LOAN_STATUSES.has(normalized) && this.loanHasServiceAmount(loan)) {
       return 'active';
     }
     if (normalized === LoanRequestStatus.COMPLETED) {
+      return 'inactive';
+    }
+    if (normalized === LoanRequestStatus.CANCELED) {
       return 'inactive';
     }
     return 'inactive';
@@ -103,6 +113,75 @@ export class ClientsService {
       });
     }
     return chatStatsMap;
+  }
+
+  private computeDaysLateValue(loan: LoanRequest): number {
+    if (!loan?.endDateAt) return 0;
+    const dueDate = new Date(loan.endDateAt);
+    const now = new Date();
+    return now > dueDate ? Math.floor((now.getTime() - dueDate.getTime()) / 86_400_000) : 0;
+  }
+
+  private buildMaxDaysLateMap(
+    loans: LoanRequest[],
+    predicate: (loan: LoanRequest) => boolean,
+  ): Map<number, number> {
+    const maxLateByClient = new Map<number, number>();
+    for (const loan of loans ?? []) {
+      if (!loan) continue;
+      if (!predicate(loan)) continue;
+      if (this.getLoanListingStatus(loan) !== 'active') continue;
+      if (!this.loanHasServiceAmount(loan)) continue;
+      const clientId = loan.client?.id;
+      if (!clientId) continue;
+      const daysLate = this.computeDaysLateValue(loan);
+      if (daysLate <= 0) continue;
+      const prev = maxLateByClient.get(clientId) ?? 0;
+      if (daysLate > prev) {
+        maxLateByClient.set(clientId, daysLate);
+      }
+    }
+    return maxLateByClient;
+  }
+
+  private countClientsByLateThreshold(
+    maxLateByClient: Map<number, number>,
+    threshold: number,
+    inclusive = false,
+  ): number {
+    let total = 0;
+    for (const late of maxLateByClient.values()) {
+      const meets = inclusive ? late >= threshold : late > threshold;
+      if (meets) total++;
+    }
+    return total;
+  }
+
+  // CR → clientes con al menos 1 día de mora.
+  private countClientsWithCriticalDelay(maxLateByClient: Map<number, number>): number {
+    return this.countClientsByLateThreshold(maxLateByClient, 1, true);
+  }
+
+  // M>15 → clientes con más de 15 días de mora.
+  private countClientsWithMora15Delay(maxLateByClient: Map<number, number>): number {
+    return this.countClientsByLateThreshold(maxLateByClient, 15, false);
+  }
+
+  // NP → clientes con más de 30 días sin pago.
+  private countClientsWithNoPayment30Delay(maxLateByClient: Map<number, number>): number {
+    return this.countClientsByLateThreshold(maxLateByClient, 30, false);
+  }
+
+  private computeMoraStatsFromLoans(
+    loans: LoanRequest[],
+    predicate: (loan: LoanRequest) => boolean,
+  ): { ge1: number; gt15: number; gt30: number } {
+    const maxLateByClient = this.buildMaxDaysLateMap(loans, predicate);
+    return {
+      ge1: this.countClientsWithCriticalDelay(maxLateByClient),
+      gt15: this.countClientsWithMora15Delay(maxLateByClient),
+      gt30: this.countClientsWithNoPayment30Delay(maxLateByClient),
+    };
   }
   
   // ============================================================
@@ -201,7 +280,7 @@ export class ClientsService {
  async update(id: number, data: any): Promise<Client> {
   const client = await this.clientRepository.findOne({
     where: { id },
-    relations: ['agent'], // lo tuyo
+    relations: ['agent', 'country'],
   });
   if (!client) {
     throw new NotFoundException('Client not found');
@@ -235,8 +314,9 @@ export class ClientsService {
     if (!Number.isFinite(newCountryId)) {
       throw new BadRequestException('countryId inválido.');
     }
-    const exists = await this.countryRepository.exist({ where: { id: newCountryId } });
-    if (!exists) throw new BadRequestException('El país indicado no existe.');
+    const newCountry = await this.countryRepository.findOne({ where: { id: newCountryId } });
+    if (!newCountry) throw new BadRequestException('El país indicado no existe.');
+    client.country = newCountry;
 
     // (Opcional) bloqueo seguro: si hay loans activos con agente de otro país
     // podrías impedir el cambio. Aquí solo verificamos y permitimos;
@@ -270,6 +350,13 @@ export class ClientsService {
   if ((client as any).branchId) {
     // el cliente NO debe tener branch
     (client as any).branchId = null;
+  }
+
+  if ('phone' in data || 'countryId' in data || 'country' in data) {
+    const normalizedPhone = this.normalizePhoneForCountry(client.phone, client.country ?? null);
+    if (normalizedPhone) {
+      client.phone = normalizedPhone;
+    }
   }
 
   client.updatedAt = new Date();
@@ -327,6 +414,13 @@ async findAllORI(
     throw new BadRequestException('Rol no soportado. Use AGENT | ADMIN | MANAGER.');
   }
 
+  const chatStatsMap = await this.buildChatStatsMap();
+  const clientHasChats = (clientId?: number | null): boolean => {
+    if (!clientId) return false;
+    const stats = chatStatsMap.get(clientId);
+    return (stats?.total ?? 0) > 0;
+  };
+
   // ───────────────────────────────────────────────────────────────
   // Helpers para normalizar strings (tildes/espacios)
   // ───────────────────────────────────────────────────────────────
@@ -340,10 +434,17 @@ async findAllORI(
       .trim()
       .toLowerCase();
 
-  const normIncludes = (haystack?: string, needle?: string) => {
+const normIncludes = (haystack?: string, needle?: string) => {
     const h = norm(haystack);
     const n = norm(needle);
     return n ? h.includes(n) : true;
+  };
+
+  const toUtcMidday = (value?: Date | string | null): Date | null => {
+    if (!value) return null;
+    const d = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+    if (Number.isNaN(d.getTime())) return null;
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 12, 0, 0, 0));
   };
 
   // ───────────────────────────────────────────────────────────────
@@ -354,11 +455,33 @@ async findAllORI(
     order: { createdAt: 'DESC' },
   });
 
+  const canSeeLoan = (loan: LoanRequest): boolean => {
+    const agent = loan.agent;
+    const branch = agent?.branch as any;
+    if (!agent || !branch) return false;
+
+    if (role === 'AGENT') {
+      return agent.id === requester.id;
+    }
+    if (role === 'ADMIN') {
+      return branch.id === adminBranchId;
+    }
+    if (role === 'MANAGER') {
+      const branchCountryId = Number(branch?.countryId ?? branch?.country?.id ?? NaN);
+      return Number.isFinite(branchCountryId) && branchCountryId === managerCountryId;
+    }
+    return false;
+  };
+
   // ───────────────────────────────────────────────────────────────
   // 2) Helpers de estado
   // ───────────────────────────────────────────────────────────────
   const lower = (s?: string) => String(s ?? '').toLowerCase();
-  const isActiveLoan = (loan: LoanRequest) => this.getLoanListingStatus(loan) === 'active';
+  const isActiveLoan = (loan: LoanRequest) => {
+    const status = this.getLoanListingStatus(loan);
+    const amount = Number(loan.amount ?? loan.requestedAmount ?? 0);
+    return status === 'active' && Number.isFinite(amount) && amount > 0;
+  };
   const txTypeOf = (t: any) =>
     lower((t?.type ?? t?.transactionType ?? t?.Transactiontype) as string);
   const now = new Date();
@@ -366,11 +489,7 @@ async findAllORI(
     const d = end ? new Date(end) : null;
     return d && now > d ? Math.floor((now.getTime() - d.getTime()) / 86_400_000) : 0;
   };
-  // Mes actual y mes anterior (para NP por mes)
-  const currentMonth = now.getMonth();       // 0-11
-  const currentYear  = now.getFullYear();
-  const prevMonth    = currentMonth === 0 ? 11 : currentMonth - 1;
-  const prevYear     = currentMonth === 0 ? currentYear - 1 : currentYear;
+  const computeDaysLate = (loan: LoanRequest): number => daysLateOf(loan.endDateAt);
 
   // ───────────────────────────────────────────────────────────────
   // 3) Agregadores
@@ -382,10 +501,7 @@ async findAllORI(
   let critical20 = 0;
   let noPayment30 = 0;
   let delinquentClients = 0;
-  // Máxima mora por cliente (solo loans activos)
   const clientMaxDaysLate = new Map<number, number>();
-  // Clientes cuyo endDateAt está en el mes anterior (NP)
-  const npClientIds = new Set<number>();
 
   const items: any[] = [];
   const seenClientIds = new Set<number>();
@@ -412,47 +528,33 @@ async findAllORI(
     if (filters.countryId && (client.country?.id ?? null) !== filters.countryId) continue;
     if (filters.branch && branch.id !== filters.branch) continue;
     if (filters.agent && agent.id !== filters.agent) continue;
-    if (filters.document && !normIncludes(client.document, filters.document)) continue;
-    if (filters.name && !normIncludes(client.name, filters.name)) continue;
 
     const derivedStatus: ClientListStatus = this.getLoanListingStatus(loan);
-
-    if (filters.status && filters.status !== derivedStatus) continue;
-
-    if (filters.mode && String(loan.mode) !== filters.mode) continue;
-    if (filters.type && loan.type !== filters.type) continue;
-    if (filters.paymentDay && loan.paymentDay !== filters.paymentDay) continue;
-
-    // Métricas
+    const datedTransactions = (loan.transactions ?? [])
+      .filter((t) => t?.date)
+      .sort((a, b) => new Date(a.date as any).getTime() - new Date(b.date as any).getTime());
+    const firstTransactionDate = datedTransactions.length > 0 ? datedTransactions[0].date : null;
+    const normalizedStartDate = toUtcMidday(firstTransactionDate ?? loan.createdAt) ?? loan.createdAt;
     const amountBorrowed  = Number(loan.amount ?? 0);
     const totalRepayment  = (loan.transactions ?? [])
       .filter((t) => txTypeOf(t) === 'repayment' && t?.amount != null)
       .reduce((s, t) => s + Number(t?.amount ?? 0), 0);
     const remainingAmount = Math.max(0, amountBorrowed - totalRepayment);
     const daysLate        = daysLateOf(loan.endDateAt);
-    const endDate         = loan.endDateAt ? new Date(loan.endDateAt as any) : null;
 
     if (derivedStatus === 'active') {
       totalActiveAmountBorrowed += amountBorrowed;
       totalActiveRepayment     += totalRepayment;
       if (client.id) activeClientIds.add(client.id);
 
-      if (daysLate > 0 && client.id) {
-        const prev = clientMaxDaysLate.get(client.id) ?? 0;
-        if (daysLate > prev) {
-          clientMaxDaysLate.set(client.id, daysLate);
-        }
-      }
-
-      // NP: préstamos activos con endDateAt en el mes anterior
-      if (endDate && client.id) {
-        const y = endDate.getFullYear();
-        const m = endDate.getMonth(); // 0-11
-        if (y === prevYear && m === prevMonth) {
-          npClientIds.add(client.id);
-        }
-      }
     }
+
+    if (filters.document && !normIncludes(client.document, filters.document)) continue;
+    if (filters.name && !normIncludes(client.name, filters.name)) continue;
+    if (filters.status && filters.status !== derivedStatus) continue;
+    if (filters.mode && String(loan.mode) !== filters.mode) continue;
+    if (filters.type && loan.type !== filters.type) continue;
+    if (filters.paymentDay && loan.paymentDay !== filters.paymentDay) continue;
 
     const lastTransaction = (loan.transactions ?? [])
       .filter(t => txTypeOf(t) === 'repayment' && t?.date)
@@ -466,7 +568,7 @@ async findAllORI(
         status: loan.status,
         amount: loan.amount,
         requestedAmount: loan.requestedAmount,
-        createdAt: loan.createdAt,
+        createdAt: normalizedStartDate,
         updatedAt: loan.updatedAt,
         type: loan.type,
         mode: loan.mode,
@@ -480,6 +582,7 @@ async findAllORI(
       amountBorrowed,
       remainingAmount,
       daysLate,
+      diasMora: derivedStatus === 'active' ? daysLate : 0,
       status: derivedStatus,
     });
 
@@ -545,30 +648,20 @@ async findAllORI(
     }
   }
 
-  // ───────────────────────────────────────────────────────────────
-  // 5) Recalcular métricas de mora por CLIENTE (NP, M>15, CR)
-  // ───────────────────────────────────────────────────────────────
-  mora15 = 0;
-  critical20 = 0;
-  noPayment30 = 0;
-  delinquentClients = 0;
-
-  for (const [, maxLate] of clientMaxDaysLate.entries()) {
-    if (maxLate > 0) {
-      if (maxLate >= 30) noPayment30++;
-      else if (maxLate > 20) critical20++;
-      else if (maxLate > 15) mora15++;
-    }
-  }
-  // NP ahora es número de clientes con endDateAt en el mes anterior
-  delinquentClients = npClientIds.size;
-
   // Normalizar daysLate por fila al máximo del cliente,
   // para que los filtros de NP/M15/CR del frontend coincidan
   for (const it of items) {
     const cid = Number(it?.client?.id);
     const maxLate = cid ? clientMaxDaysLate.get(cid) ?? 0 : 0;
-    it.daysLate = maxLate;
+    const lateValue = (it as any)?.status === 'active' ? maxLate : 0;
+    if (it?.loanRequest) {
+      const normalizedCreatedAt = toUtcMidday(it.loanRequest.createdAt) ?? it.loanRequest.createdAt;
+      if (normalizedCreatedAt) {
+        it.loanRequest.createdAt = normalizedCreatedAt;
+      }
+    }
+    it.daysLate = lateValue;
+    (it as any).diasMora = lateValue;
   }
 
   // ───────────────────────────────────────────────────────────────
@@ -598,11 +691,6 @@ async findAllORI(
   const totalItems = listForPaging.length;
   const startIndex = (page - 1) * limit;
   const data = listForPaging.slice(startIndex, startIndex + limit);
-
-  // Si se está aplicando filtro de mora=NP, alinear el contador
-  if ((filters as any).mora && String((filters as any).mora).toUpperCase() === 'NP') {
-    delinquentClients = totalItems;
-  }
 
   // ───────────────────────────────────────────────────────────────
   // 7) Totales (solo loans activos)
@@ -695,6 +783,13 @@ async findAll(
     return n ? h.includes(n) : true;
   };
 
+  const toUtcMidday = (value?: Date | string | null): Date | null => {
+    if (!value) return null;
+    const d = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+    if (Number.isNaN(d.getTime())) return null;
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 12, 0, 0, 0));
+  };
+
   // 1) Traer LOANS (con country) — con where SOLO para MANAGER
   // ───────────────────────────────────────────────────────────────
   const findOptions: any = {
@@ -728,12 +823,37 @@ async findAll(
   let totalActiveAmountBorrowed = 0;
   let totalActiveRepayment = 0;
   const activeClientIds = new Set<number>();
-  let mora15 = 0;
-  let critical20 = 0;
-  let noPayment30 = 0;
-  let delinquentClients = 0;
-  // Máxima mora por cliente (solo loans activos)
-  const clientMaxDaysLate = new Map<number, number>();
+
+  const matchesScopeForLoan = (loan: LoanRequest): boolean => {
+    const client = loan.client;
+    const agent = loan.agent;
+    const branch = agent?.branch as any;
+    if (!client || !agent || !branch) return false;
+
+    if (role === 'AGENT') {
+      if (agent.id !== requester.id) return false;
+    } else if (role === 'ADMIN') {
+      if (branch.id !== adminBranchId) return false;
+    } else if (role === 'MANAGER') {
+      const branchCountryId = Number(branch?.countryId ?? branch?.country?.id ?? NaN);
+      if (!Number.isFinite(branchCountryId) || branchCountryId !== managerCountryId) return false;
+    }
+
+    if (filters.countryId && (client.country?.id ?? null) !== filters.countryId) return false;
+    if (filters.branch && branch.id !== filters.branch) return false;
+    if (filters.agent && agent.id !== filters.agent) return false;
+
+    return true;
+  };
+
+  const scopedLoans = loans.filter(matchesScopeForLoan);
+
+  // Máxima mora por cliente (solo loans activos dentro del scope)
+  const clientMaxDaysLate = this.buildMaxDaysLateMap(scopedLoans, () => true);
+  const noPayment30 = this.countClientsWithCriticalDelay(clientMaxDaysLate);        // CR (>=1 día)
+  const mora15 = this.countClientsWithMora15Delay(clientMaxDaysLate);               // M>15
+  const delinquentClients = this.countClientsWithNoPayment30Delay(clientMaxDaysLate); // NP (>30)
+  const critical20 = this.countClientsByLateThreshold(clientMaxDaysLate, 20, false);
 
   let items: any[] = [];
   const seenClientIds = new Set<number>();
@@ -741,31 +861,20 @@ async findAll(
   // ───────────────────────────────────────────────────────────────
   // 4) Iterar LOANS (tu lógica), usando normIncludes para name/doc
   // ───────────────────────────────────────────────────────────────
-  for (const loan of loans) {
+  for (const loan of scopedLoans) {
     const client = loan.client;
     const agent  = loan.agent;
     const branch = agent?.branch as any;
     if (!client || !agent || !branch) continue;
-
-    // Scope
-    if (role === 'AGENT') {
-      if (agent.id !== requester.id) continue;
-    } else if (role === 'ADMIN') {
-      if (branch.id !== adminBranchId) continue;
-    } else if (role === 'MANAGER') {
-      // Verificación defensiva por si alguna relación vino parcial
-      const branchCountryId = Number(branch?.countryId ?? branch?.country?.id ?? NaN);
-      if (!Number.isFinite(branchCountryId) || branchCountryId !== managerCountryId) continue;
-    }
-
-    // Filtros
-    if (filters.countryId && (client.country?.id ?? null) !== filters.countryId) continue;
-    if (filters.branch && branch.id !== filters.branch) continue;
-    if (filters.agent && agent.id !== filters.agent) continue;
     if (filters.document && !normIncludes(client.document, filters.document)) continue;
     if (filters.name && !normIncludes(client.name, filters.name)) continue;
 
     const derivedStatus = this.getLoanListingStatus(loan);
+    const datedTransactions = (loan.transactions ?? [])
+      .filter((t) => t?.date)
+      .sort((a, b) => new Date(a.date as any).getTime() - new Date(b.date as any).getTime());
+    const firstTransactionDate = datedTransactions.length > 0 ? datedTransactions[0].date : null;
+    const normalizedStartDate = toUtcMidday(firstTransactionDate ?? loan.createdAt) ?? loan.createdAt;
 
     if (filters.status && filters.status !== derivedStatus) continue;
 
@@ -806,7 +915,7 @@ async findAll(
         status: loan.status,
         amount: loan.amount,
         requestedAmount: loan.requestedAmount,
-        createdAt: loan.createdAt,
+        createdAt: normalizedStartDate,
         updatedAt: loan.updatedAt,
         type: loan.type,
         mode: loan.mode,
@@ -870,6 +979,7 @@ async findAll(
         amountBorrowed: 0,
         remainingAmount: 0,
         daysLate: 0,
+        diasMora: 0,
         status: 'inactive' as const,
       });
       if (client.id) seenClientIds.add(client.id);
@@ -877,26 +987,17 @@ async findAll(
   }
 
   // ───────────────────────────────────────────────────────────────
-  // 5) Recalcular métricas de mora por CLIENTE (NP, M>15, CR)
-  // ───────────────────────────────────────────────────────────────
-  mora15 = 0;
-  critical20 = 0;
-  noPayment30 = 0;
-  delinquentClients = 0;
-
-  for (const [, maxLate] of clientMaxDaysLate.entries()) {
-    if (maxLate > 0) {
-      if (maxLate >= 30) noPayment30++;
-      else if (maxLate > 20) critical20++;
-      else if (maxLate > 15) mora15++;
-    }
-  }
-
-  // Normalizar daysLate por fila al máximo del cliente,
+  // 5) Normalizar daysLate por fila al máximo del cliente,
   // para que los filtros de NP/M15/CR del frontend coincidan
   for (const it of items) {
     const cid = Number(it?.client?.id);
     const maxLate = cid ? clientMaxDaysLate.get(cid) ?? 0 : 0;
+    if (it?.loanRequest) {
+      const normalizedCreatedAt = toUtcMidday(it.loanRequest.createdAt) ?? it.loanRequest.createdAt;
+      if (normalizedCreatedAt) {
+        it.loanRequest.createdAt = normalizedCreatedAt;
+      }
+    }
     it.daysLate = maxLate;
   }
 
@@ -906,30 +1007,13 @@ async findAll(
   if (filters.mora) {
     const code = String(filters.mora).toUpperCase();
     items = items.filter((it) => {
-      const dlRaw = (it as any)?.daysLate;
-      const dl = Number(dlRaw ?? 0);
-
-      const end = (it as any)?.loanRequest?.endDateAt
-        ? new Date((it as any).loanRequest.endDateAt)
-        : null;
-
-      if (code === 'NP') {
-        if (!end) return false;
-        const y = end.getFullYear();
-        const m = end.getMonth();
-        // NP: préstamos activos con endDateAt en el mes anterior
-        const nowLocal = new Date();
-        const cm = nowLocal.getMonth();
-        const cy = nowLocal.getFullYear();
-        const pm = cm === 0 ? 11 : cm - 1;
-        const py = cm === 0 ? cy - 1 : cy;
-        return y === py && m === pm;
-      }
-
-      if (!Number.isFinite(dl) || dl <= 0) return false;
+      if ((it as any)?.status !== 'active') return false;
+      const dl = Number((it as any)?.daysLate ?? 0);
+      if (!Number.isFinite(dl)) return false;
+      if (code === 'NP') return dl > 30;
       if (code === 'M15') return dl > 15;
-      if (code === 'CR') return dl >= 30;
-      return true;
+      if (code === 'CR') return dl >= 1;
+      return false;
     });
   }
 
@@ -960,11 +1044,6 @@ async findAll(
   const totalItems = listForPaging.length;
   const startIndex = (page - 1) * limit;
   const data = listForPaging.slice(startIndex, startIndex + limit);
-
-  // Si se está aplicando filtro de mora=NP, alinear el contador NP con lo listado
-  if (filters.mora && String(filters.mora).toUpperCase() === 'NP') {
-    delinquentClients = totalItems;
-  }
 
   // ───────────────────────────────────────────────────────────────
   // 7) Totales (solo loans activos)
@@ -1014,6 +1093,11 @@ async findAll(
       relations: { client: true, transactions: true },
       order: { createdAt: 'DESC' },
     });
+
+    const moraStats = this.computeMoraStatsFromLoans(
+      loans,
+      (loan) => loan.agent?.id === agentId
+    );
     
     const clientMap = new Map<number, any[]>();
     for (const loan of loans) {
@@ -1032,17 +1116,33 @@ async findAll(
     let delinquentClients = 0;
     // Máxima mora por cliente (solo loans activos)
     const clientMaxDaysLate = new Map<number, number>();
-    // Clientes NP (endDateAt en el mes anterior)
-    const npClientIds = new Set<number>();
     
     for (const [, clientLoans] of clientMap) {
       const client = clientLoans[0].client;
       
+      for (const loan of clientLoans) {
+        if (!client?.id) break;
+      if (this.getLoanListingStatus(loan) !== 'active') continue;
+      const end = loan.endDateAt ? new Date(loan.endDateAt) : null;
+      if (!end) continue;
+      const now = new Date();
+      const daysLate =
+        now > end ? Math.floor((now.getTime() - end.getTime()) / 86_400_000) : 0;
+      if (daysLate > 0) {
+        const prev = clientMaxDaysLate.get(client.id) ?? 0;
+        if (daysLate > prev) {
+          clientMaxDaysLate.set(client.id, daysLate);
+        }
+      }
+      }
+
       const loanStatuses = clientLoans.map((loan) => this.getLoanListingStatus(loan));
-      let status: 'active' | 'inactive' | 'approved' | 'rejected' | 'unknown' = 'unknown';
+      let status: 'active' | 'inactive' | 'approved' | 'rejected' | 'lead' | 'under_review' | 'unknown' = 'unknown';
       if (loanStatuses.includes('active')) status = 'active';
       else if (loanStatuses.includes('approved')) status = 'approved';
+      else if (loanStatuses.includes('under_review')) status = 'under_review';
       else if (loanStatuses.includes('rejected')) status = 'rejected';
+      else if (loanStatuses.includes('lead')) status = 'lead';
       else status = 'inactive';
       
       if (filters?.status && filters.status !== status) continue;
@@ -1081,29 +1181,6 @@ async findAll(
           ? Math.floor((now.getTime() - endDate.getTime()) / 86_400_000)
           : 0;
       
-      if (status === 'active' && client?.id) {
-        if (daysLate > 0) {
-          const prev = clientMaxDaysLate.get(client.id) ?? 0;
-          if (daysLate > prev) {
-            clientMaxDaysLate.set(client.id, daysLate);
-          }
-        }
-
-        // NP: préstamos activos con endDateAt en el mes anterior
-        if (endDate) {
-          const currentMonth = now.getMonth();
-          const currentYear  = now.getFullYear();
-          const prevMonth    = currentMonth === 0 ? 11 : currentMonth - 1;
-          const prevYear     = currentMonth === 0 ? currentYear - 1 : currentYear;
-
-          const y = endDate.getFullYear();
-          const m = endDate.getMonth();
-          if (y === prevYear && m === prevMonth) {
-            npClientIds.add(client.id);
-          }
-        }
-      }
-      
       allResults.push({
         client, // ← incluye customFields automáticamente
         agent: loan.agent.id,
@@ -1125,6 +1202,7 @@ async findAll(
         amountBorrowed,
         remainingAmount,
         daysLate,
+        diasMora: status === 'active' ? daysLate : 0,
         status,
       });
       
@@ -1140,55 +1218,36 @@ async findAll(
   }
 
   // Recalcular métricas de mora por CLIENTE (NP, M>15, CR)
-  mora15 = 0;
-  critical20 = 0;
-  noPayment30 = 0;
-  delinquentClients = 0;
+  const crAgentTotal = this.countClientsWithCriticalDelay(clientMaxDaysLate);
+  const mora15AgentTotal = this.countClientsWithMora15Delay(clientMaxDaysLate);
+  const npAgentTotal = this.countClientsWithNoPayment30Delay(clientMaxDaysLate);
+  const critical20AgentTotal = this.countClientsByLateThreshold(clientMaxDaysLate, 20, false);
 
-  for (const [, maxLate] of clientMaxDaysLate.entries()) {
-    if (maxLate > 0) {
-      if (maxLate >= 30) noPayment30++;
-      else if (maxLate > 20) critical20++;
-      else if (maxLate > 15) mora15++;
-    }
-  }
-
-  // NP: clientes con endDateAt en el mes anterior
-  delinquentClients = npClientIds.size;
+  noPayment30 = crAgentTotal;
+  mora15 = mora15AgentTotal;
+  delinquentClients = npAgentTotal;
+  critical20 = critical20AgentTotal;
 
   // Normalizar daysLate por fila al máximo del cliente
   for (const it of allResults) {
     const cid = Number(it?.client?.id);
     const maxLate = cid ? clientMaxDaysLate.get(cid) ?? 0 : 0;
-    it.daysLate = maxLate;
+    const lateValue = (it as any)?.status === 'active' ? maxLate : 0;
+    it.daysLate = lateValue;
+    (it as any).diasMora = lateValue;
   }
 
   // Filtro de mora para la tabla en findAllByAgent
   if (filters?.mora) {
     const code = String(filters.mora).toUpperCase();
     allResults = allResults.filter((it) => {
-      const dlRaw = (it as any)?.daysLate;
-      const dl = Number(dlRaw ?? 0);
-      const end = (it as any)?.loanRequest?.endDateAt
-        ? new Date((it as any).loanRequest.endDateAt)
-        : null;
-
-      if (code === 'NP') {
-        if (!end) return false;
-        const now = new Date();
-        const currentMonth = now.getMonth();
-        const currentYear  = now.getFullYear();
-        const prevMonth    = currentMonth === 0 ? 11 : currentMonth - 1;
-        const prevYear     = currentMonth === 0 ? currentYear - 1 : currentYear;
-        const y = end.getFullYear();
-        const m = end.getMonth();
-        return y === prevYear && m === prevMonth;
-      }
-
-      if (!Number.isFinite(dl) || dl <= 0) return false;
+      if ((it as any)?.status !== 'active') return false;
+      const dl = Number((it as any)?.daysLate ?? 0);
+      if (!Number.isFinite(dl)) return false;
+      if (code === 'NP') return dl > 30;
       if (code === 'M15') return dl > 15;
-      if (code === 'CR') return dl >= 30;
-      return true;
+      if (code === 'CR') return dl >= 1;
+      return false;
     });
   }
   
@@ -1196,11 +1255,6 @@ async findAll(
   const startIndex = (page - 1) * limit;
   const paginated = allResults.slice(startIndex, startIndex + limit);
 
-  // Si se aplica filtro mora=NP, usar el total filtrado como NP
-  if (filters?.mora && String(filters.mora).toUpperCase() === 'NP') {
-    delinquentClients = totalItems;
-  }
-  
   const totalSaldoClientes = totalActiveAmountBorrowed - totalActiveRepayment;
   
   return {
@@ -1337,6 +1391,21 @@ private toMsisdnDigits(phone: string, fallbackCc = '57'): string {
   return `${fallbackCc}${raw.replace(/\D/g, '')}`;
 }
 
+private normalizePhoneForCountry(phone?: string | null, country?: { phoneCode?: string | null }): string | null {
+  const digits = String(phone ?? '').replace(/\D/g, '');
+  if (!digits) return null;
+  const countryCode = String(country?.phoneCode ?? '').replace(/\D/g, '');
+  if (!countryCode) return digits;
+  const prefixedDouble = `57${countryCode}`;
+  if (digits.startsWith(prefixedDouble)) {
+    return digits.slice(2);
+  }
+  if (!digits.startsWith(countryCode)) {
+    return `${countryCode}${digits}`;
+  }
+  return digits;
+}
+
 private async sendOnboardingIfConfigured(client: Client): Promise<void> {
   try {
     const token = process.env.WHATSAPP_TOKEN;
@@ -1443,6 +1512,10 @@ async create(data: Partial<Client>): Promise<Client> {
   delete (sanitized as any).branchId;
 
   // 6) Persistir
+  if (sanitized.phone) {
+    const normalizedPhone = this.normalizePhoneForCountry(String(sanitized.phone), country);
+    sanitized.phone = normalizedPhone ?? String(sanitized.phone);
+  }
   const client = this.clientRepository.create(sanitized);
   const saved = await this.clientRepository.save(client);
 

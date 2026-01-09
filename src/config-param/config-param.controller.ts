@@ -1,10 +1,12 @@
 import {
+    Body,
     Controller,
     Get,
     Put,
     Param,
-    Body,
     NotFoundException,
+    ForbiddenException,
+    Req,
   } from '@nestjs/common';
   import { ConfigParamService } from './config-param.service';
   
@@ -26,12 +28,17 @@ import {
       return item;
     }
   
-    /** PUT /config/:key               – create or update */
+    /** PUT /config/:key               – create or update (SUPERADMIN only) */
     @Put(':key')
     upsert(
       @Param('key') key: string,
       @Body('value') value: string,
+      @Req() req: any,
     ) {
+      const role = String(req?.user?.role ?? '').toUpperCase();
+      if (role !== 'SUPERADMIN') {
+        throw new ForbiddenException('Only SUPERADMIN may edit config');
+      }
       return this.svc.upsert(key, value); // -> Promise<ConfigParam>
     }
   }

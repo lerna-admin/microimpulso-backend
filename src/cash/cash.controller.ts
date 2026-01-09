@@ -11,7 +11,8 @@ import {
     DefaultValuePipe,
     ParseBoolPipe,
     Res,
-} from '@nestjs/common';
+    Patch,
+  } from '@nestjs/common';
 import { CashService } from './cash.service';
 import { Response } from 'express';
 
@@ -127,6 +128,26 @@ export class CashController {
         @Query('pair', new DefaultValuePipe(false), ParseBoolPipe) pair: boolean,
     ) {
         return this.cashService.deleteMovement(id, { deletePair: pair });
+    }
+    
+    /**
+    * PATCH /cash/:id/amount
+    * Permite ajustar el monto de un movimiento de caja.
+    * Si el movimiento está ligado a una LoanTransaction, también actualiza esa transacción.
+    */
+    @Patch(':id/amount')
+    async updateMovementAmount(
+        @Param('id', ParseIntPipe) id: number,
+        @Body('amount') amount: number,
+    ) {
+        if (amount === undefined || amount === null) {
+            throw new BadRequestException('amount is required');
+        }
+        const numeric = Number(amount);
+        if (!isFinite(numeric) || numeric <= 0) {
+            throw new BadRequestException('amount must be a number greater than 0');
+        }
+        return this.cashService.updateMovementAmount(id, numeric);
     }
     
     

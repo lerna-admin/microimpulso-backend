@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Client } from '../entities/client.entity';
 import { LoanRequest, LoanRequestStatus } from 'src/entities/loan-request.entity';
 import { ChatMessage } from 'src/entities/chat-message.entity';
@@ -181,6 +181,146 @@ export class ClientsService {
       ge1: this.countClientsWithCriticalDelay(maxLateByClient),
       gt15: this.countClientsWithMora15Delay(maxLateByClient),
       gt30: this.countClientsWithNoPayment30Delay(maxLateByClient),
+    };
+  }
+
+  /**
+   * Calcula métricas agregadas de préstamos ACTIVOS (funded/renewed con monto > 1)
+   * respetando el scope del usuario (AGENT, ADMIN, MANAGER) y filtros básicos
+   * (branch, agent, countryId).
+   *
+   * Esta ruta se usa principalmente para el bloque de estadísticas en la vista
+   * de clientes (statsResponse en el frontend).
+   */
+  private async computeActiveStatsForScope(
+    requester: User,
+    role: string,
+    adminBranchId: number | null,
+    managerCountryId: number | null,
+    filters: {
+      branch?: number;
+      agent?: number;
+      countryId?: number;
+    } = {},
+  ): Promise<{
+    totalActiveAmountBorrowed: number;
+    totalActiveRepayment: number;
+    remainingTotal: number;
+    activeClientsCount: number;
+    mora15: number;
+    critical20: number;
+    noPayment30: number;
+    delinquentClients: number;
+  }> {
+    const whereParts: string[] = [];
+    const values: any[] = [];
+
+    // Solo préstamos activos con monto de servicio
+    whereParts.push(
+      `(loan.status IN ('funded','renewed') AND COALESCE(loan.requestedAmount, loan.amount, 0) > 1)`,
+    );
+
+    // Scope por rol
+    if (role === 'AGENT') {
+      whereParts.push(`loan.agentId = ?`);
+      values.push(requester.id);
+    } else if (role === 'ADMIN') {
+      if (!adminBranchId) {
+        throw new BadRequestException('El ADMIN no tiene branch asignada.');
+      }
+      whereParts.push(`agent.branchId = ?`);
+      values.push(adminBranchId);
+    } else if (role === 'MANAGER') {
+      if (!Number.isFinite(managerCountryId)) {
+        throw new BadRequestException('No se pudo determinar managerCountryId para el MANAGER.');
+      }
+      whereParts.push(`branch.countryId = ?`);
+      values.push(managerCountryId);
+    }
+
+    // Filtros adicionales
+    if (filters.branch) {
+      whereParts.push(`branch.id = ?`);
+      values.push(filters.branch);
+    }
+    if (filters.agent) {
+      whereParts.push(`agent.id = ?`);
+      values.push(filters.agent);
+    }
+    if (filters.countryId) {
+      whereParts.push(`client.countryId = ?`);
+      values.push(filters.countryId);
+    }
+
+    const whereSql = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
+
+    // Totales de monto prestado, repagos y clientes activos
+    const totalsSql = `
+      SELECT
+        COALESCE(SUM(loan.amount), 0) AS totalActiveAmountBorrowed,
+        COALESCE(SUM(CASE WHEN txn.Transactiontype = 'repayment' THEN txn.amount ELSE 0 END), 0) AS totalActiveRepayment,
+        COUNT(DISTINCT loan.clientId) AS activeClientsCount
+      FROM loan_request loan
+      INNER JOIN user   agent  ON agent.id = loan.agentId
+      INNER JOIN branch branch ON branch.id = agent.branchId
+      INNER JOIN client client ON client.id = loan.clientId
+      LEFT JOIN loan_transaction txn ON txn.loanRequestId = loan.id
+      ${whereSql};
+    `;
+
+    // Mora por cliente (máx días de atraso)
+    const moraSql = `
+      SELECT
+        loan.clientId     AS clientId,
+        MAX(GREATEST(DATEDIFF(CURDATE(), loan.endDateAt), 0)) AS maxLate
+      FROM loan_request loan
+      INNER JOIN user   agent  ON agent.id = loan.agentId
+      INNER JOIN branch branch ON branch.id = agent.branchId
+      INNER JOIN client client ON client.id = loan.clientId
+      ${whereSql}
+        AND loan.endDateAt IS NOT NULL
+      GROUP BY loan.clientId;
+    `;
+
+    const [totalsRows, moraRows] = await Promise.all([
+      this.loanRequestRepository.query(totalsSql, values),
+      this.loanRequestRepository.query(moraSql, values),
+    ]);
+
+    const totals = totalsRows[0] ?? {};
+
+    const totalActiveAmountBorrowed = Number(totals.totalActiveAmountBorrowed ?? 0);
+    const totalActiveRepayment = Number(totals.totalActiveRepayment ?? 0);
+    const activeClientsCount = Number(totals.activeClientsCount ?? 0);
+    const remainingTotal = totalActiveAmountBorrowed - totalActiveRepayment;
+
+    let ge1 = 0;
+    let gt15 = 0;
+    let gt20 = 0;
+    let gt30 = 0;
+    for (const row of moraRows) {
+      const maxLate = Number(row.maxLate ?? 0);
+      if (!Number.isFinite(maxLate)) continue;
+      if (maxLate >= 1) ge1++;
+      if (maxLate > 15) gt15++;
+      if (maxLate > 20) gt20++;
+      if (maxLate > 30) gt30++;
+    }
+
+    const noPayment30 = ge1;          // CR (>=1 día) — se mantiene el nombre existente
+    const mora15 = gt15;              // M>15
+    const critical20 = gt20;          // >20 días
+    const delinquentClients = gt30;   // NP (>30)
+
+    return {
+      totalActiveAmountBorrowed,
+      totalActiveRepayment,
+      remainingTotal,
+      activeClientsCount,
+      mora15,
+      critical20,
+      noPayment30,
+      delinquentClients,
     };
   }
   
@@ -716,7 +856,7 @@ const normIncludes = (haystack?: string, needle?: string) => {
   };
 }
 
-async findAll(
+async findAllLegacy(
   limit: number = 10,
   page: number = 1,
   filters: {
@@ -1069,8 +1209,325 @@ async findAll(
   };
 }
 
-  
-  
+// ============================================================
+// ====================  FIND ALL (OPTIMIZED)  ==================
+// ============================================================
+async findAll(
+  limit: number = 10,
+  page: number = 1,
+  filters: {
+    status?: ClientListStatus;
+    mora?: string;
+    document?: string;
+    name?: string;
+    mode?: string;
+    type?: string;
+    paymentDay?: string;
+    agent?: number;
+    branch?: number;     // branch del agente (filtro adicional opcional)
+    countryId?: number;  // país del cliente (filtro adicional opcional)
+    distinct?: boolean;
+  } = {},
+  requesterUserId: number,
+): Promise<any> {
+  // ───────────────────────────────────────────────────────────────
+  // 0) Scope por rol
+  // ───────────────────────────────────────────────────────────────
+  const requester = await this.userRepository.findOne({
+    where: { id: requesterUserId },
+    relations: ['branch', 'managerCountry'],
+  });
+  if (!requester) throw new BadRequestException('Usuario solicitante no existe.');
+
+  const role = String(requester.role).toUpperCase();
+  let adminBranchId: number | null = null;
+  let managerCountryId: number | null = null;
+
+  if (role === 'ADMIN') {
+    adminBranchId = (requester as any)?.branch?.id ?? (requester as any)?.branchId ?? null;
+    if (!adminBranchId) throw new BadRequestException('El ADMIN no tiene branch asignada.');
+  } else if (role === 'MANAGER') {
+    const raw =
+      (requester as any)?.managerCountryId ??
+      (requester as any)?.managerCountry?.id ??
+      null;
+
+    managerCountryId = raw != null ? Number(raw) : null;
+    if (!Number.isFinite(managerCountryId)) {
+      throw new BadRequestException('No se pudo determinar managerCountryId para el MANAGER.');
+    }
+  } else if (role !== 'AGENT') {
+    throw new BadRequestException('Rol no soportado. Use AGENT | ADMIN | MANAGER.');
+  }
+
+  const limitSafe = Math.max(1, Math.min(limit ?? 10, 100));
+  const pageSafe = Math.max(1, page ?? 1);
+
+  // ───────────────────────────────────────────────────────────────
+  // 1) Modo estadísticas (distinct=true y sin filtro por nombre)
+  // ───────────────────────────────────────────────────────────────
+  const isStatsMode = Boolean(filters?.distinct) && !filters?.name;
+  if (isStatsMode) {
+    const stats = await this.computeActiveStatsForScope(
+      requester,
+      role,
+      adminBranchId,
+      managerCountryId,
+      {
+        branch: filters.branch,
+        agent: filters.agent,
+        countryId: filters.countryId,
+      },
+    );
+
+    return {
+      page: pageSafe,
+      limit: limitSafe,
+      totalItems: 0,
+      totalPages: 0,
+      data: [],
+      ...stats,
+    };
+  }
+
+  // ───────────────────────────────────────────────────────────────
+  // 2) Listado paginado de loans (para tabla de clientes)
+  // ───────────────────────────────────────────────────────────────
+  const qb = this.loanRequestRepository.createQueryBuilder('loan')
+    .leftJoin('loan.client', 'client')
+    .leftJoin('loan.agent', 'agent')
+    .leftJoin('agent.branch', 'branch')
+    .leftJoin('client.country', 'country');
+
+  // Scope por rol
+  if (role === 'AGENT') {
+    qb.andWhere('agent.id = :reqAgentId', { reqAgentId: requester.id });
+  } else if (role === 'ADMIN' && adminBranchId) {
+    qb.andWhere('branch.id = :reqBranchId', { reqBranchId: adminBranchId });
+  } else if (role === 'MANAGER' && Number.isFinite(managerCountryId)) {
+    qb.andWhere('branch.countryId = :reqCountryId', { reqCountryId: managerCountryId });
+  }
+
+  // Filtros por país / branch / agente
+  if (filters.countryId) {
+    qb.andWhere('client.countryId = :filterCountryId', { filterCountryId: filters.countryId });
+  }
+  if (filters.branch) {
+    qb.andWhere('branch.id = :filterBranchId', { filterBranchId: filters.branch });
+  }
+  if (filters.agent) {
+    qb.andWhere('agent.id = :filterAgentId', { filterAgentId: filters.agent });
+  }
+
+  // Filtros por status lógico (lead/active/etc.)
+  if (filters.status) {
+    const s = String(filters.status).toLowerCase() as ClientListStatus;
+    if (s === 'rejected') {
+      qb.andWhere('LOWER(loan.status) = :stRejected', { stRejected: LoanRequestStatus.REJECTED });
+    } else if (s === 'approved') {
+      qb.andWhere('LOWER(loan.status) = :stApproved', { stApproved: LoanRequestStatus.APPROVED });
+    } else if (s === 'under_review') {
+      qb.andWhere('LOWER(loan.status) = :stReview', { stReview: LoanRequestStatus.UNDER_REVIEW });
+    } else if (s === 'lead') {
+      qb.andWhere(
+        `(LOWER(loan.status) = :stNew OR LOWER(loan.status) = :stProspect)`,
+        { stNew: LoanRequestStatus.NEW, stProspect: 'prospect' },
+      );
+    } else if (s === 'active') {
+      qb.andWhere(
+        `LOWER(loan.status) IN (:...stActive) AND COALESCE(loan.requestedAmount, loan.amount, 0) > 1`,
+        { stActive: [LoanRequestStatus.FUNDED, LoanRequestStatus.RENEWED] },
+      );
+    } else if (s === 'inactive') {
+      qb.andWhere(
+        `LOWER(loan.status) IN (:...stInactive)`,
+        { stInactive: [LoanRequestStatus.COMPLETED, LoanRequestStatus.CANCELED] },
+      );
+    }
+  }
+
+  // Filtros adicionales
+  if (filters.mode) {
+    qb.andWhere('loan.mode = :filterMode', { filterMode: filters.mode });
+  }
+  if (filters.type) {
+    qb.andWhere('loan.type = :filterType', { filterType: filters.type });
+  }
+  if (filters.paymentDay) {
+    qb.andWhere('loan.paymentDay = :filterPaymentDay', { filterPaymentDay: filters.paymentDay });
+  }
+  if (filters.document) {
+    qb.andWhere('client.document LIKE :filterDoc', { filterDoc: `%${filters.document}%` });
+  }
+  if (filters.name) {
+    qb.andWhere('client.name LIKE :filterName', { filterName: `%${filters.name}%` });
+  }
+
+  // Conteo total (para paginación)
+  const totalItems = await qb.clone().getCount();
+  if (totalItems === 0) {
+    return {
+      page: pageSafe,
+      limit: limitSafe,
+      totalItems: 0,
+      totalPages: 0,
+      totalActiveAmountBorrowed: 0,
+      totalActiveRepayment: 0,
+      totalSaldoClientes: 0,
+      activeClientsCount: 0,
+      mora15: 0,
+      critical20: 0,
+      noPayment30: 0,
+      delinquentClients: 0,
+      data: [],
+    };
+  }
+
+  // Obtener IDs de loans para la página solicitada
+  const idsRows = await qb
+    .clone()
+    .select('loan.id', 'id')
+    .orderBy('loan.createdAt', 'DESC')
+    .skip((pageSafe - 1) * limitSafe)
+    .take(limitSafe)
+    .getRawMany<{ id: number }>();
+
+  const loanIds = idsRows.map((r) => Number(r.id)).filter((v) => Number.isFinite(v));
+
+  if (!loanIds.length) {
+    return {
+      page: pageSafe,
+      limit: limitSafe,
+      totalItems,
+      totalPages: Math.ceil(totalItems / limitSafe),
+      totalActiveAmountBorrowed: 0,
+      totalActiveRepayment: 0,
+      totalSaldoClientes: 0,
+      activeClientsCount: 0,
+      mora15: 0,
+      critical20: 0,
+      noPayment30: 0,
+      delinquentClients: 0,
+      data: [],
+    };
+  }
+
+  // Cargar loans completos SOLO para la página (incluye transacciones)
+  const loansPage = await this.loanRequestRepository.find({
+    where: { id: In(loanIds) },
+    relations: { client: { country: true }, transactions: true, agent: { branch: true } },
+  });
+
+  // Mantener el orden de loanIds
+  const loansMap = new Map<number, LoanRequest>();
+  for (const loan of loansPage) {
+    loansMap.set(loan.id, loan);
+  }
+  const orderedLoans: LoanRequest[] = loanIds
+    .map((id) => loansMap.get(id))
+    .filter((l): l is LoanRequest => !!l);
+
+  const toUtcMidday = (value?: Date | string | null): Date | null => {
+    if (!value) return null;
+    const d = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+    if (Number.isNaN(d.getTime())) return null;
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 12, 0, 0, 0));
+  };
+
+  const lower = (s?: string) => String(s ?? '').toLowerCase();
+  const txTypeOf = (t: any) =>
+    lower((t?.type ?? t?.transactionType ?? t?.Transactiontype) as string);
+
+  const now = new Date();
+  const daysLateOf = (end?: Date | string | null) => {
+    const d = end ? new Date(end) : null;
+    return d && now > d ? Math.floor((now.getTime() - d.getTime()) / 86_400_000) : 0;
+  };
+
+  const rows: any[] = [];
+  let totalActiveAmountBorrowed = 0;
+  let totalActiveRepayment = 0;
+  let activeClientsCount = 0;
+  const activeClientIds = new Set<number>();
+
+  for (const loan of orderedLoans) {
+    const client = loan.client;
+    const agent = loan.agent;
+    if (!client || !agent) continue;
+
+    const datedTransactions = (loan.transactions ?? [])
+      .filter((t) => t?.date)
+      .sort((a, b) => new Date(a.date as any).getTime() - new Date(b.date as any).getTime());
+    const firstTransactionDate = datedTransactions.length > 0 ? datedTransactions[0].date : null;
+    const normalizedStartDate = toUtcMidday(firstTransactionDate ?? loan.createdAt) ?? loan.createdAt;
+
+    const amountBorrowed = Number(loan.amount ?? 0);
+    const totalRepayment = (loan.transactions ?? [])
+      .filter((t) => txTypeOf(t) === 'repayment' && t?.amount != null)
+      .reduce((s, t) => s + Number(t?.amount ?? 0), 0);
+    const remainingAmount = Math.max(0, amountBorrowed - totalRepayment);
+    const daysLate = daysLateOf(loan.endDateAt);
+
+    const listingStatus = this.getLoanListingStatus(loan);
+
+    if (listingStatus === 'active') {
+      totalActiveAmountBorrowed += amountBorrowed;
+      totalActiveRepayment += totalRepayment;
+      if (client.id) activeClientIds.add(client.id);
+    }
+
+    const lastTransaction = (loan.transactions ?? [])
+      .filter((t) => txTypeOf(t) === 'repayment' && t?.date)
+      .sort((a, b) => new Date(b.date as any).getTime() - new Date(a.date as any).getTime());
+
+    rows.push({
+      client,
+      agent: { id: agent.id, name: agent.name },
+      loanRequest: {
+        id: loan.id,
+        status: loan.status,
+        amount: loan.amount,
+        requestedAmount: loan.requestedAmount,
+        createdAt: normalizedStartDate,
+        updatedAt: loan.updatedAt,
+        type: loan.type,
+        mode: loan.mode,
+        mora: loan.mora,
+        endDateAt: loan.endDateAt,
+        paymentDay: loan.paymentDay,
+        transactions: loan.transactions,
+        latestPayment: lastTransaction[0] ?? null,
+      },
+      totalRepayment,
+      amountBorrowed,
+      remainingAmount,
+      daysLate,
+      diasMora: listingStatus === 'active' ? daysLate : 0,
+      status: listingStatus,
+    });
+  }
+
+  activeClientsCount = activeClientIds.size;
+  const totalPages = Math.ceil(totalItems / limitSafe);
+  const totalSaldoClientes = totalActiveAmountBorrowed - totalActiveRepayment;
+
+  return {
+    page: pageSafe,
+    limit: limitSafe,
+    totalItems,
+    totalPages,
+    totalActiveAmountBorrowed,
+    totalActiveRepayment,
+    totalSaldoClientes,
+    activeClientsCount,
+    mora15: 0,
+    critical20: 0,
+    noPayment30: 0,
+    delinquentClients: 0,
+    data: rows,
+  };
+}
+
   // ============================================================
   // ====================  FIND ALL BY AGENT  ===================
   // ============================================================

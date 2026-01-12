@@ -160,10 +160,9 @@ export class DocumentService {
 
   /* -------------------------------------------------
    * Listar documentos de un cliente
-   * Regla de negocio actual:
-   *   - documentos del cliente
-   *   - pero si están ligados a una loanRequest con estado 'completed' o 'rejected',
-   *     ya NO se devuelven (salvo que no tengan loanRequest)
+   * Regla de negocio actualizada:
+   *   - devolver TODOS los documentos del cliente,
+   *     independientemente del estado de la loanRequest asociada.
    * ------------------------------------------------- */
   async getByClientId(clientId: number): Promise<Client | null> {
     // 1. Traer cliente
@@ -172,21 +171,10 @@ export class DocumentService {
     });
     if (!client) return null;
 
-    // 2. Traer documentos visibles según tu regla
+    // 2. Traer todos los documentos del cliente, sin filtrar por estado de la solicitud
     const documents = await this.documentRepository
       .createQueryBuilder('document')
-      .leftJoinAndSelect('document.loanRequest', 'loanRequest')
       .where('document.clientId = :clientId', { clientId })
-      .andWhere(
-        new Brackets((qb) => {
-          qb.where('document.loanRequestId IS NULL').orWhere(
-            'loanRequest.status NOT IN (:...excluded)',
-            {
-              excluded: ['completed', 'rejected'],
-            },
-          );
-        }),
-      )
       .orderBy('document.createdAt', 'DESC')
       .getMany();
 

@@ -18,7 +18,7 @@ export class ChatMessage {
   @Column({ type: 'text' })
   content: string;
 
-  @Column({ type: 'text', nullable: true })
+  @Column({ type: 'text', nullable: true, select: false })
   rawPayload?: string | null;
 
   @Column()

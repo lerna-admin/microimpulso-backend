@@ -624,14 +624,13 @@ export class ChatService implements OnModuleInit {
       return [];
     }
 
-    const messages = await this.chatMessageRepository.find({
-      where: {
-        agent: { id: agentId },
-        client: { id: In(activeClientIds) },
-      },
-      relations: ['client'],
-      order: { createdAt: 'DESC' },
-    });
+    const messages = await this.chatMessageRepository
+      .createQueryBuilder('msg')
+      .leftJoinAndSelect('msg.client', 'client')
+      .where('msg.agentId = :agentId', { agentId })
+      .andWhere('msg.clientId IN (:...activeClientIds)', { activeClientIds })
+      .orderBy('msg.createdAt', 'DESC')
+      .getMany();
     
     const grouped = new Map<number, { client: Client; messages: ChatMessage[] }>();
     for (const msg of messages) {
